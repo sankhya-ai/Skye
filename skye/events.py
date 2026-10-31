@@ -50,6 +50,10 @@ class LineBridge:
     """
 
     def __init__(self, invite_url: str, agent: str = "skye/dispatcher", to: str = "") -> None:
+        if not to.strip():
+            # No silent broadcast: lifecycle events go only to an explicitly configured audience.
+            # "*" (everyone on the line) is a valid choice - but the operator must CHOOSE it.
+            raise ValueError("LineBridge needs an explicit recipient (e.g. SKYE_LINE_TO=@ashish; '*' is everyone on the line and must be chosen, not defaulted)")
         import asyncio  # noqa: PLC0415
         import sys  # noqa: PLC0415
 
@@ -74,10 +78,14 @@ class LineBridge:
             raise ConnectionError(f"line: could not join as {agent}: {error}") from error
 
     def publish(self, event: dict[str, Any]) -> None:
-        text = f"[skye:{event['kind']}] {event.get('role', '?')} {event.get('status', '')} - {event.get('goal', '')[:120]}"
+        # Payload minimization: kind/role/status and the short operational reason only. The goal IS
+        # mission content and stays off the line unless the operator opts in with SKYE_LINE_VERBOSE=1.
+        text = f"[skye:{event['kind']}] {event.get('role', '?')} {event.get('status', '')}"
+        if os.environ.get("SKYE_LINE_VERBOSE") == "1":
+            text += f" - {event.get('goal', '')[:120]}"
         if event.get("reason"):
             text += f" ({event['reason'][:160]})"
-        target = self.to or "*"  # "*" is the relay's everyone-on-the-line address
+        target = self.to
         future = self._asyncio.run_coroutine_threadsafe(self.client.send(target, text), self._loop)
         future.result(15)
 
@@ -121,5 +129,5 @@ def from_env(log_path: str | Path = "events.jsonl") -> FanoutBridge:
         try:
             sinks.append(LineBridge(invite, to=os.environ.get("SKYE_LINE_TO", "").strip()))
         except Exception as error:  # noqa: BLE001 - fall back to the file sink, saying so
-            FileBridge(log_path).publish(make_event("bridge-error", {}, reason=f"line unavailable: {error}"))
+            FileBridge(log_path).publish(make_event("bridge-error", {}, reason=f"line sink OFF: {error}"))
     return FanoutBridge(*sinks)

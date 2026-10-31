@@ -444,16 +444,22 @@ class AutoStartRule(BaseModel):
     #: Force the jail for the auto-started job ("bwrap" or "bwrap-model-only"); empty leaves the start guards to
     #: refuse what needs isolation (the request then simply stays pending for the owner).
     require_isolation: Literal["", "bwrap", "bwrap-model-only"] = ""
-    #: Tighten the pinned budget: the rule MUST set at least one ceiling (an uncapped auto-started job is
-    #: never an accident of a missing field - it cannot exist). The job runs with min(proposal, rule).
+    #: Tighten the pinned budget: the rule MUST set max_steps (an uncapped auto-started job is never an
+    #: accident of a missing field - it cannot exist). The job runs with min(proposal, rule).
     max_steps: int = Field(default=0, ge=0, le=1000)
+    #: Extra tightening ONLY, never the sole ceiling: dollars depend on provider pricing, which can be
+    #: absent (scripted model, offline mode, the isolation proxy carries no prices), and cost accrues per
+    #: turn so a cap can overshoot mid-turn. Steps are host-enforced and always available.
     max_cost_usd: float = Field(default=0.0, ge=0.0, le=1000.0)
     #: Running auto-started jobs under THIS rule at once.
     max_concurrent: int = Field(default=1, ge=1, le=10)
 
     @property
     def has_ceiling(self) -> bool:
-        return bool(self.max_steps or self.max_cost_usd)
+        # Fails closed: only a step ceiling counts. max_cost_usd is not independently enforceable
+        # (no pricing offline/scripted/through the proxy; turn-granularity accrual can overshoot),
+        # so a dollars-only rule would be a false bound.
+        return bool(self.max_steps)
 
 
 class AutoStartPolicy(BaseModel):

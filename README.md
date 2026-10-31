@@ -17,7 +17,7 @@ workers, which you already pay for.
 
 ## What is real today (honest state)
 
-The supported working slice, all covered by tests in `tests/` (22 tests):
+The supported working slice, all covered by tests in `tests/` (28 tests):
 
 - **Contract -> policy -> gateway -> worker -> gates, for real.** With adapter `root`, Skye drives
   the vendored Root through its real owner HTTP API: the adapter authenticates with Root's local
@@ -26,11 +26,20 @@ The supported working slice, all covered by tests in `tests/` (22 tests):
   no cost): a real Root job writes a real file through Root's tool path, Skye reads the settled
   contract-checked result, and the policy's test gate runs against the repo. A worker that breaks
   its output contract fails the dispatch before gates run.
+- **The designer/PM slice.** A designer contract dispatched to Root inspects a real rendered
+  page (Playwright over a fixture) through the dynamic-tool gateway and settles with its
+  verdict/reasons contract checked; a PM contract settles the same way without the UI tool.
+  `tests/test_integration_designer.py` proves the inspection ran (the fixture's rendered content
+  is in the tool result) - it does not claim design or planning QUALITY.
 - **The Chamber bridge.** The dispatcher emits lifecycle events (accepted, needs-owner, gate
   pass/fail, done, failed) and publishes them to a Chamber line through Root's vendored line
   client - sealed messages on the real relay, verified in `tests/test_line_bridge.py` with a
-  second member receiving them. No line configured: events go to a local `events.jsonl`, never
-  silently dropped; a dead line sink never loses an event or kills a dispatch.
+  second member receiving them. The audience is explicit (SKYE_LINE_TO is required; '*' is a
+  choice, never a default) and the default payload is minimal (kind/role/status/reason; the goal
+  is mission content and only appears with SKYE_LINE_VERBOSE=1). No line configured: events go to
+  a local `events.jsonl`, never silently dropped; a dead line sink never loses an event or kills
+  a dispatch. The Root owner token authenticates the adapter host-side only - it never appears in
+  worker output, events, or errors (tested).
 - **Claude Code and Codex adapters.** Command construction is verified against the current vendor
   CLI references (Claude Code: headless `-p`, `--output-format`, tool restriction via `--tools`
   with `--disallowedTools mcp__*`; Codex: `codex exec` with its read-only-by-default sandbox).
@@ -42,8 +51,11 @@ The supported working slice, all covered by tests in `tests/` (22 tests):
   restarts until explicitly reset), interrupt recovery markers.
 - Chamber's identity v2/v3 with its test matrix (111 tests passing in the vendored tree).
 
-Not built yet: the designer/PM roles operating a real app end to end, multi-machine teams, the
-hosted edition (see `docs/editions.md`). This is a working local core, not a finished product.
+Missing from the working product path: designer/PM flows with real models against real apps (the
+slice above is scripted by design), multi-contract missions with dependencies, and handoff of
+results between contracts. Long-term scope, deliberately out of this repo's first cut:
+multi-machine teams and the hosted edition (see `docs/editions.md`). This is a working local core,
+not a finished product.
 
 ## Quick start (local)
 

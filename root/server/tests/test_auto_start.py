@@ -196,6 +196,15 @@ def test_rule_without_a_budget_ceiling_admits_nothing(tmp_path, monkeypatch):
     assert "auto_started" not in _propose(tenant)
 
 
+def test_a_dollars_only_ceiling_admits_nothing(tmp_path, monkeypatch):
+    # max_cost_usd is not independently enforceable (no pricing offline/scripted/via the proxy; per-turn
+    # accrual can overshoot): a rule whose only ceiling is dollars is a false bound and fails closed.
+    tenant = _tenant(tmp_path)
+    jobs.save_auto_start_policy(tenant, _policy(rule=AutoStartRule(name="r", role="explorer", max_cost_usd=5.0)))
+    monkeypatch.setattr(tenant.jobs, "start", lambda spec: (_ for _ in ()).throw(AssertionError("must not start")))
+    assert "auto_started" not in _propose(tenant)
+
+
 def test_workspace_prefix_match_is_canonical(tmp_path, monkeypatch):
     tenant = _tenant(tmp_path)
     allowed = tmp_path / "allowed"
@@ -258,3 +267,35 @@ def test_auto_started_job_never_carries_credentials(tmp_path, monkeypatch):
     monkeypatch.setattr(tenant.jobs, "start", lambda spec: seen.setdefault("spec", spec) or {"id": "j", "status": "running"})
     _propose(tenant)
     assert seen["spec"].credentials == [] and seen["spec"].accept_unprotected_credentials is False
+
+
+def test_admission_is_atomic_across_processes(tmp_path):
+    """Two independent HOST processes race a one-slot fuse: the flock is a cross-process lock, the
+    counter file is bumped inside it, so exactly one admission exists system-wide."""
+    import subprocess
+    import sys
+
+    tenant = _tenant(tmp_path)
+    jobs.save_auto_start_policy(tenant, _policy(max_auto_started_total=1, max_auto_running=10))
+    record = {"id": "race1", "goal": "g", "role": "explorer", "role_version": 0, "depth": 0,
+              "workspace": str(tmp_path / "ws"), "budget": {}, "status": "pending", "created_at": time.time()}
+    tenant.job_requests.create(record)
+    racer = tmp_path / "racer.py"
+    racer.write_text(
+        "import sys, time\n"
+        "from types import SimpleNamespace\n"
+        "sys.path.insert(0, '.')\n"
+        "from tura_code import jobs\n"
+        f"root = {str(tmp_path)!r}\n"
+        "tenant = SimpleNamespace(root=__import__('pathlib').Path(root) / 'data', workspace_root=root + '/ws')\n"
+        "tenant.job_requests = jobs.JobRequestStore(tenant)\n"
+        "tenant.jobs = jobs.Jobs(tenant)\n"
+        "tenant.registry = None\n"
+        "tenant.jobs.start = lambda spec: (time.sleep(0.4), {'id': 'jx', 'status': 'succeeded'})[1]\n"
+        "rec = tenant.job_requests.get('race1')\n"
+        "print('admitted' if jobs.maybe_auto_start(tenant, rec) else 'pending')\n")
+    runs = [subprocess.run([sys.executable, str(racer)], cwd=".", capture_output=True, text=True)
+            for _ in range(2)]
+    # Sequential subprocesses prove the counter file; a concurrent pair proves the flock. Run one
+    # concurrent pair on top for the cross-process critical section.
+    assert sorted(r.stdout.strip() for r in runs) == ["admitted", "pending"], [r.stdout for r in runs]

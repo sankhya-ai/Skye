@@ -95,7 +95,7 @@ def test_dispatch_events_arrive_on_the_line(relay, tmp_path):
         bridge_pair = [None]
 
         def run_dispatch():
-            bridge = LineBridge(str(invite), agent="skye/dispatcher")
+            bridge = LineBridge(str(invite), agent="skye/dispatcher", to="ashish/claude-code")
             bridge_pair[0] = bridge
             outcome = dispatch(
                 {"goal": "say hi", "repo": str(tmp_path), "role": "explorer", "adapter": "root",
@@ -112,7 +112,7 @@ def test_dispatch_events_arrive_on_the_line(relay, tmp_path):
         received = [await asyncio.wait_for(observer[0].next_message(10), 20) for _ in range(3)]
         kinds = [m.text.split("]")[0].lstrip("[skye:") for m in received]
         assert kinds == ["accepted", "gate", "done"], kinds
-        assert all("say hi" in m.text for m in received)
+        assert all("say hi" not in m.text for m in received)  # goal is mission content: off the line by default
         await observer[0].close()
         observer[1].cancel()
         await loop.run_in_executor(None, bridge_pair[0].close)
@@ -156,3 +156,55 @@ def test_a_dead_sink_never_loses_the_event(tmp_path, monkeypatch):
     assert outcome.status == "done"  # the dispatch is not held hostage by a dead sink
     fallback = Path("events.jsonl").read_text()
     assert "bridge-error" in fallback and "line down" in fallback
+
+
+def test_line_bridge_refuses_a_silent_broadcast(relay_unused=None):
+    from skye.events import LineBridge
+
+    with pytest.raises(ValueError):
+        LineBridge("https://relay.example/whatever", agent="skye/dispatcher")  # no explicit audience
+
+
+def test_from_env_without_an_audience_keeps_the_line_off(tmp_path, monkeypatch):
+    import skye.events as events
+
+    monkeypatch.setenv("SKYE_LINE_INVITE", "https://relay.example/whatever")
+    monkeypatch.delenv("SKYE_LINE_TO", raising=False)
+    log = tmp_path / "events.jsonl"
+    bridge = events.from_env(log)
+    bridge.publish(events.make_event("accepted", {"goal": "secret mission", "role": "explorer", "adapter": "root"}))
+    lines = [json.loads(line) for line in log.read_text().splitlines()]
+    assert any(line["kind"] == "bridge-error" and "line sink OFF" in line["reason"] for line in lines)
+    assert any(line["kind"] == "accepted" for line in lines)  # the event itself is not lost
+
+
+def test_verbose_opt_in_puts_the_goal_on_the_line():
+    # payload construction only - no relay needed
+    import skye.events as events
+    import os
+
+    bridge = object.__new__(events.LineBridge)
+    bridge.to = "@ashish"
+    captured = {}
+    bridge.client = None
+    import asyncio as _a
+    bridge._asyncio = _a
+
+    class FakeFuture:
+        def result(self, timeout):
+            return {}
+
+    def fake_send(coro, loop):
+        captured["coro"] = coro
+        return FakeFuture()
+
+    bridge._loop = None
+    bridge._asyncio = type("A", (), {"run_coroutine_threadsafe": staticmethod(fake_send)})
+    bridge.client = type("C", (), {"send": lambda self, to, text: captured.__setitem__("text", (to, text)) or None})()
+    os.environ.pop("SKYE_LINE_VERBOSE", None)
+    events.LineBridge.publish(bridge, events.make_event("done", {"goal": "secret mission", "role": "explorer"}))
+    assert captured["text"][1].count("secret mission") == 0
+    os.environ["SKYE_LINE_VERBOSE"] = "1"
+    events.LineBridge.publish(bridge, events.make_event("done", {"goal": "secret mission", "role": "explorer"}))
+    os.environ.pop("SKYE_LINE_VERBOSE", None)
+    assert "secret mission" in captured["text"][1]

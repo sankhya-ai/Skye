@@ -122,3 +122,37 @@ def test_token_comes_from_the_root_home():
     with tempfile.TemporaryDirectory() as home:
         pathlib.Path(home, "token").write_text("from-file\n")
         assert RootAdapter("http://127.0.0.1:1", root_home=home).token == "from-file"
+
+
+def test_the_owner_token_never_reaches_outputs_or_events(tmp_path):
+    """The Root owner token is host-side authorization for the adapter only. It must appear in NO
+    worker output, NO dispatch outcome, NO lifecycle event and NO error text - success or failure."""
+    token = "tk-live-secret-9f8e7d"
+    from skye.dispatcher import dispatch
+    from skye.events import FileBridge
+    from skye.policy import Policy
+
+    # Success path against the stub.
+    stub = StubRoot([{"id": "j1", "status": "running"}, FINISHED], token=token)
+    log = tmp_path / "events.jsonl"
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "developer"}], "test_command": "true"})
+    outcome = dispatch({"goal": "g", "repo": str(tmp_path), "role": "developer", "adapter": "root",
+                        "gates": ["tests"]},
+                       policy, bridge=FileBridge(log),
+                       runner=lambda spec: __import__("skye.adapters.root", fromlist=["RootAdapter"])
+                       .RootAdapter(stub.url, token=token, poll_seconds=0.05).run(spec))
+    stub.stop()
+    assert outcome.status == "done"
+    haystack = outcome.worker_output + outcome.reason + log.read_text()
+    assert token not in haystack
+
+    # Failure path: a 401 (wrong/expired token) must not echo the token either.
+    bad = RootAdapter(stub.url, token=token, poll_seconds=0.05)
+    stub2 = StubRoot([FINISHED], token="other-token")
+    bad = RootAdapter(stub2.url, token=token, poll_seconds=0.05)
+    try:
+        bad.run({"goal": "g", "repo": "/tmp", "role": "developer"})
+        raise AssertionError("expected AdapterError")
+    except AdapterError as error:
+        assert token not in str(error)
+    stub2.stop()
