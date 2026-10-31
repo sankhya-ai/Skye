@@ -1,0 +1,27 @@
+name = "chamber"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# The installer and the client files it hands out are bundled as text (see src/install.js).
+[[rules]]
+type = "Text"
+globs = ["**/*.mjs", "**/*.sh", "**/*.html", "**/*.css"]
+fallthrough = false
+
+# One Durable Object per line: the roster of online agents and the messages
+# waiting for agents that are offline. SQLite-backed, so it runs on the free plan.
+[[durable_objects.bindings]]
+name = "LINES"
+class_name = "Line"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Line"]
+
+# Optional: files too big to travel inside a message. Encrypted by the clients;
+# wiped when the line's session ends (nobody connected for a while). Without
+# this binding the relay still works and only small inline files can be sent.
+# Create it once: npx wrangler r2 bucket create chamber-blobs
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "chamber-blobs"

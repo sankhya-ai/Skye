@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+target/
+**/target/
+**/gen/
+.DS_Store
+*.log
+desktop/src-tauri/binaries/

@@ -1,0 +1,398 @@
+/* A session's turns as Chotu's coding mode showed them: messages, trace lines, diffs, approval and flow cards. */
+
+/* ---------- turns ---------- */
+
+.turn + .turn {
+  margin-top: 6px;
+}
+.message.assistant {
+  margin-bottom: 26px;
+}
+
+/* ---------- messages ---------- */
+
+.message {
+  margin: 0 0 22px;
+}
+.messageLabel {
+  color: var(--ink-faint);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+.message.user {
+  display: flex;
+  justify-content: flex-end;
+}
+.userBox {
+  background: var(--user-bg);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  max-width: min(600px, 88%);
+  padding: 10px 14px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.memoryNote {
+  color: var(--ink-faint);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.memoryNote summary {
+  cursor: pointer;
+  list-style: none;
+}
+.memoryNote ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.assistantText {
+  margin: 4px 0 10px;
+  word-break: break-word;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown p,
+.markdown ul,
+.markdown ol {
+  margin: 0.6em 0;
+}
+.markdown li::marker {
+  color: var(--accent);
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  font-size: 1.05em;
+  margin: 1em 0 0.4em;
+}
+.markdown code {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 0.08em 0.35em;
+}
+.markdown pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin: 0.7em 0;
+  overflow-x: auto;
+  padding: 12px 14px;
+}
+.markdown pre code {
+  background: none;
+  border: 0;
+  font-size: 12.5px;
+  padding: 0;
+}
+.markdown table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line);
+  padding: 5px 9px;
+}
+.markdown a {
+  color: var(--dot);
+}
+.markdown blockquote {
+  border-left: 2px solid var(--line-strong);
+  color: var(--ink-muted);
+  margin: 0.6em 0;
+  padding-left: 12px;
+}
+
+/* Tool calls, thinking and subagents: tools.css. */
+
+/* ---------- diffs ---------- */
+
+.diff {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+.diff + .diff {
+  margin-top: 8px;
+}
+.diffHead {
+  align-items: center;
+  background: var(--code-bg);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  padding: 5px 10px;
+}
+.diffHead .path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plus {
+  color: var(--add-ink);
+}
+.minus {
+  color: var(--del-ink);
+}
+.diffRows {
+  max-height: 380px;
+  overflow: auto;
+}
+.diffRow {
+  display: grid;
+  grid-template-columns: 40px 40px 16px 1fr;
+  min-width: max-content;
+}
+.diffRow .no {
+  color: var(--ink-faint);
+  padding-right: 8px;
+  text-align: right;
+  user-select: none;
+}
+.diffRow .sign {
+  color: var(--ink-faint);
+  user-select: none;
+}
+.diffRow .text {
+  padding-right: 12px;
+  white-space: pre;
+}
+.diffRow.add {
+  background: var(--add-bg);
+}
+.diffRow.add .sign,
+.diffRow.add .text {
+  color: var(--add-ink);
+}
+.diffRow.del {
+  background: var(--del-bg);
+}
+.diffRow.del .sign,
+.diffRow.del .text {
+  color: var(--del-ink);
+}
+.diffRow.gap {
+  border-bottom: 1px dashed var(--line);
+  border-top: 1px dashed var(--line);
+  color: var(--ink-faint);
+  display: block;
+  font-style: italic;
+  padding: 2px 12px;
+}
+
+/* ---------- approval card (Chotu's messageApprovalCard) ---------- */
+
+.approvalCard {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  margin: 8px 0 14px;
+  padding: 12px 14px 12px;
+}
+.approvalCard header strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.approvalCard header small {
+  color: var(--ink-muted);
+  display: block;
+  font-size: 12.5px;
+  margin-top: 2px;
+}
+.approvalMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.approvalChip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  padding: 1px 9px;
+}
+.approvalChip.outside {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approvalChip.trusted {
+  border-color: var(--accent-line);
+  color: var(--ink);
+}
+.approvalBody {
+  margin-top: 8px;
+}
+.approvalActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.kbd {
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.6;
+  padding: 0 4px;
+}
+
+/* ---------- turn footer, working indicator, notices ---------- */
+
+.messageActions {
+  align-items: center;
+  color: var(--ink-faint);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 12px;
+  margin-top: 8px;
+}
+.messageActions button {
+  background: none;
+  border: 0;
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+}
+.messageActions button:hover {
+  color: var(--ink);
+}
+.messageActions .err {
+  color: var(--err);
+}
+.messageActions .verified {
+  color: var(--add-ink, #8fe0ad);
+  font-weight: 500;
+}
+.messageActions .unverified {
+  color: var(--ink-faint);
+  opacity: 0.85;
+}
+.turnError {
+  border-left: 2px solid var(--err);
+  color: var(--err);
+  font-size: 12.5px;
+  margin: 6px 0;
+  padding: 2px 0 2px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Not `.working`: that is also an activity tone (`.activity.working`), and a
+ * flex row there put a running subagent's trace beside its line, not under it. */
+.workingStatus {
+  align-items: center;
+  color: var(--ink-muted);
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+.workingStatus canvas {
+  flex: 0 0 auto;
+}
+.workingStatus .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workingStatus .elapsed {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Left, at the tool lines' label column (their 16px icon + 8px gap). */
+.notice {
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  margin: 6px 0;
+  padding-left: 24px;
+}
+/* State the owner must not miss (a created tool/role/plugin) reads at muted ink, not faint: roughly 6.5:1 on the
+   dark theme instead of roughly 3:1. */
+.notice.info {
+  color: var(--ink-muted);
+}
+.notice.error {
+  color: var(--err);
+}
+.planBar {
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 18px;
+  padding: 10px 12px 10px 14px;
+}
+.planBar .grow {
+  flex: 1;
+  font-size: 13px;
+}
+.learnedLine {
+  align-items: center;
+  color: var(--ink-faint);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  margin: -12px 0 20px;
+}
+.learnedLine button {
+  background: none;
+  border: 0;
+  color: var(--ink-muted);
+  font-size: 12px;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* ---------- coding flows ---------- */
+
+.flowCard {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  margin: 8px 0 14px;
+  padding: 12px 14px;
+}
+.flowHead {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.flowHead strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.flowTask {
+  color: var(--ink-muted);
+  font-size: 13px;
+  margin: 6px 0 2px;
+}
+.flowReview {
+  margin-top: 10px;
+}

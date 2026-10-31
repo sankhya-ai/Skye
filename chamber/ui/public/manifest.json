@@ -1,0 +1,17 @@
+{
+  "name": "Chamber Control Tower",
+  "short_name": "Chamber",
+  "description": "Control tower for supervising AI agents",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121214",
+  "theme_color": "#121214",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%236366f1'/><circle cx='50' cy='50' r='20' fill='%23ffffff'/></svg>",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

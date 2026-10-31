@@ -1,0 +1,101 @@
+name: Release the macOS app
+
+# A tag like v0.2.0 builds root.app for Apple silicon and Intel, signs it with
+# the Developer ID, notarizes and staples it, and publishes the disk images and
+# Sparkle update feeds on the GitHub release. Without the signing secrets it
+# still builds (ad-hoc signed) so the pipeline can be tried on a fork.
+#
+# Secrets:
+#   MACOS_CERTIFICATE_P12 / MACOS_CERTIFICATE_PASSWORD   Developer ID Application certificate (base64 .p12)
+#   MACOS_SIGN_IDENTITY        e.g. "Developer ID Application: Tura Solutions (TEAMID)"
+#   NOTARY_APPLE_ID / NOTARY_TEAM_ID / NOTARY_PASSWORD   an app-specific password for notarytool
+#   SPARKLE_PUBLIC_KEY / SPARKLE_PRIVATE_KEY             from Sparkle's generate_keys
+#   ROOT_GOOGLE_CLIENT_ID / ROOT_GOOGLE_CLIENT_SECRET / ROOT_GITHUB_CLIENT_ID   optional OAuth clients
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14   # Apple silicon
+            arch: arm64
+          - runner: macos-13   # Intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runtime
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v5
+      - name: Signing keychain
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          [ -n "$P12" ] || { echo "No certificate: an ad-hoc build."; exit 0; }
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p ci "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p ci "$keychain"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          if [ -n "$APPLE_ID" ]; then
+            xcrun notarytool store-credentials root-notary --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$NOTARY_PASSWORD" --keychain "$keychain"
+            echo "NOTARY_PROFILE=root-notary" >> "$GITHUB_ENV"
+          fi
+          echo "SIGN_IDENTITY=${{ secrets.MACOS_SIGN_IDENTITY }}" >> "$GITHUB_ENV"
+      - name: Package
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          ROOT_GOOGLE_CLIENT_ID: ${{ secrets.ROOT_GOOGLE_CLIENT_ID }}
+          ROOT_GOOGLE_CLIENT_SECRET: ${{ secrets.ROOT_GOOGLE_CLIENT_SECRET }}
+          ROOT_GITHUB_CLIENT_ID: ${{ secrets.ROOT_GITHUB_CLIENT_ID }}
+        run: scripts/package-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: root-${{ matrix.arch }}
+          path: build/macos/root-*.dmg
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Sparkle feeds, one per architecture
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          [ -n "$SPARKLE_PRIVATE_KEY" ] || { echo "No Sparkle key: the release has no update feed."; exit 0; }
+          curl -fsSL https://github.com/sparkle-project/Sparkle/releases/download/2.8.1/Sparkle-2.8.1.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          for arch in arm64 x86_64; do
+            echo "$SPARKLE_PRIVATE_KEY" | "$RUNNER_TEMP/bin/generate_appcast" --ed-key-file - \
+              --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" \
+              -o "dist/appcast-$arch.xml" "dist/root-$arch"
+          done
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --generate-notes dist/root-*/root-*.dmg $(ls dist/appcast-*.xml 2>/dev/null)

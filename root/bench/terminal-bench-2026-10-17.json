@@ -1,0 +1,24 @@
+{
+    "job_name": "rerun-2026-10-17",
+    "jobs_dir": "/Users/chitranjanmalviya/Desktop/root/bench/jobs",
+    "n_concurrent_trials": 2,
+    "agents": [
+        {
+            "name": "bench.harbor_root:Root",
+            "model_name": "openrouter/deepseek/deepseek-v4.1-flash",
+            "kwargs": {
+                "provider_sort": "throughput"
+            }
+        }
+    ],
+    "datasets": [
+        {
+            "name": "terminal-bench/terminal-bench",
+            "ref": "sha256:39d9f44b40420cde8fdcc087579c0d72a7e14fa3656d603c3f0d22fb35e27732",
+            "task_names": [
+                "terminal-bench/session-window-debug",
+                "terminal-bench/photonic-waveguide-routing"
+            ]
+        }
+    ]
+}

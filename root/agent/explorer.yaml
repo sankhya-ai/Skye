@@ -1,0 +1,13 @@
+version: 1
+agent:
+  extend: ./agent.yaml
+  name: root-explorer
+  system_prompt_args:
+    ROLE_ADDITIONAL: |
+      You are running as a READ-ONLY research subagent. Every `user` message comes from the main agent, which cannot see your context — only your final message. Search broadly (Glob, Grep, ReadFile, read-only Shell such as `git log` or `ls`), never modify anything, and end with a concise report: the answer, the evidence as `path:line` references, and what you could not confirm.
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"
+    - "kimi_cli.tools.todo:SetTodoList"
+    - "kimi_cli.tools.file:WriteFile"
+    - "kimi_cli.tools.file:StrReplaceFile"
+  subagents:

@@ -1,0 +1,139 @@
+/* chamber: Slack's layout and Linear's calm, in root's (Tura's) design language:
+ * - the ground is ruled paper (a fine 45° hatch); the main area floats on it as one card
+ * - primary buttons are strictly black and white ink pills
+ * - color palette strictly uses Tura's 4 pastels (Blue, Mint, Lilac, Sand); no orange
+ * Tokens are shadcn's, so the components copied from company-brain just work. */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--accent);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-waiting: var(--waiting);
+  --color-online: var(--online);
+  --color-dot: var(--dot);
+  --color-pastel-blue: var(--pastel-blue);
+  --color-pastel-mint: var(--pastel-mint);
+  --color-pastel-lilac: var(--pastel-lilac);
+  --color-pastel-sand: var(--pastel-sand);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #1b1c1f;
+  --card: #ffffff;
+  --popover: #ffffff;
+  --primary: #17181b; /* ink */
+  --primary-foreground: #ffffff;
+  --muted: #f4f4f3;
+  --muted-foreground: #6b6f76;
+  --accent: #efefed;
+  --destructive: #c4553f;
+  --border: #e4e4e1;
+  --ring: #4e83b0;
+  --sidebar: transparent;
+  --waiting: #8db8d5; /* Tura pastel blue, no orange */
+  --online: #70852f;
+  --dot: #4e83b0;
+  --pastel-blue: #8db8d5;
+  --pastel-mint: #a8cbbb;
+  --pastel-lilac: #c5b4e3;
+  --pastel-sand: #dfd7ca;
+  --ground:
+    repeating-linear-gradient(-45deg, rgba(23, 57, 76, 0) 0 2px, rgba(23, 57, 76, 0.035) 2px 4px),
+    linear-gradient(#f6f5f1, #f1f0ec);
+}
+
+.dark {
+  --background: #101113;
+  --foreground: #ebecee;
+  --card: #16171a;
+  --popover: #1b1c1f;
+  --primary: #f4f5f8; /* ink, inverted */
+  --primary-foreground: #101113;
+  --muted: #1b1c1f;
+  --muted-foreground: #8a8f98;
+  --accent: #222327;
+  --destructive: #d9725c;
+  --border: #26272b;
+  --ring: #4e83b0;
+  --sidebar: transparent;
+  --waiting: #5a82a0; /* Tura pastel blue, no orange */
+  --online: #8ba44a;
+  --dot: #4e83b0;
+  --pastel-blue: #5a82a0;
+  --pastel-mint: #5e8473;
+  --pastel-lilac: #7d6b99;
+  --pastel-sand: #8c8275;
+  --ground:
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0) 0 2px, rgba(255, 255, 255, 0.027) 2px 4px),
+    linear-gradient(#050506, #0a0a0c);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply text-foreground font-sans antialiased;
+    background: var(--ground);
+    background-attachment: fixed;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+}
+
+/* Thin, quiet scrollbars, like Linear. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Rendered memory files: quiet, readable markdown. */
+.prose-memory { line-height: 1.65; }
+.prose-memory h1 { font-size: 18px; font-weight: 600; margin: 0 0 10px; }
+.prose-memory h2 { font-size: 15px; font-weight: 600; margin: 18px 0 6px; }
+.prose-memory h3 { font-size: 13px; font-weight: 600; margin: 14px 0 4px; }
+.prose-memory p { margin: 6px 0; }
+.prose-memory ul, .prose-memory ol { margin: 4px 0; padding-left: 18px; }
+.prose-memory ul { list-style: disc; }
+.prose-memory ol { list-style: decimal; }
+.prose-memory li { margin: 2px 0; }
+.prose-memory code { font-family: var(--font-mono); font-size: 12px; background: var(--muted); padding: 1px 4px; border-radius: 4px; }
+.prose-memory pre { background: var(--muted); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+.prose-memory pre code { background: none; padding: 0; }
+.prose-memory table { border-collapse: collapse; margin: 8px 0; }
+.prose-memory th, .prose-memory td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }

@@ -1,0 +1,31 @@
+# root — the main coding agent.
+#
+# Self-contained on purpose: `extend: default` would resolve to the runtime's
+# compile-time source tree, which does not exist on a machine that only has the
+# binary. The host writes a per-session overlay that extends THIS file (plan
+# mode, the Dhee continuity hook), so everything below is the stable base.
+version: 1
+agent:
+  name: root
+  system_prompt_path: ./system.md
+  system_prompt_args:
+    ROLE_ADDITIONAL: ""
+  tools:
+    - "kimi_cli.tools.multiagent:Task"
+    - "kimi_cli.tools.todo:SetTodoList"
+    - "kimi_cli.tools.shell:Shell"
+    - "kimi_cli.tools.file:ReadFile"
+    - "kimi_cli.tools.file:ReadMediaFile"
+    - "kimi_cli.tools.file:Glob"
+    - "kimi_cli.tools.file:Grep"
+    - "kimi_cli.tools.file:WriteFile"
+    - "kimi_cli.tools.file:StrReplaceFile"
+    - "kimi_cli.tools.web:SearchWeb"
+    - "kimi_cli.tools.web:FetchURL"
+  subagents:
+    coder:
+      path: ./coder.yaml
+      description: "Implements a well-specified, self-contained change (one module, one bug, one test file) and verifies it. Give it the exact files, the goal, and how to check the result."
+    explorer:
+      path: ./explorer.yaml
+      description: "Read-only codebase researcher for LARGE codebases. Answers 'where is X', 'how does Y work', 'what calls Z' across many files you have not read, and returns a concise report with file:line references. Not for a handful of files or files you already read — read those yourself. Cannot edit files."

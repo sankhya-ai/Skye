@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>root</string>
+  <key>CFBundleDisplayName</key>
+  <string>root</string>
+  <key>CFBundleIdentifier</key>
+  <string>@BUNDLE_ID@</string>
+  <key>CFBundleExecutable</key>
+  <string>root</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@BUILD@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Tura Solutions. The agent runtime is Apache-2.0 (Moonshot AI).</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <!-- The window shows root's own server on 127.0.0.1. -->
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+  <!-- Updates (Sparkle): the release feed and the key its updates are signed with. -->
+  <key>SUFeedURL</key>
+  <string>@FEED_URL@</string>
+  <key>SUPublicEDKey</key>
+  <string>@SPARKLE_PUBLIC_KEY@</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <!-- The agent works in the folders you open and runs the commands you approve;
+       macOS asks before either reaches these places, and shows why. -->
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>root works on projects you open from your Desktop.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>root works on projects you open from Documents.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>root reads files you point it to in Downloads, and saves files you download there.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>root works on projects you open from external drives.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>root works on projects you open from network drives.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Commands you approve in root may control other apps.</string>
+  <!-- OAuth clients for Gmail and GitHub sign-in: public identifiers, filled at package time. -->
+  <key>RootGoogleClientID</key>
+  <string>@GOOGLE_CLIENT_ID@</string>
+  <key>RootGoogleClientSecret</key>
+  <string>@GOOGLE_CLIENT_SECRET@</string>
+  <key>RootGitHubClientID</key>
+  <string>@GITHUB_CLIENT_ID@</string>
+</dict>
+</plist>

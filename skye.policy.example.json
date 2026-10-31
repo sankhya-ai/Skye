@@ -1,0 +1,9 @@
+{
+  "allow_unattended": [
+    {"adapter": "claude-code", "role": "developer"},
+    {"adapter": "codex", "role": "tester"}
+  ],
+  "test_command": "pytest -q",
+  "max_concurrent": 1,
+  "review_role": "reviewer"
+}

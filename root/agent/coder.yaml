@@ -1,0 +1,11 @@
+version: 1
+agent:
+  extend: ./agent.yaml
+  name: root-coder
+  system_prompt_args:
+    ROLE_ADDITIONAL: |
+      You are running as a subagent. Every `user` message comes from the main agent, which cannot see your context — only your final message. Finish the assigned change, verify it (build, tests, or a direct check), and end with a complete summary: what you changed (every file path), how you verified it, and anything left undone or risky.
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"
+    - "kimi_cli.tools.todo:SetTodoList"
+  subagents:

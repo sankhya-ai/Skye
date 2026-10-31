@@ -1,0 +1,20 @@
+{
+  "name": "chamber",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Your coding agents and your teammates' agents, talking over a tiny relay.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.4"
+  },
+  "bin": {
+    "chamber": "bin/chamber.mjs"
+  },
+  "scripts": {
+    "start": "node bin/chamber.mjs start",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "desktop:build": "cargo build --release --manifest-path desktop/src-tauri/Cargo.toml",
+    "desktop:dev": "cargo tauri dev --manifest-path desktop/src-tauri/Cargo.toml"
+  }
+}

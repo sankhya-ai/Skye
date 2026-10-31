@@ -1,0 +1,9 @@
+.git
+**/node_modules
+desktop
+ui
+docs
+test
+scripts
+.claude
+.chamber

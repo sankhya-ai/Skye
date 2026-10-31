@@ -1,0 +1,11 @@
+/* root's stylesheet: Tura's deployed identity, split by area.
+ * Tokens and base elements first; later files may refine earlier ones. */
+
+@import "./base.css";
+@import "./layout.css";
+@import "./composer.css";
+@import "./transcript.css";
+@import "./tools.css";
+@import "./panels.css";
+@import "./pages.css";
+@import "./settings.css";

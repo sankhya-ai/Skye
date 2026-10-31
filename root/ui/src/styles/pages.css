@@ -1,0 +1,380 @@
+/* Home, sign-in, and the full pages (Learning, Coding flows, Trust). */
+
+/* ---------- home ---------- */
+
+.home {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  justify-content: center;
+  min-height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+.eyebrow {
+  color: var(--ink-muted);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.19em;
+  text-transform: uppercase;
+}
+.greeting {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 400;
+  letter-spacing: -0.038em;
+  line-height: 1.15;
+  margin: 0;
+}
+
+.actionCardsGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  max-width: 760px;
+  width: 100%;
+}
+.actionCard {
+  align-items: flex-start;
+  background: var(--pill);
+  border: 1px solid var(--pill-line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.actionCard:hover {
+  background: var(--hover);
+  border-color: var(--line-strong);
+}
+.actionCardHead {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.actionCardIcon {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.actionCardTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.actionCardDesc {
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.actionCardBadge {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+  padding: 0 6px;
+  text-transform: uppercase;
+}
+/* ---------- home ---------- */
+
+.home {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  justify-content: center;
+  min-height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+.eyebrow {
+  color: var(--ink-muted);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.19em;
+  text-transform: uppercase;
+}
+.greeting {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 400;
+  letter-spacing: -0.038em;
+  line-height: 1.15;
+  margin: 0;
+}
+
+.actionCardsGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  max-width: 760px;
+  width: 100%;
+}
+.actionCard {
+  align-items: flex-start;
+  background: var(--pill);
+  border: 1px solid var(--pill-line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.actionCard:hover {
+  background: var(--hover);
+  border-color: var(--line-strong);
+}
+.actionCardHead {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.actionCardIcon {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.actionCardTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.actionCardDesc {
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.actionCardBadge {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+  padding: 0 6px;
+  text-transform: uppercase;
+}
+.composerQuickActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+.quickActionChip {
+  align-items: center;
+  background: var(--pill);
+  border: 1px solid var(--pill-line);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11.5px;
+  font-weight: 500;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 10px;
+  transition: all 0.15s ease;
+}
+.quickActionChip:hover {
+  background: var(--hover);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+.homeQuickPrompts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  width: 100%;
+}
+.homePromptChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+/* ---------- home ---------- */
+
+.homeComposer {
+  max-width: 760px;
+  width: 100%;
+}
+
+/* ---------- pages ---------- */
+
+.page {
+  padding-bottom: 40px;
+  padding-top: 18px;
+}
+.pageHead {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 6px 0 8px;
+}
+.pageTitle {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+.page .sectionLabel {
+  padding-left: 0;
+}
+
+/* ---------- sign-in ---------- */
+
+.signin {
+  align-items: center;
+  background: var(--ground);
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  padding: 24px;
+}
+.signinCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 420px;
+  padding: 28px;
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .hideNarrow {
+    display: none;
+  }
+}
+
+/* ---------- the pages' shell (Learning, Coding flows, Trust) ---------- */
+
+.pageShell {
+  background: #0f1013;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-card);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+}
+[data-theme="light"] .pageShell {
+  background: #fbfbfc;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: #17242d;
+}
+
+/* =========================================================================
+   Flows, Trust, and Learning Dashboard Styling
+   ========================================================================= */
+
+.flowHeader {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.flowEyebrow {
+  align-items: center;
+  color: var(--ink-faint);
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+.flowTitle {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+}
+.flowLede {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 680px;
+}
+.flowHeaderActions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/* Empty State & Templates */
+.flowEmptySection {
+  background: var(--user-bg);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 28px 20px;
+  text-align: center;
+}
+
+/* Learning Page Specifics */
+
+.modeLabel {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+/* ---------- a simple page (Schedules): Settings' column and groups ---------- */
+
+.simplePageHead {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.simplePageHead h1 {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.pageShell.scroll {
+  overflow-y: auto;
+}
+.settingsRowControl textarea,
+.settingsRow.stacked textarea {
+  font-family: inherit;
+  resize: vertical;
+  width: 100%;
+}

@@ -1,0 +1,485 @@
+/* Tool calls, thinking and subagents in a turn.
+ *
+ * One call is one quiet line — icon, verb, the subject in mono, a short note on
+ * the right — that opens to a terminal, the file, or the diff. A run of calls is
+ * one line that streams its latest calls while it is the live edge of the turn.
+ * Ink only; orange stays a micro-signal elsewhere. */
+
+/* ---------- a call ---------- */
+
+.activity {
+  margin: 1px 0;
+  min-width: 0;
+}
+.toolRow {
+  min-width: 0;
+}
+.toolLine,
+.activityLine {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-muted);
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  line-height: 1.4;
+  margin-left: -6px;
+  min-width: 0;
+  padding: 3px 6px;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+  width: calc(100% + 12px);
+}
+.toolLine:disabled {
+  cursor: default;
+}
+.toolLine:not(:disabled):hover,
+.activityLine:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.rowIcon {
+  color: var(--ink-faint);
+  display: inline-flex;
+  flex: 0 0 16px;
+  justify-content: center;
+}
+.rowIcon .icon {
+  display: inline-flex;
+}
+.toolLine .verb {
+  flex: 0 0 auto;
+}
+.toolLine .subject {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rowMeta {
+  color: var(--ink-faint);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 12px;
+}
+.rowMeta:empty {
+  padding-left: 0;
+}
+.rowMeta .err {
+  color: var(--err);
+}
+.chev {
+  color: var(--ink-faint);
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: transform 0.15s ease, opacity 0.12s;
+}
+.toolLine:hover .chev,
+.activityLine:hover .chev,
+.agentHead:hover .chev,
+[aria-expanded="true"] > .chev {
+  opacity: 1;
+}
+[aria-expanded="true"] > .chev {
+  transform: rotate(90deg);
+}
+.toolRow.working .rowIcon,
+.toolRow.working .verb {
+  color: var(--ink);
+}
+.toolRow.error .rowIcon,
+.toolRow.error .verb {
+  color: var(--err);
+}
+.toolRow.muted .subject {
+  color: var(--ink-faint);
+}
+
+/* ---------- what a call did ---------- */
+
+.toolBody {
+  animation: reveal 0.16s ease-out;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 3px 0 10px 22px;
+  min-width: 0;
+}
+.output {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.output.code {
+  white-space: pre;
+  word-break: normal;
+}
+.terminal {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+}
+.termCmd {
+  color: var(--ink);
+  display: flex;
+  gap: 8px;
+  padding: 7px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.termCmd .prompt {
+  color: var(--ink-faint);
+  user-select: none;
+}
+.terminal.failed .termCmd .prompt {
+  color: var(--err);
+}
+.terminal .output {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+}
+.termEmpty {
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-style: italic;
+  padding: 6px 10px;
+}
+.stepMessage {
+  color: var(--ink-faint);
+  font-size: 12px;
+  margin: 0;
+}
+.stepMessage.err {
+  color: var(--err);
+}
+
+/* ---------- a run of calls ---------- */
+
+.activityLine {
+  font-size: 13.5px;
+}
+.activityLine .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activityLine .count {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-faint);
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+  padding: 0 6px;
+}
+.activityLine .chev {
+  margin-left: auto;
+}
+.activity.error .activityLine {
+  color: var(--err);
+}
+.activity.permission .activityLine {
+  color: var(--ink);
+}
+.activityRows {
+  border-left: 1px solid var(--line);
+  margin: 1px 0 6px 7px;
+  min-width: 0;
+  padding-left: 12px;
+}
+.activityRows > .toolRow,
+.activityRows > .thoughtRow,
+.agentTail > .toolRow {
+  animation: reveal 0.18s ease-out;
+}
+.moreRows {
+  background: none;
+  border: 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+  padding: 2px 0 3px;
+}
+.moreRows:hover {
+  color: var(--ink);
+}
+
+/* ---------- thinking ---------- */
+
+.thoughtRow {
+  color: var(--ink-faint);
+  font-size: 13px;
+  margin: 1px 0;
+  min-width: 0;
+}
+.thoughtRow summary {
+  align-items: center;
+  border-radius: 7px;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  list-style: none;
+  margin-left: -6px;
+  min-width: 0;
+  padding: 3px 6px;
+}
+.thoughtRow summary::-webkit-details-marker {
+  display: none;
+}
+.thoughtRow summary:hover {
+  background: var(--hover);
+  color: var(--ink-muted);
+}
+.thoughtRow summary .chev {
+  flex-basis: 16px;
+  opacity: 0.7;
+}
+.thoughtRow[open] summary .chev {
+  opacity: 1;
+  transform: rotate(90deg);
+}
+.thoughtLabel {
+  flex: 0 0 auto;
+  font-style: italic;
+}
+.thoughtPreview {
+  min-width: 0;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thoughts {
+  border-left: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin: 3px 0 6px 7px;
+  max-height: 280px;
+  overflow: auto;
+  padding-left: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.thoughtRow.live {
+  padding: 3px 0 3px 24px;
+}
+.thoughtTail {
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin-top: 2px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.6em);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 1.6em);
+  max-height: 4.5em;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: flex;
+  flex-direction: column-reverse;
+}
+
+/* ---------- a delegated task ---------- */
+
+.agentCard {
+  background: var(--user-bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin: 6px 0 10px;
+  min-width: 0;
+  padding: 9px 12px 9px;
+  transition: border-color 0.2s;
+}
+.agentCard.active {
+  border-color: var(--line-strong);
+}
+.agentCard.failed {
+  border-color: color-mix(in srgb, var(--err) 45%, transparent);
+}
+.agentHead {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: var(--ink);
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+.agentBadge {
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 600;
+  gap: 5px;
+  padding: 1px 9px 1px 7px;
+}
+.agentTask {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agentStatus {
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agentStatus.err {
+  color: var(--err);
+}
+.agentTail {
+  border-top: 1px dashed var(--line);
+  margin-top: 8px;
+  padding-top: 4px;
+}
+.agentBody {
+  animation: reveal 0.16s ease-out;
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+  min-width: 0;
+  padding-top: 6px;
+}
+.assignment {
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  margin-bottom: 4px;
+}
+.assignment summary {
+  cursor: pointer;
+  list-style: none;
+}
+.assignment summary::-webkit-details-marker {
+  display: none;
+}
+.assignment summary:hover {
+  color: var(--ink);
+}
+
+/* ---------- the plan ---------- */
+
+.planCard {
+  background: var(--user-bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+  margin: 6px 0 10px;
+  padding: 9px 12px 8px;
+}
+.planHead {
+  align-items: center;
+  color: var(--ink-muted);
+  display: flex;
+  font-size: 12.5px;
+  font-weight: 600;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.planCount {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.planMeter {
+  background: var(--line);
+  border-radius: 2px;
+  height: 3px;
+  margin-left: auto;
+  overflow: hidden;
+  width: 72px;
+}
+.planMeter span {
+  background: var(--ink-muted);
+  display: block;
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.planCard .todoList {
+  gap: 1px;
+}
+
+/* ---------- motion ---------- */
+
+.shimmer {
+  animation: shimmer 1.8s linear infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-image: linear-gradient(90deg, var(--ink-faint) 0%, var(--ink) 40%, var(--ink-faint) 80%);
+  background-size: 250% 100%;
+  color: transparent !important;
+}
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.spinner {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    animation: none;
+    background: none;
+    color: var(--ink) !important;
+  }
+  .toolBody,
+  .agentBody,
+  .activityRows > .toolRow,
+  .activityRows > .thoughtRow,
+  .agentTail > .toolRow {
+    animation: none;
+  }
+}

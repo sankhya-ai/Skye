@@ -1,0 +1,172 @@
+/* root — Tura's deployed identity (apps/dashboard, data-product="plank"),
+ * measured from the running app in both themes, applied to a coding agent.
+ *
+ * - The ground is ruled paper: a fine 45° hatch. Dark is charcoal; light is
+ *   warm paper with pastel sweeps and the crayon texture.
+ * - Two glass cards (rail, body) on that ground; hairline borders.
+ * - No gradient fills anywhere. Buttons are outlined pills or ink; the send
+ *   button is a neutral circle.
+ * - Ink only: no orange, no blue. Primary actions are the black ink pill;
+ *   the one colour is the blue dot in the root mark.
+ * - System sans throughout; small letter-spaced caps for section labels.
+ */
+
+@font-face {
+  font-family: "GeistPixelSquare";
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+  src: url("../assets/fonts/GeistPixel-Square.woff2") format("woff2");
+}
+
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  --font-display: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+  /* root is ink only: the accent and the focus colour follow the ink of the
+   * theme (set per theme below). The logo's blue dot is the brand's, not a token. */
+  --accent: var(--ink);
+  --accent-soft: var(--hover);
+  --accent-line: var(--line-strong);
+  --dot: var(--ink-muted);
+  /* Line icons are ink like everything else (the old wayfinding tints are retired). */
+  --icon-red: var(--ink-muted);
+  --icon-green: var(--ink-muted);
+  --icon-blue: var(--ink-muted);
+  --icon-gold: var(--ink-muted);
+  --radius-card: 18px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --gutter: 12px;
+  --rail-width: 276px;
+  --inspector-width: 400px;
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ground:
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0) 0 2px, rgba(255, 255, 255, 0.027) 2px 4px) center / cover fixed,
+    radial-gradient(ellipse 78% 54% at 88% 3%, rgba(45, 73, 118, 0.1), transparent 70%) center / cover fixed no-repeat,
+    linear-gradient(#050506, #0a0a0c) center / cover fixed no-repeat;
+  --glass: rgba(9, 9, 11, 0.54);
+  --glass-texture: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0) 0 2px, rgba(255, 255, 255, 0.027) 2px 4px) center / cover fixed;
+  --glass-blur: blur(24px) saturate(1.08);
+  --card-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  --raised: rgb(20, 20, 21);
+  --pill: rgba(20, 20, 21, 0.88);
+  --pill-line: rgba(255, 255, 255, 0.1);
+  --ink: #f4f5f8;
+  --ink-muted: rgba(244, 245, 248, 0.62);
+  --ink-faint: rgba(244, 245, 248, 0.4);
+  --rail-ink: rgba(255, 255, 255, 0.92);
+  --rail-faint: rgba(255, 255, 255, 0.46);
+  --line: rgba(255, 255, 255, 0.1);
+  --line-strong: rgba(255, 255, 255, 0.2);
+  --hover: rgba(255, 255, 255, 0.06);
+  --selected: rgba(255, 255, 255, 0.1);
+  --composer: rgb(20, 20, 21);
+  --composer-shadow: 0 24px 70px rgba(0, 0, 0, 0.34), inset 0 1px rgba(255, 255, 255, 0.04);
+  --send: #080808;
+  --ink-button: #f4f5f8;
+  --ink-button-text: #080808;
+  --code-bg: rgba(255, 255, 255, 0.045);
+  --user-bg: rgba(255, 255, 255, 0.035);
+  --add-bg: rgba(64, 170, 110, 0.13);
+  --add-ink: #8fe0ad;
+  --del-bg: rgba(240, 75, 48, 0.12);
+  --del-ink: #ff9b88;
+  --ok: #7fd4a0;
+  --err: #ff8a78;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --ground:
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0) 0 2px, rgba(255, 255, 255, 0.58) 2px 4px) center / cover fixed,
+    radial-gradient(ellipse 44% 40% at 2% 4%, rgba(238, 178, 200, 0.1), transparent 72%) center / cover fixed no-repeat,
+    radial-gradient(ellipse 46% 44% at 98% 20%, rgba(168, 220, 210, 0.12), transparent 72%) center / cover fixed no-repeat,
+    repeating-linear-gradient(112deg, rgba(238, 178, 200, 0.17) 0px, rgba(248, 214, 182, 0.15) 120px, rgba(226, 198, 240, 0.16) 250px, rgba(186, 206, 242, 0.17) 380px, rgba(168, 220, 210, 0.18) 500px, rgba(198, 226, 188, 0.15) 640px, rgba(246, 230, 172, 0.17) 760px, rgba(238, 178, 200, 0.17) 900px) center / cover fixed,
+    linear-gradient(135deg, rgba(253, 253, 250, 0.9), rgba(249, 251, 251, 0.93)) center / cover fixed no-repeat,
+    url("/textures/tura-crayon-light.webp") 62% center / 126% auto fixed no-repeat;
+  --glass: rgba(255, 255, 253, 0.58);
+  --glass-texture: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0) 0 2px, rgba(255, 255, 255, 0.34) 2px 4px) center / cover fixed;
+  --glass-blur: blur(26px) saturate(1.3);
+  --card-shadow: 0 2px 10px rgba(24, 31, 35, 0.035);
+  --raised: rgba(255, 255, 253, 0.92);
+  --pill: rgba(255, 255, 253, 0.76);
+  --pill-line: rgba(23, 57, 76, 0.12);
+  --ink: #17242d;
+  --ink-muted: rgba(23, 36, 45, 0.64);
+  --ink-faint: rgba(23, 36, 45, 0.44);
+  --rail-ink: rgba(3, 19, 34, 0.96);
+  --rail-faint: rgba(3, 19, 34, 0.62);
+  --line: rgba(23, 57, 76, 0.12);
+  --line-strong: rgba(23, 57, 76, 0.22);
+  --hover: rgba(3, 19, 34, 0.05);
+  --selected: rgba(3, 19, 34, 0.09);
+  --composer: rgba(255, 255, 253, 0.92);
+  --composer-shadow: 0 24px 60px rgba(35, 85, 110, 0.14), inset 0 1px rgba(255, 255, 255, 0.78);
+  --send: rgba(253, 253, 251, 0.89);
+  --ink-button: #17242d;
+  --ink-button-text: #fdfdfb;
+  --code-bg: rgba(23, 57, 76, 0.05);
+  --user-bg: rgba(255, 255, 253, 0.7);
+  --add-bg: rgba(46, 150, 90, 0.11);
+  --add-ink: #1d6b40;
+  --del-bg: rgba(220, 70, 50, 0.09);
+  --del-ink: #a8321f;
+  --ok: #2e8a55;
+  --err: #c23d2a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font: 14px/1.55 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 1.5px solid var(--dot);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(78, 131, 176, 0.32);
+}
+
+.scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}

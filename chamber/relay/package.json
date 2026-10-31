@@ -1,0 +1,14 @@
+{
+  "name": "chamber-relay",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The chamber relay: connects people's local root and coding agents. Stateless Worker, one Durable Object per line.",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "serve": "node serve.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.139.0"
+  }
+}

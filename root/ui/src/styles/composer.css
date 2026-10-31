@@ -1,0 +1,202 @@
+/* The composer: textarea, round send button, chip bar, and its menus. */
+
+/* ---------- composer ---------- */
+
+.composerWrap {
+  padding: 4px 0 16px;
+}
+.composer {
+  background: var(--composer);
+  border: 1px solid var(--line-strong);
+  border-radius: 24px;
+  box-shadow: var(--composer-shadow);
+  padding: 14px 12px 8px 20px;
+  position: relative;
+}
+.composer textarea {
+  background: none;
+  border: 0;
+  display: block;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.5;
+  max-height: 260px;
+  min-height: 26px;
+  outline: none;
+  padding-right: 48px;
+  resize: none;
+  width: 100%;
+}
+.composer textarea::placeholder {
+  color: var(--ink-faint);
+}
+.composerBar {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+  margin: 8px 0 0 -8px;
+}
+.composerBar .spacer {
+  flex: 1;
+}
+.sendButton {
+  align-items: center;
+  background: var(--send);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  display: inline-flex;
+  height: 40px;
+  justify-content: center;
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  width: 40px;
+}
+.sendButton:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+}
+.sendButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.composerHint {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  margin-top: 8px;
+  text-align: center;
+}
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.attachment {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+}
+.attachment img {
+  border-radius: 4px;
+  height: 28px;
+  object-fit: cover;
+  width: 28px;
+}
+
+.popover {
+  backdrop-filter: var(--glass-blur);
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  bottom: calc(100% + 6px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
+  left: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px;
+  position: absolute;
+  right: 0;
+  z-index: 20;
+}
+.popItem {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  display: flex;
+  gap: 10px;
+  padding: 6px 10px;
+  text-align: left;
+  width: 100%;
+}
+.popItem.active,
+.popItem:hover {
+  background: var(--selected);
+}
+.popItem .name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.popItem .desc {
+  color: var(--ink-faint);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menuAnchor {
+  position: relative;
+}
+.menuAnchor .popover {
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: auto;
+  width: 310px;
+}
+.menuAnchor.down .popover {
+  bottom: auto;
+  top: calc(100% + 6px);
+}
+.menuOption {
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  display: block;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
+.menuOption:hover,
+.menuOption.active {
+  background: var(--selected);
+}
+.menuOption strong {
+  align-items: center;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+}
+.menuOption .desc {
+  color: var(--ink-faint);
+  display: block;
+  font-size: 12px;
+  margin-top: 1px;
+}
+.menuOption .desc.path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menuDivider {
+  border-top: 1px solid var(--line);
+  margin: 4px 6px;
+}
+.queued {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.queuedItem {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+}
+.queuedText {
+  flex: 1;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

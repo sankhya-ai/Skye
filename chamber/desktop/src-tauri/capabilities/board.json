@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "board",
+  "description": "The board (served by the app's own daemon on 127.0.0.1:7878) may ask the app its version and to check for updates.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:7878", "http://127.0.0.1:7878/*"] },
+  "permissions": ["core:default"]
+}
