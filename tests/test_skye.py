@@ -68,7 +68,9 @@ def test_gateway_resolves_builtin_and_team_catalogue(tmp_path):
 
 def test_claude_adapter_carries_the_tool_catalogue():
     command = adapters.ClaudeCodeAdapter().build_command(_contract(tools=["Read", "Grep"], brief="do it"))
-    assert command[:3] == ["claude", "-p", "do it"] and "--allowedTools" in command
+    assert command[:3] == ["claude", "-p", "do it"]
+    assert "--tools" in command and "--allowedTools" not in command
+    assert "--disallowedTools" in command and "mcp__*" in command
 
 
 def test_codex_adapter_sandbox_follows_writable():

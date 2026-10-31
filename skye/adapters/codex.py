@@ -2,8 +2,13 @@ from .base import Adapter
 
 
 class CodexAdapter(Adapter):
-    """The user's own Codex CLI install. Non-interactive exec mode; sandbox stays read-only unless
-    the role's gateway catalogue grants writes."""
+    """The user's own Codex CLI install. Non-interactive ``codex exec`` mode, which runs read-only
+    by default; the sandbox widens to workspace-write only when the role's gateway catalogue grants
+    writes (verified against the current Codex non-interactive docs; ``--full-auto`` is deprecated
+    and never used). The sandbox is Codex's own mechanism, not an OS boundary Skye provides.
+    ``codex exec`` refuses to run outside a git repository unless told otherwise - Skye leaves that
+    vendor safety check in place.
+    """
     name = "codex"
     binary = "codex"
 

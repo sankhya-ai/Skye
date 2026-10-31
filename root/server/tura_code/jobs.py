@@ -444,33 +444,55 @@ class AutoStartRule(BaseModel):
     #: Force the jail for the auto-started job ("bwrap" or "bwrap-model-only"); empty leaves the start guards to
     #: refuse what needs isolation (the request then simply stays pending for the owner).
     require_isolation: Literal["", "bwrap", "bwrap-model-only"] = ""
-    #: Tighten the pinned budget: 0 keeps the proposal's value, otherwise the job runs with min(proposal, rule).
+    #: Tighten the pinned budget: the rule MUST set at least one ceiling (an uncapped auto-started job is
+    #: never an accident of a missing field - it cannot exist). The job runs with min(proposal, rule).
     max_steps: int = Field(default=0, ge=0, le=1000)
     max_cost_usd: float = Field(default=0.0, ge=0.0, le=1000.0)
     #: Running auto-started jobs under THIS rule at once.
     max_concurrent: int = Field(default=1, ge=1, le=10)
 
+    @property
+    def has_ceiling(self) -> bool:
+        return bool(self.max_steps or self.max_cost_usd)
+
 
 class AutoStartPolicy(BaseModel):
     """The owner's standing answer to routine proposals. DISABLED by default: an absent or disabled policy is the
-    old world - every proposal waits for the owner. The totals fuse re-arms from zero whenever the policy content
-    changes (a new policy is a new grant of trust; editing it also pauses nothing else)."""
+    old world - every proposal waits for the owner. The lifetime fuse survives edits and restarts: it re-arms ONLY
+    when the owner explicitly passes reset_fuse with the save - never silently."""
     enabled: bool = False
     rules: list[AutoStartRule] = []
     #: Auto-started jobs running at once across ALL rules.
     max_auto_running: int = Field(default=2, ge=1, le=20)
-    #: Lifetime fuse: total auto-starts under THIS policy content; changing the policy resets it.
+    #: Lifetime fuse: total auto-starts allowed. Survives policy edits and host restarts; only an explicit
+    #: reset_fuse on save re-arms it.
     max_auto_started_total: int = Field(default=20, ge=1, le=1000)
+    #: Not stored state - an instruction on save: re-arm the lifetime fuse. Recorded in the audit log.
+    reset_fuse: bool = False
 
 
 def _auto_dir(tenant: "Tenant") -> Path:
-    return Path(tenant.root) / "jobs"
+    # Own subdirectory: the Jobs recovery sweep globs <root>/jobs/*.json as job records, so policy/state/log
+    # files must not sit among them.
+    return Path(tenant.root) / "jobs" / "auto-start"
 
 
-def _policy_hash(policy: AutoStartPolicy) -> str:
-    import hashlib
-
-    return hashlib.sha256(json.dumps(policy.model_dump(), sort_keys=True).encode()).hexdigest()[:16]
+@contextmanager
+def _auto_exclusive(tenant: "Tenant"):
+    """One flock for the whole check-and-admit: matching, the locked accept, and the counter bump are ONE
+    critical section, so two concurrent proposals cannot both pass a fuse that admits one of them. Lock
+    order is policy-lock OUTER, request-store lock INNER; the owner route only takes the store lock, so no
+    cycle exists."""
+    directory = _auto_dir(tenant)
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / "auto-start.lock", "a+b") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def load_auto_start_policy(tenant: "Tenant") -> AutoStartPolicy:
@@ -493,9 +515,7 @@ def _auto_state(tenant: "Tenant", policy: AutoStartPolicy) -> dict[str, Any]:
         state = json.loads((_auto_dir(tenant) / "auto-start-state.json").read_text("utf-8"))
     except (OSError, ValueError):
         state = {}
-    if state.get("policy") != _policy_hash(policy):
-        return {"policy": _policy_hash(policy), "total": 0}  # a changed policy is a new grant: the fuse restarts
-    return state
+    return {"total": int(state.get("total") or 0)}
 
 
 def _save_auto_state(tenant: "Tenant", state: dict[str, Any]) -> None:
@@ -523,19 +543,31 @@ def _audit_auto_start(tenant: "Tenant", record: dict[str, Any], item: dict[str, 
     _atomic_write(path, log[-MAX_AUTO_LOG_KEPT:])
 
 
+def _canonical(path: str) -> str:
+    """Lexical + symlink canonicalization for prefix matching: /a/../b and a symlinked workspace cannot slip
+    past a rule's prefix. Nonexistent tails still canonicalize lexically."""
+    return os.path.realpath(str(path or ""))
+
+
 def match_auto_start(policy: AutoStartPolicy, record: dict[str, Any], tenant: "Tenant") -> AutoStartRule | None:
-    """Pure matching: which rule, if any, covers this proposal RIGHT NOW (fuses included). No side effects."""
+    """Pure matching: which rule, if any, covers this proposal RIGHT NOW (fuses included). No side effects.
+    Call it under _auto_exclusive for admission decisions."""
     if _auto_state(tenant, policy).get("total", 0) >= policy.max_auto_started_total:
-        return None  # lifetime fuse for this policy content
+        return None  # lifetime fuse; re-arms only on the owner's explicit reset_fuse
     if _auto_running(tenant) >= policy.max_auto_running:
         return None  # too many auto-started jobs running; this one waits for the owner like any other
     for rule in policy.rules:
+        if not rule.has_ceiling:
+            continue  # a rule without a budget ceiling admits nothing (missing cap is not a zero cap)
         if rule.role != record.get("role"):
             continue
         if int(record.get("depth") or 0) > rule.max_depth:
             continue
-        if rule.workspace_prefix and not str(record.get("workspace") or "").startswith(rule.workspace_prefix):
-            continue
+        if rule.workspace_prefix:
+            prefix = _canonical(rule.workspace_prefix).rstrip(os.sep) + os.sep
+            workspace = _canonical(str(record.get("workspace") or ""))
+            if not (workspace + os.sep).startswith(prefix):
+                continue
         if _auto_running(tenant, rule.name) >= rule.max_concurrent:
             continue
         return rule
@@ -546,37 +578,46 @@ def maybe_auto_start(tenant: "Tenant", record: dict[str, Any]) -> tuple[dict[str
     """Start a stored proposal under the owner's auto-start policy, through the SAME locked accept path the route
     uses. Anything outside the policy - including EVERY escalation (tools the parent lacks) and every failure of
     the ordinary start guards - leaves the request pending for the owner; auto-start never weakens a guard."""
-    policy = load_auto_start_policy(tenant)
-    if not policy.enabled or record.get("escalation"):
-        return None
-    rule = match_auto_start(policy, record, tenant)
-    if rule is None:
-        return None
+    if record.get("escalation"):
+        return None  # asks for tools the parent lacks: the owner's call, always
+    with _auto_exclusive(tenant):
+        policy = load_auto_start_policy(tenant)
+        if not policy.enabled:
+            return None
+        rule = match_auto_start(policy, record, tenant)
+        if rule is None:
+            return None
 
-    def start(rec: dict[str, Any]) -> dict[str, Any]:
-        budget = dict(rec.get("budget") or {})
-        for key, ceiling in (("max_steps", rule.max_steps), ("max_cost_usd", rule.max_cost_usd)):
-            if ceiling and (not budget.get(key) or budget[key] > ceiling):
-                budget[key] = ceiling  # the rule tightens, never loosens
-        spec = NewJob(goal=rec["goal"], workspace=rec["workspace"], role=rec["role"],
-                      role_version=int(rec.get("role_version") or 0), source_session=rec.get("source_session", ""),
-                      budget=Budget(**budget), request_id=rec["id"], parent_job_id=rec.get("parent_job_id") or "",
-                      isolation=rule.require_isolation, accept_unprotected_credentials=False)
-        item = tenant.jobs.start(spec)  # every start() guard still applies; failure keeps the request pending
-        item["auto_started"] = True
-        item["auto_rule"] = rule.name
-        tenant.jobs._save(item)
-        return item
+        def start(rec: dict[str, Any]) -> dict[str, Any]:
+            # The accept holds the store lock; re-verify the policy inside it, so a policy revoked or narrowed
+            # BETWEEN the match above and the claim cannot start what the owner just disallowed.
+            current = load_auto_start_policy(tenant)
+            if not current.enabled or match_auto_start(current, rec, tenant) is None:
+                raise JobError("the auto-start policy changed before admission; the proposal waits for the owner")
+            budget = dict(rec.get("budget") or {})
+            for key, ceiling in (("max_steps", rule.max_steps), ("max_cost_usd", rule.max_cost_usd)):
+                if ceiling and (not budget.get(key) or budget[key] > ceiling):
+                    budget[key] = ceiling  # the rule tightens, never loosens
+            spec = NewJob(goal=rec["goal"], workspace=rec["workspace"], role=rec["role"],
+                          role_version=int(rec.get("role_version") or 0), source_session=rec.get("source_session", ""),
+                          budget=Budget(**budget), request_id=rec["id"], parent_job_id=rec.get("parent_job_id") or "",
+                          isolation=rule.require_isolation, accept_unprotected_credentials=False,
+                          credentials=[])  # auto-start never inherits or attaches credentials
+            item = tenant.jobs.start(spec)  # every start() guard still applies; failure keeps the request pending
+            item["auto_started"] = True
+            item["auto_rule"] = rule.name
+            tenant.jobs._save(item)
+            return item
 
-    try:
-        _, item = tenant.job_requests.accept(record["id"], start)
-    except (JobError, Exception):  # noqa: BLE001 - a refused auto-start is a normal pending request, not an error
-        return None
-    _audit_auto_start(tenant, record, item, rule)
-    state = _auto_state(tenant, policy)
-    state["total"] = int(state.get("total") or 0) + 1
-    _save_auto_state(tenant, state)
-    return item, rule
+        try:
+            _, item = tenant.job_requests.accept(record["id"], start)
+        except (JobError, Exception):  # noqa: BLE001 - a refused auto-start is a normal pending request, not an error
+            return None
+        _audit_auto_start(tenant, record, item, rule)
+        state = _auto_state(tenant, policy)
+        state["total"] = int(state.get("total") or 0) + 1
+        _save_auto_state(tenant, state)
+        return item, rule
 
 
 def request_job(tenant: "Tenant", runtime: Any, arguments: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
@@ -685,6 +726,8 @@ class Jobs:
             try:
                 item = json.loads(path.read_text("utf-8"))
             except (OSError, ValueError):
+                continue
+            if not isinstance(item, dict) or "id" not in item:
                 continue
             serve = item.get("serve") or {}
             if serve.get("pgid") and not serve.get("stopped"):
@@ -1371,9 +1414,14 @@ def router(app_state):
 
     @api.put("/auto-start-policy")
     async def put_auto_start_policy(body: AutoStartPolicy, tenant: Tenant = Depends(app_state.auth.tenant)) -> dict:
-        save_auto_start_policy(tenant, body)
-        return {"policy": body.model_dump(), "auto_started_total": 0,
-                "note": "Saved. The lifetime fuse restarted: a changed policy is a new grant of trust."}
+        with _auto_exclusive(tenant):
+            save_auto_start_policy(tenant, body)
+            if body.reset_fuse:
+                _save_auto_state(tenant, {"total": 0})
+        state = _auto_state(tenant, body)
+        return {"policy": body.model_dump(), "auto_started_total": state.get("total", 0),
+                "note": ("Saved, and the lifetime fuse was explicitly re-armed." if body.reset_fuse else
+                         "Saved. The lifetime fuse is UNCHANGED: edits never silently re-arm it (pass reset_fuse to do that).")}
 
     @api.get("/auto-start-policy/log")
     async def get_auto_start_log(tenant: Tenant = Depends(app_state.auth.tenant)) -> dict:

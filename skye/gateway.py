@@ -1,7 +1,7 @@
 """The dynamic tool gateway: which tools a ROLE may use, resolved from data, not hard-coded into
 the workers. A role catalogue is a JSON file the team owns; the dispatcher resolves the contract's
 role to a catalogue and hands the ADAPTER the constraint (each adapter enforces it its own way:
-Root scopes natively, Claude Code via --allowedTools, Codex via sandbox mode)."""
+Root scopes natively, Claude Code via --tools/--disallowedTools, Codex via its exec sandbox mode. Both external mechanisms are CLI-level configuration, not an OS security boundary.)"""
 
 from __future__ import annotations
 
