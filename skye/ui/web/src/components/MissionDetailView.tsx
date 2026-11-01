@@ -8,6 +8,7 @@ import {
 } from "../api";
 import { Button } from "./ui/Button";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
+import { DiscussionPanel } from "./DiscussionPanel";
 import { MissionRunTrace } from "./MissionRunTrace";
 import { Badge } from "./ui/Badge";
 import { formatTime, formatRelative } from "../lib";
@@ -34,6 +35,29 @@ export function overallBadge(overall: string, live?: boolean, approved?: boolean
       return <Badge variant="outline">unknown</Badge>;
   }
 }
+
+// Journal event names are operator record, not product copy - map the known ones.
+const EVENT_LABEL: Record<string, string> = {
+  dispatched: "started",
+  settled: "finished",
+  "needs-owner": "waiting on owner",
+  redispatch: "re-run by owner",
+  reattached: "reattached after restart",
+  skipped: "skipped",
+  "step-accepted": "step accepted",
+  "proposal-rejected": "proposal rejected",
+  "feature-proposed": "backlog proposal",
+  "review-round": "review round",
+  "claim-held": "waiting - another step holds these files",
+  "blocked-claims": "blocked on claimed files",
+  "agent-accepted": "agent proposal accepted",
+  "agent-rejected": "agent proposal rejected",
+  "discussion-folded": "discussion folded into brief",
+  "worker-job": "worker job recorded",
+  "features-rejected": "proposals rejected",
+  "gate-failed": "gate failed",
+  "request-changes": "changes requested",
+};
 
 export function MissionDetailView({ id, onBack }: { id: string; onBack: () => void }) {
   const [detail, setDetail] = useState<MissionDetail | null>(null);
@@ -146,6 +170,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         onChanged={refresh}
         onRedispatch={(step) => act(() => redispatchStep(id, step))}
       />
+      <DiscussionPanel missionId={detail.mission.id} />
       <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} />
       <details className="rounded-md border border-border bg-card p-4">
         <summary className="cursor-pointer text-sm font-medium text-foreground">
@@ -156,7 +181,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
             <div key={i} className="flex gap-2">
               <span className="shrink-0 text-muted-foreground/70">{formatTime(entry.ts)}</span>
               <span className="shrink-0 text-foreground/80">{entry.step}</span>
-              <span>{entry.event}</span>
+              <span>{EVENT_LABEL[entry.event] ?? entry.event}</span>
               {entry.status ? <span>({entry.status})</span> : null}
             </div>
           ))}

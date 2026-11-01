@@ -146,17 +146,29 @@ export const createProject = (project: { name: string; repo: string }) =>
     body: JSON.stringify({ project }),
   });
 
+export type ThreadEntry = {
+  ts: number;
+  actor: string;
+  kind: string;
+  body: string;
+  refs: string[];
+};
+
 export type FeatureRow = {
   id: string;
   project: string;
   title: string;
   brief: string;
   status: string;
+  labels: string[];
   proposed_by: string;
   proposed_at: number;
   decided_at: number | null;
   decision_note: string;
   mission_id: string;
+  missions: string[];
+  thread: ThreadEntry[];
+  reopen_count: number;
   verification?: {
     journey_passed: boolean;
     evidence: string;
@@ -168,6 +180,28 @@ export type FeatureRow = {
 };
 
 export const getBacklog = () => api<{ features: FeatureRow[] }>("/api/backlog");
+// Same ticket records as /api/backlog, plus the read-only pickup queue. Listing due work
+// never starts it - pickup is information, starting still rides the owner's action.
+export const getTickets = () =>
+  api<{ tickets: FeatureRow[]; pickup_due: string[] }>("/api/tickets");
+
+export type DiscussionEntry = {
+  seq: number;
+  ts: number;
+  id: string;
+  author: string;
+  kind: string; // note | broadcast | question | answer | contract-change | ack
+  body: string;
+  refs: string[];
+  requires_ack?: string[];
+  ack_of?: string;
+  waiting_on?: string[]; // server-computed: roles still owing an ack
+};
+
+export const getDiscussion = (missionId: string, since = 0) =>
+  api<{ entries: DiscussionEntry[]; cursor: number }>(
+    `/api/missions/${encodeURIComponent(missionId)}/discussion?since=${since}`,
+  );
 export const decideFeature = (feature: string, decision: "approved" | "rejected", note = "") =>
   api<{ decided: boolean; feature: FeatureRow }>("/api/backlog/decide", {
     method: "POST",

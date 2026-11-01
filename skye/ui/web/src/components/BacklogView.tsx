@@ -8,6 +8,7 @@ import {
   reworkFeature,
   verifyFeature,
   getBacklog,
+  getTickets,
   getIssues,
   getMissions,
   getProjects,
@@ -26,6 +27,8 @@ const statusLabel = (f: FeatureRow): string => {
   switch (f.status) {
     case "pending":
       return "Needs decision";
+    case "reopened":
+      return "Reopened - needs your decision";
     case "approved":
       return "Approved";
     case "awaiting-verification":
@@ -45,6 +48,7 @@ const statusLabel = (f: FeatureRow): string => {
 
 const BADGE: Record<string, string> = {
   pending: "bg-warning/25 text-foreground",
+  reopened: "bg-warning/25 text-foreground",
   approved: "bg-success/20 text-foreground",
   "awaiting-verification": "bg-info/15 text-foreground",
   rejected: "bg-muted text-muted-foreground",
@@ -64,23 +68,27 @@ export function BacklogView() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [missions, setMissions] = useState<MissionRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [pickupDue, setPickupDue] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [rejectError, setRejectError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [backlogData, issueData, projectData, missionData] = await Promise.all([
-        getBacklog(),
+      const [ticketData, issueData, projectData, missionData] = await Promise.all([
+        getTickets(),
         getIssues(),
         getProjects(),
         getMissions(),
       ]);
-      setFeatures(backlogData.features);
+      setFeatures(ticketData.tickets);
+      setPickupDue(ticketData.pickup_due);
       setIssues(issueData.issues);
       setProjects(projectData.projects);
       setMissions(missionData.missions);
       setError(null);
+      setLoaded(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -129,7 +137,7 @@ export function BacklogView() {
   };
 
   const order = (f: FeatureRow) =>
-    ({ pending: 0, approved: 1, "awaiting-verification": 2, delivered: 3, rejected: 4 }[f.status] ?? 5);
+    ({ pending: 0, reopened: 0, approved: 1, "awaiting-verification": 2, delivered: 3, rejected: 4 }[f.status] ?? 5);
   const sorted = [...features].sort((a, b) => order(a) - order(b) || b.proposed_at - a.proposed_at);
   // A signal stays OPEN until its linked repair is verified delivered - work started or
   // even finished is not a fix until the journey replay passes.
@@ -155,7 +163,21 @@ export function BacklogView() {
         </h1>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {sorted.length === 0 ? (
+      {pickupDue.length > 0 ? (
+        <p className="glass-panel rounded-md p-3 text-xs text-muted-foreground">
+          {pickupDue.length} reopened {pickupDue.length === 1 ? "ticket is" : "tickets are"}{" "}
+          approved and waiting to start.
+        </p>
+      ) : null}
+      {!loaded && !error ? (
+        <p className="glass-panel rounded-md p-6 text-sm text-muted-foreground">
+          Loading tickets...
+        </p>
+      ) : sorted.length === 0 && error && !loaded ? (
+        <p className="glass-panel rounded-md p-6 text-sm text-muted-foreground">
+          Tickets unavailable - retrying in the background.
+        </p>
+      ) : sorted.length === 0 ? (
         <p className="glass-panel rounded-md p-6 text-sm text-muted-foreground">
           Nothing waiting. When a team finishes work or an error comes in, proposals land
           here for your decision.
@@ -177,6 +199,22 @@ export function BacklogView() {
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {f.brief}
                   </p>
+                  {f.thread && f.thread.length > 0 ? (
+                    <details className="mt-1.5">
+                      <summary className="cursor-pointer text-xs text-muted-foreground/70 hover:text-foreground">
+                        Thread ({f.thread.length})
+                      </summary>
+                      <div className="mt-1 max-h-40 space-y-1 overflow-auto text-xs text-muted-foreground">
+                        {[...f.thread].reverse().map((entry, i) => (
+                          <p key={i}>
+                            <span className="text-foreground/80">{entry.actor}</span>
+                            {" · "}
+                            {entry.body}
+                          </p>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
                   {f.verification?.journey_changed ? (
                     <p className="mt-1 text-xs text-warning">
                       The journey check changed between replays - review before trusting this
@@ -200,8 +238,26 @@ export function BacklogView() {
                       ) : null}
                     </details>
                   ) : null}
+                  {f.labels && f.labels.length > 0 ? (
+                    <p className="mt-1.5 flex flex-wrap gap-1">
+                      {f.labels.map((label) => (
+                        <span
+                          key={label}
+                          className="rounded-xs border border-border px-1.5 py-0.5 text-xs text-muted-foreground"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </p>
+                  ) : null}
                   <p className="mt-1.5 text-xs text-muted-foreground/70">
                     {projectName(f.project)} · {provenance(f)}
+                    {f.reopen_count > 0
+                      ? ` · reopened ${f.reopen_count}x`
+                      : ""}
+                    {f.missions && f.missions.length > 1
+                      ? ` · ${f.missions.length} runs`
+                      : ""}
                     {f.mission_id && f.status !== "delivered"
                       ? ` · ${missionState(f.mission_id)}`
                       : ""}
@@ -212,7 +268,7 @@ export function BacklogView() {
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-2">
-                  {f.status === "pending" ? (
+                  {f.status === "pending" || f.status === "reopened" ? (
                     <>
                       <Button
                         size="sm"

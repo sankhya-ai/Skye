@@ -204,6 +204,44 @@ with sync_playwright() as pw:
     backlog.decide(approval_feat["id"], "approved")
     approval_mission = post("/api/backlog/start",
                             {"feature": approval_feat["id"], "adapter": "codex", "run": True})["id"]
+    # --- collaboration fixtures: the tickets view and the mission's team line ---
+    # A reopened ticket: delivered work the owner sent back with evidence + labels. The row
+    # must carry the whole thread and the reopen count - never a context-free fresh ticket.
+    from skye import discuss
+    reopen_feat = backlog.propose(
+        [{"title": "Checkout totals formatting",
+          "brief": "Format totals as currency on the cart page."}],
+        project=project["id"])[0]
+    backlog.decide(reopen_feat["id"], "approved")
+    backlog.mark_started(reopen_feat["id"], "m-fmt")
+    backlog.mark_delivered("m-fmt", journey_ok=True)
+    backlog.reopen(reopen_feat["id"],
+                   evidence="Totals show 3 decimals on narrow screens",
+                   labels=["ui"], actor="owner")
+    # A second reopened ticket the owner ALREADY re-approved: it lands in pickup_due - the
+    # queue a human picks from. The UI lists it as information; nothing auto-starts.
+    pickup_feat = backlog.propose(
+        [{"title": "Cart badge aria-label",
+          "brief": "Screen-reader label for the cart badge."}],
+        project=project["id"])[0]
+    backlog.decide(pickup_feat["id"], "approved")
+    backlog.mark_started(pickup_feat["id"], "m-aria")
+    backlog.mark_delivered("m-aria", journey_ok=True)
+    backlog.reopen(pickup_feat["id"], evidence="Label reads only 'button'", actor="owner")
+    backlog.decide(pickup_feat["id"], "approved")
+    # The approval mission's discussion: an acked contract-change (caught up) and an
+    # UNACKED one (waiting_on must stay visible until the ack lands).
+    discuss.post(state_dir, approval_mission, author="kim", kind="note",
+                 body="Sales source confirmed: warehouse export, not the dashboard.")
+    contract = discuss.post(state_dir, approval_mission, author="owner",
+                            kind="contract-change",
+                            body="Scope: weekly only, no monthly rollup.",
+                            requires_ack=["kim"])
+    discuss.post(state_dir, approval_mission, author="kim", kind="ack",
+                 body="Acked - weekly only.", ack_of=contract["id"])
+    discuss.post(state_dir, approval_mission, author="owner", kind="contract-change",
+                 body="Reviewer sign-off required before delivery.",
+                 requires_ack=["reviewer"])
     for name, route in [("home", "#/"), ("backlog", "#/backlog"), ("missions", "#/missions"),
                         ("mission-detail", f"#/mission/{mission_id}"), ("agents", "#/agents"),
                         ("settings", "#/settings")]:
@@ -321,7 +359,29 @@ with sync_playwright() as pw:
                 print("APPROVAL card flow: captured pending + approved")
             else:
                 print("APPROVAL card flow: NO approve button found - check seed")
+            # team line: acked + unacked contract-changes render their real ack state
+            page.goto(ui_url + f"#/mission/{approval_mission}")
+            page.wait_for_timeout(3000)
+            panel = page.locator("text=Team discussion").count()
+            note = page.locator("text=Sales source confirmed").count()
+            acked = page.locator("text=acknowledged").count()
+            waiting = page.locator("text=waiting on: reviewer").count()
+            print("DISCUSSION panel:", "PASS" if panel else "FAIL",
+                  "| note:", "PASS" if note else "FAIL",
+                  "| ack rendered:", "PASS" if acked else "FAIL",
+                  "| unacked waiting_on:", "PASS" if waiting else "FAIL")
+            page.screenshot(path=str(out_dir / "ui-mission-discussion.png"), full_page=True)
         if name == "backlog":
+            reopened_badge = page.locator("text=Reopened - needs your decision").count()
+            reopen_meta = page.locator("text=reopened 1x").count()
+            label_chip = page.get_by_text("ui", exact=True).count()
+            thread_sum = page.locator("summary", has_text="Thread (").count()
+            pickup = page.locator("text=reopened ticket is approved and waiting to start").count()
+            print("TICKETS reopened badge:", "PASS" if reopened_badge == 1 else f"FAIL {reopened_badge}",
+                  "| reopen count meta x2:", "PASS" if reopen_meta == 2 else f"FAIL {reopen_meta}",
+                  "| label chip:", "PASS" if label_chip else "FAIL",
+                  "| thread disclosures:", "PASS" if thread_sum >= 2 else f"FAIL {thread_sum}",
+                  "| pickup-due info:", "PASS" if pickup else "FAIL")
             # interaction capture + behavior checks: the Reject confirmation dialog
             reject = page.locator("button", has_text="Reject").first
             if reject.count():

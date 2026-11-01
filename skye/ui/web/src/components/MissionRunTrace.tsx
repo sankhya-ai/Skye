@@ -27,6 +27,8 @@ type StepState = {
   reason?: string;
   output?: string;
   at?: number;
+  reviewRound?: number;
+  reviewFeedback?: string;
 };
 
 function statesFromJournal(journal: JournalEntry[]): Map<string, StepState> {
@@ -75,6 +77,12 @@ function statesFromJournal(journal: JournalEntry[]): Map<string, StepState> {
         next.state = "skipped";
         next.reason = entry.reason;
         next.at = entry.ts;
+        break;
+      case "review-round":
+        // The reviewer sent the step back with feedback; the step re-runs with it. A
+        // journaled redo edge, bounded by max_review_rounds - never a silent retry.
+        next.reviewRound = typeof entry.round === "number" ? entry.round : next.reviewRound;
+        next.reviewFeedback = typeof entry.feedback === "string" ? entry.feedback : next.reviewFeedback;
         break;
       default:
         break;
@@ -201,6 +209,12 @@ export function MissionRunTrace({
                   <p className="mt-1 text-xs text-muted-foreground">
                     This step was running when the mission stopped. Its changes may be
                     partially applied.
+                  </p>
+                ) : null}
+                {st.reviewRound ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Review round {st.reviewRound}
+                    {st.reviewFeedback ? `: ${st.reviewFeedback}` : ""}
                   </p>
                 ) : null}
                 {st.state === "needs-owner" && detail.approved ? (
