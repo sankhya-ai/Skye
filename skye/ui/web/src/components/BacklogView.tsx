@@ -53,8 +53,9 @@ export function BacklogView() {
       <div>
         <h1 className="text-lg font-medium text-foreground">Backlog</h1>
         <p className="text-sm text-muted-foreground">
-          Features the teams propose while working. You approve or reject each one; only an
-          approved feature can start work.
+          Features the teams propose while working. Your approval here authorizes the team to
+          plan and start the work - each execution step still follows your approval policy, so
+          a mission may pause for a dispatch approval before acting.
         </p>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

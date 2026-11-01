@@ -17,8 +17,8 @@ const NAV = [
 
 const ROW =
   "flex h-7 w-full items-center gap-2 rounded-sm px-3 py-1 text-sm font-normal leading-normal transition-[background-color,color] duration-200";
-const ROW_ACTIVE = "bg-foreground/[0.03] text-foreground";
-const ROW_IDLE = "text-foreground/80 hover:bg-foreground/[0.02] hover:text-foreground";
+const ROW_ACTIVE = "text-foreground";
+const ROW_IDLE = "text-foreground/80 hover:text-foreground";
 
 function NavRow({
   label,
@@ -34,6 +34,9 @@ function NavRow({
   onClick?: () => void;
 }) {
   const cls = `${ROW} ${active ? ROW_ACTIVE : ROW_IDLE}`;
+  const style = active
+    ? { background: "var(--sidebar-row-active)" }
+    : undefined;
   const inner = (
     <>
       {Icon ? <Icon className="size-4 shrink-0" /> : null}
@@ -43,11 +46,11 @@ function NavRow({
   return (
     <div className="mx-1.5">
       {href ? (
-        <a href={href} className={cls}>
+        <a href={href} className={cls} style={style}>
           {inner}
         </a>
       ) : (
-        <button type="button" onClick={onClick} className={cls}>
+        <button type="button" onClick={onClick} className={cls} style={style}>
           {inner}
         </button>
       )}
@@ -97,7 +100,7 @@ export function Sidebar({
     .slice(0, 8);
 
   return (
-    <aside className="fixed top-2 bottom-2 left-2 z-10 flex w-60 flex-col overflow-hidden rounded-md border border-border/60 bg-card/80 pt-[3px] backdrop-blur-md">
+    <aside className="fixed top-2 bottom-2 left-2 z-10 flex w-60 flex-col overflow-hidden rounded-md border border-border/60 glass-panel pt-[3px]">
       <p className="px-3 pt-2 pb-1 text-sm font-semibold tracking-tight">Skye</p>
       <nav className="space-y-0.5">
         {NAV.map((item) => (

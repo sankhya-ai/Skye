@@ -111,6 +111,7 @@ export default function App() {
         ) : (
           <HomeView
             projects={projects}
+            missions={missions}
             onCreated={(id) => (window.location.hash = `/mission/${encodeURIComponent(id)}`)}
           />
         )}
