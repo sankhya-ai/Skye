@@ -259,7 +259,37 @@ def roles_payload(state_dir: Path) -> dict:
         rows.append({**row, **usage[row["name"]],
                      "catalogue": catalogue or {k: gateway.BUILTIN[row["name"]][k]
                                                 for k in ("tools", "writable")}})
-    return {"roles": rows, "adapters": list(ADAPTERS)}
+    return {"roles": rows, "adapters": list(ADAPTERS),
+            "adapter_details": adapter_availability()}
+
+
+def adapter_availability() -> list[dict]:
+    """Per-adapter INSTALLATION availability, from the engine's own available() probe - the
+    same check dispatch makes, so the selector never offers what dispatch would reject.
+    'available' means the tool is there to run (binary on PATH for CLI adapters, the local
+    server answering for root); it says nothing about authentication - the user's own login
+    is only ever exercised by a real dispatch, never probed here, and no model call happens.
+    The root probe is one local HTTP GET with a 3s timeout."""
+    from skye.adapters import ADAPTERS as ADAPTER_CLASSES
+    details = []
+    for name in ADAPTERS:  # the contract vocabulary; classes keyed the same
+        adapter = ADAPTER_CLASSES[name]()
+        binary = getattr(adapter, "binary", "") or ""
+        try:
+            available = bool(adapter.available())
+        except Exception:
+            available = False  # a probing failure is reported as unavailable, never guessed
+        details.append({
+            "name": name,
+            "available": available,
+            "probe": "binary-on-PATH" if binary else "local-server",
+            "binary": binary,
+            "auth": "your own login/subscription; only exercised by a real dispatch",
+            "hint": ("install it yourself - Skye uses YOUR coding agent, it does not "
+                     "download one" if binary
+                     else "start the vendored Root server locally (SKYE_ROOT_URL, default "
+                          "http://127.0.0.1:8788)")})
+    return details
 
 
 def policy_path_default() -> Path:
