@@ -11,6 +11,9 @@ stays small and nothing about the trimming is hidden.
 from __future__ import annotations
 
 import json
+import os
+import stat
+import subprocess
 from pathlib import Path
 
 #: Well-known manifest files, detected by name only (plus package.json's "name" field, which
@@ -118,36 +121,102 @@ def format_for_brief(digests: dict[str, dict], *, max_chars: int = 3000) -> str:
                 + f"\n(budget {max_chars} chars; detail cut to fit; repos left out of this "
                   f"briefing and needing the owner's own words: {', '.join(dropped)})")
     return text
+def _within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _is_real_git_repo(path: Path) -> bool | None:
+    """A .git entry PROVES nothing by itself - an empty directory or a foreign marker file
+    with that name is not a repository. Ask git. True/False for a verdict, None when git
+    itself cannot answer (timeout, missing binary)."""
+    try:
+        result = subprocess.run(["git", "-C", str(path), "rev-parse", "--git-dir"],
+                                capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.returncode == 0
+
+
 def discover_repos(root: str | Path, *, max_repos: int = 24) -> dict:
     """Bounded repo discovery INSIDE one owner-declared folder.
 
     The declared folder is the whole scope, never the filesystem: when it is itself a git
     repository, that is the one repo; otherwise only its IMMEDIATE subfolders are checked
-    for a .git entry (one level, no recursive scan, hidden folders skipped). Everything
-    found AND everything passed over is reported, so discovery never quietly returns an
-    empty or partial scope. Names come from the subfolder names - the owner declared the
-    folder, the folder names the repos."""
+    (one level, no recursive scan, hidden folders skipped). Three honest exclusions, each
+    REPORTED BY NAME, never silently omitted: symlinks resolving outside the declared
+    folder (out of scope without explicit repo authority), subfolders that cannot be read
+    (inaccessible), and subfolders whose .git entry is not a real repository or worktree
+    (a foreign marker proves nothing). Names come from the subfolder names - the owner
+    declared the folder, the folder names the repos."""
     root_path = Path(str(root)).expanduser()
     result: dict = {"root": str(root_path), "root_exists": root_path.is_dir(),
-                    "root_is_repo": False, "repos": {}, "skipped": 0, "overflow": []}
+                    "root_is_repo": False, "repos": {}, "skipped": 0, "overflow": [],
+                    "outside_scope": [], "inaccessible": [], "invalid": []}
     if not root_path.is_dir():
         result["error"] = "declared path does not exist or is not a directory"
         return result
-    if (root_path / ".git").exists():
-        result["root_is_repo"] = True
-        result["repos"] = {root_path.resolve().name or "repo": str(root_path)}
-        return result
+    resolved_root = root_path.resolve()
+    if os.path.lexists(root_path / ".git"):
+        verdict = _is_real_git_repo(resolved_root)
+        if verdict is True:
+            result["root_is_repo"] = True
+            result["repos"] = {resolved_root.name or "repo": str(root_path)}
+            return result
+        if verdict is None:
+            result["error"] = ("git cannot verify the declared folder's .git entry "
+                               "(git unavailable or timed out)")
+            return result
+        # A marker that is not a repository: say so, then still scan the subfolders.
+        result["root_marker_invalid"] = True
     try:
-        children = sorted((p for p in root_path.iterdir()
-                           if p.is_dir() and not p.name.startswith(".")),
-                          key=lambda p: p.name.lower())
+        children = sorted(root_path.iterdir(), key=lambda p: p.name.lower())
     except OSError as error:
         result["error"] = f"cannot list: {error}"
         return result
     repos: dict[str, str] = {}
     for child in children:
-        if not (child / ".git").exists():
+        if child.name.startswith("."):
+            continue
+        try:
+            child_stat = child.lstat()
+        except OSError:
+            result["inaccessible"].append(child.name)
+            continue
+        if stat.S_ISLNK(child_stat.st_mode):
+            try:
+                real = child.resolve(strict=True)
+            except (OSError, RuntimeError):
+                result["inaccessible"].append(child.name)
+                continue
+            if not _within(real, resolved_root):
+                # A symlink escaping the declared folder is out of scope: following it
+                # would grant repo authority the owner never declared.
+                result["outside_scope"].append(child.name)
+                continue
+            try:
+                if not real.is_dir():
+                    continue  # a symlink to a file is not a repo candidate
+            except OSError:
+                result["inaccessible"].append(child.name)
+                continue
+        else:
+            if not stat.S_ISDIR(child_stat.st_mode):
+                continue  # plain files are not repo candidates
+            real = child
+        try:
+            os.lstat(real / ".git")
+        except FileNotFoundError:
             result["skipped"] += 1
+            continue
+        except OSError:
+            result["inaccessible"].append(child.name)
+            continue
+        verdict = _is_real_git_repo(real)
+        if verdict is None:
+            result["inaccessible"].append(child.name)
+            continue
+        if not verdict:
+            result["invalid"].append(child.name)
             continue
         if len(repos) >= max_repos:
             result["overflow"].append(child.name)
@@ -155,6 +224,6 @@ def discover_repos(root: str | Path, *, max_repos: int = 24) -> dict:
         name, suffix = child.name, 2
         while name in repos:
             name, suffix = f"{child.name}-{suffix}", suffix + 1
-        repos[name] = str(child)
+        repos[name] = str(child)  # the owner-recognizable path inside the declared folder
     result["repos"] = repos
     return result

@@ -12,6 +12,7 @@ from skye import repocontext, workspaces
 from skye.mission import MissionError, run_mission
 from skye.ui import server as ui
 from tests.test_multirepo import two_repos, two_repo_mission, writer
+from tests.test_ui_server import _req, ui_server  # noqa: F401 - imported fixture
 from tests.test_workspaces import ON, git, make_repo
 
 
@@ -152,3 +153,113 @@ def test_multi_repo_recovery_reason_names_affected_repos(tmp_path):
 
     out2 = run_mission(m, ON, runner=spy, state_dir=state, catalogues_dir="catalogues")
     assert out2.status == "done" and ran == ["developer", "developer"]
+
+
+# --- discovery exclusions are reported by name, never silently omitted ---
+
+def test_symlink_escaping_the_declared_folder_is_excluded_and_named(tmp_path):
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    backend = make_repo(scope, "backend")
+    outside = make_repo(tmp_path, "outside")
+    (scope / "escape").symlink_to(outside)
+    inside_link_target = make_repo(scope, "real-inner")
+    (scope / "alias").symlink_to(inside_link_target)
+
+    found = repocontext.discover_repos(scope)
+    assert found["outside_scope"] == ["escape"]
+    assert set(found["repos"]) == {"backend", "real-inner", "alias"}
+    assert "escape" not in found["repos"]
+
+
+def test_git_marker_that_is_not_a_repository_is_named_invalid(tmp_path):
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    make_repo(scope, "backend")
+    fake = scope / "fake"
+    (fake / ".git").mkdir(parents=True)      # an empty directory named .git proves nothing
+    (scope / "fake-file").mkdir()
+    (scope / "fake-file" / ".git").write_text("gitdir: /nowhere/real")
+
+    found = repocontext.discover_repos(scope)
+    assert set(found["repos"]) == {"backend"}
+    assert sorted(found["invalid"]) == ["fake", "fake-file"]
+
+
+def test_unreadable_subfolder_is_named_inaccessible(tmp_path):
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    make_repo(scope, "backend")
+    locked = scope / "locked"
+    locked.mkdir()
+    locked.chmod(0o000)
+    try:
+        found = repocontext.discover_repos(scope)
+    finally:
+        locked.chmod(0o755)
+    assert set(found["repos"]) == {"backend"}
+    assert found["inaccessible"] == ["locked"]
+
+
+def test_repos_source_names_exclusions(tmp_path, monkeypatch):
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    two_repos(scope)
+    outside = make_repo(tmp_path, "outside")
+    (scope / "escape").symlink_to(outside)
+    fake = scope / "fake"
+    (fake / ".git").mkdir(parents=True)
+    project = _project(tmp_path, monkeypatch, "Skye", scope)
+    mid = ui.create_mission(tmp_path / "st", {"goal": "x", "project": project["id"],
+                                              "steps": [{"id": "s", "role": "developer",
+                                                         "adapter": "claude-code",
+                                                         "goal": "g", "repo": "backend",
+                                                         "gates": []}]})
+    snapshot = json.loads((tmp_path / "st" / "missions" / mid / "mission.json").read_text())
+    assert "escape" in snapshot["repos_source"] and "outside" in snapshot["repos_source"]
+    assert "fake" in snapshot["repos_source"]
+
+
+# --- the composed planner is a nonwriting context step, enforced at compose time ---
+
+def test_writable_planner_role_is_rejected(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, "solo")
+    with pytest.raises(MissionError, match="nonwriting"):
+        ui.create_mission(tmp_path / "st", {"goal": "x", "plan": True,
+                                            "planner_role": "developer",
+                                            "repo": str(repo)})
+
+
+def test_default_planner_role_is_read_only_by_catalogue(tmp_path, monkeypatch):
+    """Mechanism evidence: the composed planner dispatches under pm's catalogue, which the
+    gateway resolves to read-only tools with writable=False - the same resolution the
+    dispatcher applies at dispatch time (CLI-level scoping, not an OS boundary)."""
+    from skye import gateway
+    catalogue = gateway.resolve("pm")
+    assert catalogue["writable"] is False
+    assert not ({"Write", "Edit", "Bash"} & set(catalogue["tools"]))
+    repo = make_repo(tmp_path, "solo")
+    mid = ui.create_mission(tmp_path / "st", {"goal": "x", "plan": True,
+                                              "repo": str(repo)})
+    snapshot = json.loads((tmp_path / "st" / "missions" / mid / "mission.json").read_text())
+    assert snapshot["steps"][0]["role"] == "pm"
+
+
+# --- preview: the UI can show the exact candidates before anything starts ---
+
+def test_project_repo_preview_endpoint(ui_server, tmp_path, monkeypatch):
+    url, state_dir = ui_server
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    two_repos(scope)
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "skye.projects.json"))
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "Skye", "repo": str(scope)}})
+    assert status == 200, payload
+    pid = payload["project"]["id"]
+    status, payload = _req(url, f"/api/projects/{pid}/repos")
+    assert status == 200, payload
+    assert set(payload["discovery"]["repos"]) == {"backend", "frontend"}
+    assert payload["discovery"]["root_is_repo"] is False
+    status, payload = _req(url, "/api/projects/nope/repos")
+    assert status == 404
