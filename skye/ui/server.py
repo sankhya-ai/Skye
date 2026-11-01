@@ -84,6 +84,17 @@ ARTIFACT_FILE_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "im
 ARTIFACT_FILE_LIMIT = 5 * 1024 * 1024
 
 
+class FileChangedError(RuntimeError):
+    """The artifact on disk no longer matches the mission's recorded end manifest."""
+
+
+def mission_artifacts_record(mission_dir: Path) -> dict:
+    artifacts_file = mission_dir / "artifacts.json"
+    if not artifacts_file.exists():
+        return {}
+    return json.loads(artifacts_file.read_text("utf-8"))
+
+
 def artifact_file(state_dir: Path, mission_id: str, rel_path: str) -> tuple[bytes, str]:
     """Serve one file the mission actually changed, for inline preview. Strictly confined:
     the path must be in the mission's recorded added/modified diff (never an arbitrary
@@ -100,10 +111,20 @@ def artifact_file(state_dir: Path, mission_id: str, rel_path: str) -> tuple[byte
         raise KeyError(rel_path)
     root = Path(artifacts.get("repo") or "").resolve()
     target = (root / rel_path).resolve()
+    # resolve() follows symlinks first: a symlink inside the repo pointing outside resolves
+    # outside root and is refused here.
     if root not in target.parents or not target.is_file():
         raise KeyError(rel_path)
     if target.stat().st_size > ARTIFACT_FILE_LIMIT:
         raise ValueError("file too large to preview")
+    # Bound to the RECORDED artifact, not whatever the path holds now: if the file changed
+    # after the mission's end manifest (a later mission, a hand edit), the preview refuses
+    # rather than showing unrecorded bytes under the mission's name.
+    import hashlib
+    recorded = (mission_artifacts_record(mission_dir).get("end") or {}).get(rel_path)
+    current = hashlib.sha256(target.read_bytes()).hexdigest()[:16]
+    if not recorded or current != recorded:
+        raise FileChangedError(rel_path)
     return target.read_bytes(), ARTIFACT_FILE_TYPES[suffix]
 
 
@@ -404,6 +425,11 @@ class UiHandler(BaseHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Content-Length", str(len(data)))
+                    # <img> rendering is inert, but a blob opened directly must not execute
+                    # active SVG/script content on the UI origin.
+                    self.send_header("Content-Security-Policy",
+                                     "default-src 'none'; style-src 'unsafe-inline'")
+                    self.send_header("X-Content-Type-Options", "nosniff")
                     self.end_headers()
                     self.wfile.write(data)
                     return
@@ -414,6 +440,8 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json(payload)
             except KeyError:
                 return self._json({"error": "unknown mission or artifact"}, 404)
+            except FileChangedError:
+                return self._json({"error": "file changed since the mission recorded it"}, 409)
             except ValueError as error:
                 return self._json({"error": str(error)}, 400)
             return self._json({"error": "not found"}, 404)

@@ -56,13 +56,21 @@ def test_mission_artifacts_full_diff(tmp_path):
     assert out["added"] == ["c.py"] and out["modified"] == ["b.py"] and out["deleted"] == []
 
 
-def _mission_dir(tmp_path, repo):
+def _hash(text):
+    import hashlib
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _mission_dir(tmp_path, repo, end=None):
     import json as _json
+    if end is None:
+        end = {"poster.svg": _hash("<svg xmlns='http://www.w3.org/2000/svg'/>"),
+               "app.py": _hash("x = 1\n"), "notes.txt": "3"}
     mdir = tmp_path / "state" / "missions" / "m1"
     mdir.mkdir(parents=True)
     (mdir / "artifacts.json").write_text(_json.dumps({
         "repo": str(repo), "start": {}, "start_truncated": False,
-        "end": {"poster.svg": "1", "app.py": "2", "notes.txt": "3"}, "end_truncated": False}))
+        "end": end, "end_truncated": False}))
     return tmp_path / "state"
 
 
@@ -90,3 +98,27 @@ def test_artifact_file_refuses_unrecorded_and_unpreviewable(tmp_path):
         artifact_file(state, "m1", "secret.env")      # not in the recorded diff
     with pytest.raises(KeyError):
         artifact_file(state, "m1", "../outside.svg")  # traversal never reaches the repo check
+
+
+def test_artifact_file_refuses_mutation_after_record(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write(repo, "poster.svg", "<svg xmlns='http://www.w3.org/2000/svg'>EDITED</svg>")
+    state = _mission_dir(tmp_path, repo)  # record holds the pre-edit hash
+    from skye.ui.server import FileChangedError, artifact_file
+    import pytest
+    with pytest.raises(FileChangedError):
+        artifact_file(state, "m1", "poster.svg")
+
+
+def test_artifact_file_refuses_symlink_escape(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside.svg"
+    outside.write_text("<svg/>")
+    (repo / "poster.svg").symlink_to(outside)
+    state = _mission_dir(tmp_path, repo, end={"poster.svg": _hash("<svg/>")})
+    from skye.ui.server import artifact_file
+    import pytest
+    with pytest.raises(KeyError):
+        artifact_file(state, "m1", "poster.svg")
