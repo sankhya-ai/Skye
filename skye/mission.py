@@ -629,8 +629,11 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         fid = entry["follow_id"]
         step_id = str(entry.get("step") or "")
         later = live_entries[i + 1:]
-        if any(e.get("step") == step_id and e.get("event") in (
-                "cancelled", "resume-rejected", "redispatch", "follow-up-undelivered")
+        if any(e.get("step") == step_id and (
+                e.get("event") in ("cancelled", "resume-rejected", "redispatch")
+                or (e.get("event") == "follow-up-undelivered"
+                    and e.get("follow_id") == fid))  # fid-matched: another
+                # follow-up's failure never resolves this one
                 for e in later):
             continue  # operator action or a known non-delivery resolved this follow-up
         sub_pos = next((i + 1 + j for j, e in enumerate(later)
@@ -645,7 +648,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             text = str(entry.get("text") or "")[:300]
             for pos in range(sub_pos + 1, len(live_entries)):
                 e = live_entries[pos]
-                if e.get("step") != step_id or e.get("event") != "worker-progress":
+                if e.get("step") != step_id:
+                    continue
+                if e.get("event") in ("dispatched", "reattached"):
+                    break  # generation boundary: nothing later belongs to THIS
+                    # submission's process - a delayed same-text echo from the
+                    # prior process is not its receipt
+                if e.get("event") != "worker-progress":
                     continue
                 kind = e.get("kind")
                 if kind == "steer-ack" and pos not in _used_receipts \

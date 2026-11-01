@@ -915,3 +915,98 @@ def test_failed_steer_never_deletes_a_reclaimed_marker(ui_server, tmp_path,
                         body={"step": "dev", "text": "also add logging"})
     assert status != 200
     assert json.loads(marker.read_text())["follow_id"] == "f-new-owner"
+
+
+def test_delayed_prior_generation_receipt_never_releases_claim(ui_server, tmp_path,
+                                                                monkeypatch):
+    # A same-text ack journaled AFTER a newer dispatch belongs to the old process's
+    # generation: it must not release the new claim.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    journal.append("dev", "dispatched", fingerprint="fp1")  # a NEWER generation began
+    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
+        json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
+                    "run_key": "m1:dev", "created": time.time()}))
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "add logging"})
+    assert status == 409, body
+    # engine side: same boundary - the scan must still call f1 unconfirmed
+    mission = _mission(tmp_path, _one_step())
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner", outcome.status
+
+
+def test_unsubmitted_intent_blocks_new_posts(ui_server, tmp_path, monkeypatch):
+    # Intent journaled but submission never recorded: the follow-up may have reached
+    # the worker. New sends fail closed until the operator resolves it.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    _journal(state_dir).append("dev", "follow-up", follow_id="f1", text="risky",
+                               delivery="steered-live", state="intent")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "more"})
+    assert status == 409 and "UNKNOWN" in body["error"]
+    assert body["preserved_text"] == "more"
+
+
+def test_post_intent_exception_preserves_claim_and_blocks_retry(ui_server, tmp_path,
+                                                                monkeypatch):
+    # A crash AFTER the intent journaled (here: the submitted-record write fails)
+    # keeps the claim and the intent: no cleanup-and-retry into a possible duplicate.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    marker = state_dir / "missions" / "m1" / "steer-pending-dev"
+    from skye import mission as _m
+    original = _m.Journal.append
+    calls = {"n": 0}
+
+    def _flaky(self, step, event, **fields):
+        calls["n"] += 1
+        if event == "follow-up-submitted":
+            raise OSError("disk full")
+        return original(self, step, event, **fields)
+
+    monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
+    monkeypatch.setattr(_m.Journal, "append", _flaky)
+    import http.client
+    import urllib.error
+    try:
+        _req(url, "/api/missions/m1/follow-up", method="POST",
+             body={"step": "dev", "text": "also add logging"})
+        assert False, "the handler must surface the failure, not swallow it"
+    except (urllib.error.URLError, urllib.error.HTTPError,
+            http.client.RemoteDisconnected, ConnectionError, OSError):
+        pass  # the write failure surfaced as a dropped/failed response - not a 200
+    monkeypatch.setattr(_m.Journal, "append", original)
+    # claim + intent preserved; a retry fails CLOSED (unknown submission state)
+    assert marker.exists()
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "also add logging"})
+    assert status == 409, body
+
+
+def test_other_followups_undelivered_does_not_clear_claim(ui_server, tmp_path,
+                                                          monkeypatch):
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    journal.append("dev", "follow-up-undelivered", follow_id="f-OTHER",
+                   reason="exiting")
+    (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
+        json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
+                    "run_key": "m1:dev", "created": time.time()}))
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "more"})
+    assert status == 409 and "awaiting its provider receipt" in body["error"]
