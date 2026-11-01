@@ -118,3 +118,43 @@ def format_for_brief(digests: dict[str, dict], *, max_chars: int = 3000) -> str:
                 + f"\n(budget {max_chars} chars; detail cut to fit; repos left out of this "
                   f"briefing and needing the owner's own words: {', '.join(dropped)})")
     return text
+def discover_repos(root: str | Path, *, max_repos: int = 24) -> dict:
+    """Bounded repo discovery INSIDE one owner-declared folder.
+
+    The declared folder is the whole scope, never the filesystem: when it is itself a git
+    repository, that is the one repo; otherwise only its IMMEDIATE subfolders are checked
+    for a .git entry (one level, no recursive scan, hidden folders skipped). Everything
+    found AND everything passed over is reported, so discovery never quietly returns an
+    empty or partial scope. Names come from the subfolder names - the owner declared the
+    folder, the folder names the repos."""
+    root_path = Path(str(root)).expanduser()
+    result: dict = {"root": str(root_path), "root_exists": root_path.is_dir(),
+                    "root_is_repo": False, "repos": {}, "skipped": 0, "overflow": []}
+    if not root_path.is_dir():
+        result["error"] = "declared path does not exist or is not a directory"
+        return result
+    if (root_path / ".git").exists():
+        result["root_is_repo"] = True
+        result["repos"] = {root_path.resolve().name or "repo": str(root_path)}
+        return result
+    try:
+        children = sorted((p for p in root_path.iterdir()
+                           if p.is_dir() and not p.name.startswith(".")),
+                          key=lambda p: p.name.lower())
+    except OSError as error:
+        result["error"] = f"cannot list: {error}"
+        return result
+    repos: dict[str, str] = {}
+    for child in children:
+        if not (child / ".git").exists():
+            result["skipped"] += 1
+            continue
+        if len(repos) >= max_repos:
+            result["overflow"].append(child.name)
+            continue
+        name, suffix = child.name, 2
+        while name in repos:
+            name, suffix = f"{child.name}-{suffix}", suffix + 1
+        repos[name] = str(child)
+    result["repos"] = repos
+    return result

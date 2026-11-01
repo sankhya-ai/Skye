@@ -219,9 +219,17 @@ def acknowledge_recovery(mission_dir: Path, *, actor: str = "operator") -> dict[
         record["recovery_ack_repeats"] = int(record.get("recovery_ack_repeats", 0)) + 1
         _record_path(Path(mission_dir)).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
         return record
-    record["recovery_acknowledged"] = {"at": time.time(), "by": actor,
-                                       "base_rev": record.get("base_rev", ""),
-                                       "branch": record.get("branch", "")}
+    ack = {"at": time.time(), "by": actor,
+           "base_rev": record.get("base_rev", ""),
+           "branch": record.get("branch", "")}
+    if record.get("repos"):
+        # Multi-repo records keep the context per repo; the ack binds each affected repo's
+        # own branch and base, since the top level carries none.
+        ack["repos"] = {name: {"branch": rec.get("branch", ""),
+                               "base_rev": rec.get("base_rev", "")}
+                        for name, rec in record["repos"].items()
+                        if rec.get("uncommitted_lost")}
+    record["recovery_acknowledged"] = ack
     _record_path(Path(mission_dir)).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
     return record
 

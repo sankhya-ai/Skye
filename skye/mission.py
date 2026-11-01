@@ -168,6 +168,10 @@ def load_mission(path: str | Path) -> dict[str, Any]:
                "max_review_rounds": max_rounds}
     if repos is not None:
         mission["repos"] = {str(n): str(p) for n, p in repos.items()}
+    if raw.get("repos_source"):
+        # How the repos map got here (e.g. project-folder discovery) - audit evidence, set
+        # by the composer, never by hand-editing around validation.
+        mission["repos_source"] = str(raw["repos_source"])
     return mission
 
 
@@ -433,14 +437,33 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         # or review from the rebuilt tree on assumption - pause for the operator's explicit
         # decision (skye mission ack-recovery / POST .../ack-recovery), with the original
         # base context bound on the record and the journal.
-        reason = (f"workspace for mission {mission['id']} was rebuilt from branch "
-                  f"{workspace_record.get('branch')} after its worktree was lost; uncommitted "
-                  f"worker changes are unrecoverable (base_rev "
-                  f"{workspace_record.get('base_rev', '?')}). Review the rebuilt tree, then "
-                  "acknowledge the recovery to continue.")
-        journal.append("mission", "workspace-recovery-pending", reason=reason,
-                       branch=workspace_record.get("branch", ""),
-                       base_rev=workspace_record.get("base_rev", ""))
+        per_repo = workspace_record.get("repos") or {}
+        affected = {name: rec for name, rec in sorted(per_repo.items())
+                    if rec.get("uncommitted_lost")}
+        if affected:
+            # Multi-repo records carry branch/base_rev PER REPO, not at the top level -
+            # name every affected repo with its own branch and base, never a bare None.
+            detail = "; ".join(
+                f"repo '{name}' (branch {rec.get('branch') or '?'}, base_rev "
+                f"{rec.get('base_rev') or '?'})"
+                for name, rec in affected.items())
+            reason = (f"workspace for mission {mission['id']} was rebuilt after its "
+                      f"worktree was lost; affected: {detail}. Committed work survives on "
+                      "those branches, but uncommitted worker changes are unrecoverable. "
+                      "Review the rebuilt trees, then acknowledge the recovery to continue.")
+            journal.append("mission", "workspace-recovery-pending", reason=reason,
+                           repos={name: {"branch": rec.get("branch", ""),
+                                         "base_rev": rec.get("base_rev", "")}
+                                  for name, rec in affected.items()})
+        else:
+            reason = (f"workspace for mission {mission['id']} was rebuilt from branch "
+                      f"{workspace_record.get('branch')} after its worktree was lost; "
+                      f"uncommitted worker changes are unrecoverable (base_rev "
+                      f"{workspace_record.get('base_rev', '?')}). Review the rebuilt tree, "
+                      "then acknowledge the recovery to continue.")
+            journal.append("mission", "workspace-recovery-pending", reason=reason,
+                           branch=workspace_record.get("branch", ""),
+                           base_rev=workspace_record.get("base_rev", ""))
         return MissionOutcome(status="needs-owner", mission_id=mission["id"], reason=reason)
     # Artifact baseline: snapshot the mission repo's file manifest once, at the FIRST run of
     # this mission (a resume keeps the original baseline - re-baselining would quietly excuse
