@@ -15,6 +15,8 @@ BUILTIN: dict[str, dict[str, Any]] = {
     "explorer": {"tools": ["Read", "Glob", "Grep"], "writable": False},
     "reviewer": {"tools": ["Read", "Glob", "Grep"], "writable": False},
     "designer": {"tools": ["Read", "Glob", "Grep", "inspect_page"], "writable": False},
+    # The producing counterpart to the read-only designer: writes artifact files, still no Bash.
+    "artist": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "inspect_page"], "writable": True},
     "pm": {"tools": ["Read", "Glob", "Grep", "inspect_page"], "writable": False},
     "tester": {"tools": ["Read", "Glob", "Grep", "Bash"], "writable": False},
     "developer": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},

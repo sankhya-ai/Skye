@@ -18,6 +18,11 @@ class CodexAdapter(Adapter):
         prompt = contract.get("brief") or contract["goal"]
         if contract.get("role_instructions"):
             prompt = contract["role_instructions"] + "\n\n" + prompt
+        if contract.get("reference_docs"):
+            refs = "\n\n".join(
+                f"--- {d['path']} (owner-supplied project reference) ---\n{d['content']}"
+                for d in contract["reference_docs"])
+            prompt = "Project references:\n" + refs + "\n\n" + prompt
         writable = bool(contract.get("tools_writable"))
         sandbox = "workspace-write" if writable else "read-only"
         return [self.binary, "exec", "--sandbox", sandbox, prompt]

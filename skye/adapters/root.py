@@ -88,6 +88,11 @@ class RootAdapter(Adapter):
             goal_text = contract.get("brief") or contract["goal"]
             if contract.get("role_instructions"):
                 goal_text = contract["role_instructions"] + "\n\n" + goal_text
+            if contract.get("reference_docs"):
+                refs = "\n\n".join(
+                    f"--- {d['path']} (owner-supplied project reference) ---\n{d['content']}"
+                    for d in contract["reference_docs"])
+                goal_text = "Project references:\n" + refs + "\n\n" + goal_text
             body = {"goal": goal_text, "workspace": contract["repo"],
                     "role": contract["role"], "budget": budget, "credentials": []}
             if contract.get("contract_keys"):

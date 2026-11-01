@@ -162,3 +162,45 @@ def test_role_instructions_bind_at_validation_into_approval_fingerprint(tmp_path
     plain = validate(dict(raw))
     assert "role_instructions" not in plain
     assert fingerprint(plain) != approved_fp
+
+
+def test_reference_files_snapshot_at_validation_into_fingerprint(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "DESIGN.md").write_text("# Design\nDark canvas, roman display face, no eyebrow chips.\n")
+    (repo / "PRODUCT.md").write_text("# Product\nA shop whose cart keeps its own receipts.\n")
+    raw = {"goal": "make a poster", "brief": "Poster for the launch.",
+           "repo": str(repo), "role": "developer", "adapter": "root",
+           "gates": [], "budget": {}, "reference_files": ["DESIGN.md", "PRODUCT.md"]}
+    from skye.approvals import fingerprint
+    from skye.contract import ContractError, validate
+    import pytest
+
+    spec = validate(dict(raw))
+    assert [d["path"] for d in spec["reference_docs"]] == ["DESIGN.md", "PRODUCT.md"]
+    assert "no eyebrow chips" in spec["reference_docs"][0]["content"]
+    approved_fp = fingerprint(spec)
+
+    # idempotent under unchanged files
+    assert validate(dict(spec)) == spec
+    assert fingerprint(dict(spec)) == approved_fp
+
+    # editing a referenced file FAILS CLOSED: the old approval's fingerprint no longer matches
+    (repo / "DESIGN.md").write_text("# Design\nBeige everything.\n")
+    assert fingerprint(spec) != approved_fp
+    substituted = validate(dict(raw))
+    assert "Beige" in substituted["reference_docs"][0]["content"]
+    assert fingerprint(substituted) != approved_fp
+
+    # traversal, symlinks, and missing files are rejected before anything runs
+    for bad in ("../outside.md", "absent.md"):
+        with pytest.raises(ContractError):
+            validate(dict(raw, reference_files=[bad]))
+    (tmp_path / "real.md").write_text("x")
+    (repo / "link.md").symlink_to(tmp_path / "real.md")
+    with pytest.raises(ContractError):
+        validate(dict(raw, reference_files=["link.md"]))
+
+    # no references -> the field disappears entirely, never a stale snapshot
+    plain = validate(dict(raw, reference_files=[]))
+    assert "reference_docs" not in plain
