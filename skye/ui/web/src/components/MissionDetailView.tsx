@@ -21,7 +21,7 @@ export function overallBadge(overall: string, live?: boolean, approved?: boolean
     case "done":
       return <Badge variant="success">done</Badge>;
     case "needs-owner":
-      return <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-700">needs you</Badge>;
+      return <Badge variant="warning">needs you</Badge>;
     case "interrupted":
       return <Badge variant="destructive">interrupted</Badge>;
     case "failed":

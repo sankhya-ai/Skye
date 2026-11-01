@@ -11,6 +11,7 @@ const VARIANTS: Record<string, string> = {
   outline: "text-muted-foreground",
   success: "border-transparent bg-success/15 text-success",
   info: "border-transparent bg-info/15 text-info",
+  warning: "border-amber-500/40 bg-amber-500/10 text-amber-700",
 };
 
 export function Badge({

@@ -217,10 +217,15 @@ with sync_playwright() as pw:
                 page.wait_for_timeout(1500)
         page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
         if name == "agents":
-            proposed = page.locator("text=awaiting your promote").count()
+            proposed = page.locator("text=Needs approval").count()
             extends_badge = page.locator("text=extends senior-dev").count()
+            # capability claims were removed: the tool list itself is the truth, and a
+            # Bash-bearing role must never be labeled "no Write/Edit tools".
+            capability_badges = page.locator("span", has_text="Write/Edit tools").count()
             print("AGENTS proposed-vs-active distinction:", "PASS" if proposed else "FAIL")
             print("AGENTS extends lineage badge:", "PASS" if extends_badge else "FAIL")
+            print("AGENTS no contradictory capability badges:",
+                  "PASS" if capability_badges == 0 else "FAIL")
         if name == "mission-detail":
             # markdown artifact: rendered preview with the link shown as text, never navigation
             md_row = page.locator("div", has=page.locator("span.font-mono", has_text="docs/cart-launch.md")).last

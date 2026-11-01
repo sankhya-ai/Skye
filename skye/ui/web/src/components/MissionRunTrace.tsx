@@ -116,7 +116,7 @@ function stateBadge(state: string, approved?: boolean) {
     case "dispatched":
       return <Badge variant="info">running</Badge>;
     case "needs-owner":
-      return <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700">needs you</Badge>;
+      return <Badge variant="warning">needs you</Badge>;
     case "interrupted":
       return <Badge variant="destructive">interrupted</Badge>;
     case "skipped":

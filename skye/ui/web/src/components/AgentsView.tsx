@@ -75,11 +75,7 @@ export function AgentsView() {
                 <span className="text-xs text-muted-foreground">v{defs.get(role.name)!.version}</span>
               ) : null}
               {defs.get(role.name)?.status === "proposed" ? (
-                <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-700">
-                  proposed{defs.get(role.name)!.proposed_by
-                    ? ` by ${defs.get(role.name)!.proposed_by}`
-                    : ""}{" "}- awaiting your promote
-                </Badge>
+                <Badge variant="warning">Needs approval</Badge>
               ) : (
                 <Badge variant={role.source === "builtin" ? "secondary" : "info"}>
                   {role.source === "registry-override" ? "custom (refines builtin)" : role.source}
@@ -88,11 +84,11 @@ export function AgentsView() {
               {defs.get(role.name)?.extends ? (
                 <Badge variant="outline">extends {defs.get(role.name)!.extends}</Badge>
               ) : null}
-              {role.catalogue.writable ? (
-                <Badge variant="info">Write/Edit tools</Badge>
-              ) : (
-                <Badge variant="secondary">no Write/Edit tools</Badge>
-              )}
+              {defs.get(role.name)?.status === "proposed" && defs.get(role.name)!.proposed_by ? (
+                <span className="text-xs text-muted-foreground">
+                  proposed by {defs.get(role.name)!.proposed_by}
+                </span>
+              ) : null}
             </div>
             {role.description ? (
               <p className="mt-1 text-xs text-muted-foreground">{role.description}</p>
@@ -100,9 +96,21 @@ export function AgentsView() {
             <p className="mt-2 font-mono text-xs text-muted-foreground">
               {role.catalogue.tools.join(" · ") || "no tools"}
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {role.steps} steps run · {role.done} done · {role.failed} failed
-            </p>
+            {role.steps > 0 ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {role.steps} steps run · {role.done} done · {role.failed} failed
+              </p>
+            ) : null}
+            {defs.get(role.name)?.instructions ? (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-muted-foreground/80 hover:text-foreground">
+                  Instructions
+                </summary>
+                <p className="mt-1 text-xs whitespace-pre-wrap text-muted-foreground">
+                  {defs.get(role.name)!.instructions}
+                </p>
+              </details>
+            ) : null}
           </div>
         ))}
       </div>
@@ -114,7 +122,7 @@ export function AgentsView() {
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="name, e.g. security-auditor"
+            placeholder="name"
             className="rounded-md border border-border bg-background px-3 py-1.5 font-mono text-sm outline-none"
           />
           <input
