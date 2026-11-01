@@ -800,7 +800,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                     continue
                 spec = {k: proposal[k] for k in ("id", "role", "adapter", "goal")}
                 for optional in ("brief", "needs", "gates", "budget", "when", "repo",
-                                 "contract_keys", "claims"):
+                                 "repo_reason", "contract_keys", "claims"):
                     if optional in proposal:
                         spec[optional] = proposal[optional]
                 journal.append(step_id, "step-accepted", spec=spec)
