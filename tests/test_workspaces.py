@@ -172,3 +172,82 @@ def test_reset_removes_clean_worktree_keeps_dirty_and_branch(tmp_path):
     reset_mission(mission("m-clean", repo), state_dir=state)
     assert not wt.exists()  # clean now: removed
     assert git(repo, "rev-parse", "--verify", "skye/m-clean").returncode == 0  # branch kept
+
+
+def test_lost_tree_recovery_pauses_until_operator_ack(tmp_path):
+    """The load-bearing case: after a lost-tree rebuild, the mission must NOT keep executing
+    on assumption. It pauses needs-owner with base context bound; the operator reviews and
+    acknowledges; only then does dispatch run - in the rebuilt tree."""
+    repo = make_repo(tmp_path)
+    state = tmp_path / "state"
+    m = mission("m-amb", repo)
+    rec = workspaces.prepare(m, state_dir=state, policy=ON)
+    wt = Path(rec["worktree"])
+    (wt / "committed.txt").write_text("kept")
+    (wt / "scratch.txt").write_text("gone")
+    git(wt, "add", "committed.txt"); git(wt, "commit", "-qm", "worker")
+    git(repo, "worktree", "remove", "--force", str(wt))
+
+    ran = []
+    def spy(spec):
+        ran.append(spec["role"])
+        return writer(spec)
+
+    out = run_mission(m, ON, runner=spy, state_dir=state, catalogues_dir="catalogues")
+    assert out.status == "needs-owner"
+    assert ran == []  # nothing dispatched on assumption
+    assert "uncommitted" in out.reason and "skye/m-amb" in out.reason
+    journal = (state / "missions" / "m-amb" / "journal.jsonl").read_text()
+    assert "workspace-recovery-pending" in journal
+    # the pause is sticky: a blind resume hits it again
+    out2 = run_mission(m, ON, runner=spy, state_dir=state, catalogues_dir="catalogues")
+    assert out2.status == "needs-owner" and ran == []
+
+    acked = workspaces.acknowledge_recovery(state / "missions" / "m-amb", actor="ashish")
+    assert acked["recovery_acknowledged"]["by"] == "ashish"
+    assert acked["recovery_acknowledged"]["base_rev"] == acked["base_rev"]
+
+    out3 = run_mission(m, ON, runner=spy, state_dir=state, catalogues_dir="catalogues")
+    assert out3.status == "done" and ran == ["developer"]
+    rebuilt = state / "worktrees" / "m-amb"
+    assert (rebuilt / "committed.txt").exists()       # committed work came back
+    assert not (rebuilt / "scratch.txt").exists()      # uncommitted honestly gone
+
+
+def test_acknowledge_without_pending_recovery_refused(tmp_path):
+    repo = make_repo(tmp_path)
+    state = tmp_path / "state"
+    workspaces.prepare(mission("m-calm", repo), state_dir=state, policy=ON)
+    import pytest as _pt
+    with _pt.raises(workspaces.WorkspaceError, match="no lost-tree recovery"):
+        workspaces.acknowledge_recovery(state / "missions" / "m-calm")
+
+
+def test_server_ack_recovery_endpoint(tmp_path):
+    """The operator decision is reachable through the UI server, same as approve/resume."""
+    import threading
+    from http.server import ThreadingHTTPServer
+    from tests.test_ui_server import _req
+    from skye.ui import server as ui
+    state = tmp_path / "st"; state.mkdir()
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), ui.UiHandler)
+    httpd.state_dir = state
+    httpd.token = "test-token-abc"
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    repo = tmp_path / "repo"; repo.mkdir()
+    git(repo, "init", "-q"); git(repo, "config", "user.email", "t@t.t")
+    git(repo, "config", "user.name", "t")
+    (repo / "b.txt").write_text("b"); git(repo, "add", "-A"); git(repo, "commit", "-qm", "i")
+    rec = workspaces.prepare(mission("m-ui", repo), state_dir=state, policy=ON)
+    git(repo, "worktree", "remove", "--force", rec["worktree"])
+    code, data = _req(url, "/api/missions/m-ui/ack-recovery", method="POST", body={})
+    assert code == 404  # no mission.json snapshot yet -> unknown mission
+    (state / "missions" / "m-ui" / "mission.json").write_text("{}")
+    code, data = _req(url, "/api/missions/m-ui/ack-recovery", method="POST", body={})
+    assert code == 400  # recovery not pending until a rebuild actually happens
+    workspaces.prepare(mission("m-ui", repo), state_dir=state, policy=ON)  # rebuilds, flags loss
+    code, data = _req(url, "/api/missions/m-ui/ack-recovery", method="POST", body={})
+    assert code == 200 and data["acknowledged"] is True and data["branch"] == "skye/m-ui"
+    httpd.shutdown(); thread.join(5)

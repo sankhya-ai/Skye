@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 from . import approvals
 from .contract import ContractError, load
@@ -101,9 +102,10 @@ def _cmd_approvals() -> int:
 
 
 def _cmd_mission(args: list[str]) -> int:
-    if len(args) < 2 or args[0] not in ("run", "status", "check", "reset", "redispatch"):
-        print("usage: skye mission run|status|check|reset|redispatch <mission.json> [--step <id>]",
-              file=sys.stderr)
+    if len(args) < 2 or args[0] not in ("run", "status", "check", "reset", "redispatch",
+                                          "ack-recovery"):
+        print("usage: skye mission run|status|check|reset|redispatch|ack-recovery "
+              "<mission.json> [--step <id>]", file=sys.stderr)
         return 2
     sub, path = args[0], args[1]
     try:
@@ -122,6 +124,18 @@ def _cmd_mission(args: list[str]) -> int:
         archived = reset_mission(mission)
         print(json.dumps({"reset": True, "archived_journal": archived or "(no journal yet)"},
                          indent=2))
+        return 0
+    if sub == "ack-recovery":
+        from . import workspaces
+        from .mission import default_state_dir
+        try:
+            record = workspaces.acknowledge_recovery(
+                Path(default_state_dir()) / "missions" / mission["id"], actor="skye cli")
+        except workspaces.WorkspaceError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        print(json.dumps({"acknowledged": True, "branch": record.get("branch", ""),
+                          "base_rev": record.get("base_rev", "")}, indent=2))
         return 0
     redispatch = None
     if sub == "redispatch":

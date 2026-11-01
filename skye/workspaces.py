@@ -154,6 +154,20 @@ def apply(mission: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
     return mission
 
 
+def acknowledge_recovery(mission_dir: Path, *, actor: str = "operator") -> dict[str, Any]:
+    """The operator's explicit decision after a lost-tree recovery: they have reviewed the
+    rebuilt workspace (committed work from the branch, uncommitted changes reported lost)
+    and accept running from it. Recorded with the original base context, never implied."""
+    record = read_record(Path(mission_dir))
+    if not record or not record.get("uncommitted_lost"):
+        raise WorkspaceError("no lost-tree recovery is pending for this mission")
+    record["recovery_acknowledged"] = {"at": time.time(), "by": actor,
+                                       "base_rev": record.get("base_rev", ""),
+                                       "branch": record.get("branch", "")}
+    _record_path(Path(mission_dir)).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
+    return record
+
+
 def clean(worktree: Path) -> bool:
     return not _git(worktree, "status", "--porcelain").stdout.strip()
 

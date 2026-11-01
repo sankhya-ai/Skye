@@ -341,6 +341,22 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     if not snapshot.exists() or snapshot.read_text("utf-8") != rendered:
         snapshot.write_text(rendered, "utf-8")
     journal = Journal(mission_dir / "journal.jsonl")
+    if (workspace_record.get("uncommitted_lost")
+            and not workspace_record.get("recovery_acknowledged")):
+        # Lost-tree recovery is ambiguous: the branch carries the committed work, but the
+        # uncommitted state the mission last saw is unrecoverable. Do NOT continue dispatch
+        # or review from the rebuilt tree on assumption - pause for the operator's explicit
+        # decision (skye mission ack-recovery / POST .../ack-recovery), with the original
+        # base context bound on the record and the journal.
+        reason = (f"workspace for mission {mission['id']} was rebuilt from branch "
+                  f"{workspace_record.get('branch')} after its worktree was lost; uncommitted "
+                  f"worker changes are unrecoverable (base_rev "
+                  f"{workspace_record.get('base_rev', '?')}). Review the rebuilt tree, then "
+                  "acknowledge the recovery to continue.")
+        journal.append("mission", "workspace-recovery-pending", reason=reason,
+                       branch=workspace_record.get("branch", ""),
+                       base_rev=workspace_record.get("base_rev", ""))
+        return MissionOutcome(status="needs-owner", mission_id=mission["id"], reason=reason)
     # Artifact baseline: snapshot the mission repo's file manifest once, at the FIRST run of
     # this mission (a resume keeps the original baseline - re-baselining would quietly excuse
     # changes from earlier attempts). The end snapshot lands when the mission settles done, so
