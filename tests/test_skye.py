@@ -46,7 +46,7 @@ def test_contract_requires_goal_repo_adapter_and_known_role():
 def test_default_policy_blocks_everything_unattended():
     reason = Policy().unattended_ok(_contract())
     assert "not on the team's unattended list" in reason and "approval" in reason
-    assert "codex/developer" in reason  # the decision truth: which pair is blocked
+    assert "claude-code/developer" in reason  # the decision truth: which pair is blocked
 
 
 def test_policy_rule_allows_named_pair_only():
