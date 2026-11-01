@@ -9,8 +9,8 @@ Skye vendors two sankhya-ai projects verbatim except where noted:
 
 Upstream licenses and notices are preserved in place: `chamber/LICENSE`,
 `chamber/NOTICE`, `root/runtime/LICENSE`, `root/runtime/NOTICE`.
-Skye's own license is pending the owner's choice; this file grants no rights
-beyond those upstream texts.
+Skye's own code is licensed under Apache-2.0 (see `LICENSE`); the vendored
+projects above are Apache-2.0 under their own notices.
 
 ## UI screen sources (adapted, Apache-2.0)
 
