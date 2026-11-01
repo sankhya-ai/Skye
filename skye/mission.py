@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,10 +115,11 @@ class Journal:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()  # parallel steps journal from worker threads
 
     def append(self, step: str, event: str, **fields: Any) -> None:
         entry = {"v": 1, "ts": time.time(), "step": step, "event": event, **fields}
-        with self.path.open("a", encoding="utf-8") as handle:
+        with self._lock, self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry) + "\n")
             handle.flush()
             os.fsync(handle.fileno())

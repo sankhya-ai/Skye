@@ -182,7 +182,7 @@ export function MissionRunTrace({
                     data-testid="approved-cue"
                   >
                     <p className="text-xs text-success">
-                      Approved. This contract will run exactly once when you resume the mission.
+                      Approved for one attempt. Resume the mission to continue.
                     </p>
                   </div>
                 ) : st.reason ? (
