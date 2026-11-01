@@ -4,7 +4,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
-import { getPolicy, savePolicy } from "../api";
+import { getPolicy, savePolicy, type AutoPickup } from "../api";
 import { humanError } from "../lib";
 
 type Rule = { adapter: string; role: string };
@@ -17,6 +17,7 @@ export function SettingsView() {
   const [maxConcurrent, setMaxConcurrent] = useState(1);
   const [raw, setRaw] = useState<Record<string, unknown>>({});
   const [advanced, setAdvanced] = useState("");
+  const [autoPickup, setAutoPickup] = useState<AutoPickup | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -37,6 +38,7 @@ export function SettingsView() {
       setJourneyCommand(String(data.journey_command ?? ""));
       setMaxConcurrent(Number(data.max_concurrent ?? policy.max_concurrent ?? 1));
       setAdvanced(JSON.stringify(data, null, 2));
+      setAutoPickup(policy.auto_pickup ?? null);
       setError(null);
     } catch (e) {
       setError(humanError(e, "policy"));
@@ -99,6 +101,29 @@ export function SettingsView() {
           {message}
         </p>
       ) : null}
+
+      <section className="shadow-card rounded-xl border border-border bg-card p-4">
+        <h3 className="text-sm font-medium">Automatic pickup</h3>
+        {autoPickup === null ? (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Pickup state unavailable - the policy could not be read.
+          </p>
+        ) : autoPickup.enabled ? (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            On - starts approved tickets automatically, up to {autoPickup.max_missions} at a
+            time.{" "}
+            {autoPickup.include_reopened
+              ? "Reopened tickets included."
+              : "Reopened tickets wait for you."}{" "}
+            Each step still follows its usual permissions.
+          </p>
+        ) : (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Off - approved tickets wait for you to start them. When enabled, pickup starts
+            approved tickets; each step still follows its usual permissions.
+          </p>
+        )}
+      </section>
 
       <section className="shadow-card rounded-xl border border-border bg-card p-4">
         <h3 className="text-sm font-medium">May run without asking</h3>

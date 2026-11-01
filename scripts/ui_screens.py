@@ -449,6 +449,33 @@ with sync_playwright() as pw:
                       "PASS" if dur in ("0.01ms", "1e-05s", "0s", "0.00001s") else "FAIL")
                 rpage.screenshot(path=str(out_dir / "ui-backlog-reject-dialog-reduced-motion.png"))
             ctx.close()
+    # SETTINGS automatic pickup: exact recorded state, and unknown is never "off"
+    page.goto(ui_url + "#/settings")
+    page.wait_for_timeout(1800)
+    off_line = page.locator("text=Off - approved tickets wait for you").count()
+    print("SETTINGS pickup shows recorded off:", "PASS" if off_line else "FAIL")
+    policy_data = json.loads((demo / "skye.policy.json").read_text())
+    policy_data["auto_pickup"] = {"enabled": True, "include_reopened": True,
+                                  "max_missions": 2}
+    (demo / "skye.policy.json").write_text(json.dumps(policy_data))
+    page.reload()
+    page.wait_for_timeout(1800)
+    on_line = page.locator("text=On - starts approved tickets").count()
+    limit_line = page.locator("text=up to 2 at a time").count()
+    reopened_line = page.locator("text=Reopened tickets included").count()
+    print("SETTINGS pickup shows on with limits:",
+          "PASS" if on_line and limit_line and reopened_line else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-settings-pickup-on.png"), full_page=True)
+    # a policy file that cannot be read: pickup state is UNKNOWN, never shown as off
+    (demo / "skye.policy.json").write_text("{ not json")
+    page.reload()
+    page.wait_for_timeout(1800)
+    unknown_line = page.locator("text=Pickup state unavailable").count()
+    off_leak = page.locator("text=Off - approved tickets wait for you").count()
+    print("SETTINGS pickup unknown distinct from off:",
+          "PASS" if unknown_line and not off_leak else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-settings-pickup-unavailable.png"), full_page=True)
+    (demo / "skye.policy.json").write_text(json.dumps(policy_data))
     browser.close()
 
 # --- interrupted state: kill the server mid-run, restart, the mission cannot reattach ---

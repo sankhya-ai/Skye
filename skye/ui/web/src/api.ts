@@ -122,8 +122,10 @@ export const createRole = (role: {
   method: "POST",
   body: JSON.stringify({ role }),
 });
+export type AutoPickup = { enabled: boolean; include_reopened: boolean; max_missions: number };
 export const getPolicy = () =>
-  api<{ raw: Record<string, unknown>; path: string; max_concurrent: number }>("/api/policy");
+  api<{ raw: Record<string, unknown>; path: string; max_concurrent: number;
+        auto_pickup: AutoPickup }>("/api/policy");
 export const savePolicy = (policy: Record<string, unknown>) =>
   api<{ saved: boolean }>("/api/policy", { method: "POST", body: JSON.stringify({ policy }) });
 export const createMission = (spec: {
