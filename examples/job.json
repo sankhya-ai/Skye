@@ -1,0 +1,3 @@
+{"goal": "add the health endpoint", "repo": "/path/to/repo", "role": "developer",
+ "adapter": "claude-code", "gates": ["tests", "review"],
+ "brief": "Small self-contained brief for the worker."}

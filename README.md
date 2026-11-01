@@ -56,7 +56,7 @@ gates:        output contract, tests, reviewer verdict, journey check
 | --- | --- |
 | **Root** (vendored in `root/`) | An open coding agent with dynamic tools, scoped jobs and missions that park and resume. Best integrated: Skye uses its real owner HTTP API and reattaches to interrupted jobs. Optional. |
 | **Claude Code** | Your local install, driven through its CLI. Your login, your subscription. |
-| **Codex** | Your local install, driven through `codex exec`. Your login, your subscription. |
+| **Codex** | Your local install, driven through `codex app-server` (JSON-RPC over stdio), with a one-shot `codex exec` fallback when the app-server is unusable before a turn starts. Your login, your subscription. |
 
 **Chamber** (vendored in `chamber/`) is the built-in coordination layer. Skye uses its relay to
 carry sealed team messages when you configure a line, and it stays optional for the engine, the
@@ -66,17 +66,19 @@ journal, approvals and the UI.
 
 Requires Python 3.10+. The `skye` package has no third-party Python dependencies.
 
+From a checkout of this repository:
+
 ```sh
-pip install -e .               # installs the skye command
-skye check job.json            # validate a contract
-skye run job.json              # policy check -> worker -> gates (or needs-owner)
-skye approve job.json          # one-time approval of exactly that contract
-skye mission run flow.json     # run or resume a persisted workflow
-skye mission status flow.json  # show mission progress
-skye ui                        # local screens on 127.0.0.1
+pip install -e .                        # installs the skye command
+skye check examples/job.json            # validate a contract
+skye run examples/job.json              # policy check -> worker -> gates (or needs-owner)
+skye approve examples/job.json          # one-time approval of exactly that contract
+skye mission run examples/flow.json     # run or resume a persisted workflow
+skye mission status examples/flow.json  # show mission progress
+skye ui                                 # local screens on 127.0.0.1
 ```
 
-A contract:
+`examples/job.json` is a contract; set `repo` to a real path first. `examples/flow.json` is a two-step workflow (PM scopes, developer builds). A contract looks like this:
 
 ```json
 {"goal": "add the health endpoint", "repo": "/path/to/repo", "role": "developer",

@@ -1,0 +1,7 @@
+{"id": "health-endpoint", "goal": "add a health endpoint", "repo": "/path/to/repo", "steps": [
+  {"id": "scope", "role": "pm", "adapter": "claude-code",
+   "goal": "scope the health endpoint", "brief": "List what the endpoint must return.", "gates": []},
+  {"id": "build", "role": "developer", "adapter": "claude-code",
+   "goal": "add the health endpoint", "brief": "Implement the scoped endpoint.",
+   "needs": ["scope"], "gates": ["tests", "review"]}
+]}
