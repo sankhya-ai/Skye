@@ -46,6 +46,13 @@ const statusLabel = (f: FeatureRow): string => {
   }
 };
 
+const badgeClass = (f: FeatureRow): string => {
+  if (f.status === "awaiting-verification" && f.verification?.journey_passed === false) {
+    return "bg-warning/25 text-foreground";
+  }
+  return BADGE[f.status] ?? "bg-muted text-muted-foreground";
+};
+
 const BADGE: Record<string, string> = {
   pending: "bg-warning/25 text-foreground",
   reopened: "bg-warning/25 text-foreground",
@@ -191,7 +198,7 @@ export function BacklogView() {
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-medium text-foreground">{f.title}</span>
                     <span
-                      className={`rounded-xs px-1.5 py-0.5 text-xs ${BADGE[f.status] ?? "bg-muted text-muted-foreground"}`}
+                      className={`rounded-xs px-1.5 py-0.5 text-xs ${badgeClass(f)}`}
                     >
                       {statusLabel(f)}
                     </span>
@@ -258,8 +265,13 @@ export function BacklogView() {
                     {f.missions && f.missions.length > 1
                       ? ` · ${f.missions.length} runs`
                       : ""}
-                    {f.mission_id && f.status !== "delivered"
+                    {f.mission_id && f.status !== "delivered" && f.status !== "awaiting-verification"
                       ? ` · ${missionState(f.mission_id)}`
+                      : ""}
+                    {f.status === "awaiting-verification"
+                      ? f.verification?.journey_passed === false
+                        ? " · replay failed - send back to start the repair"
+                        : " · work finished - replay the journey to check it"
                       : ""}
                     {f.status === "delivered" && f.verification?.journey_passed
                       ? " · journey replay passed"
@@ -290,17 +302,9 @@ export function BacklogView() {
                     </>
                   ) : null}
                   {f.status === "awaiting-verification" ? (
-                    <>
-                      <Button
-                        size="sm"
-                        loading={busy === f.id}
-                        onClick={() => void act(f.id, () => verifyFeature(f.id))}
-                      >
-                        Replay journey
-                      </Button>
-                      {f.verification?.journey_passed === false ? (
+                    f.verification?.journey_passed === false ? (
+                      <>
                         <Button
-                          variant="outline"
                           size="sm"
                           loading={busy === f.id}
                           onClick={() =>
@@ -309,10 +313,26 @@ export function BacklogView() {
                             )
                           }
                         >
-                          Send back
+                          Send back for repair
                         </Button>
-                      ) : null}
-                    </>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          loading={busy === f.id}
+                          onClick={() => void act(f.id, () => verifyFeature(f.id))}
+                        >
+                          Replay again
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        loading={busy === f.id}
+                        onClick={() => void act(f.id, () => verifyFeature(f.id))}
+                      >
+                        Replay journey
+                      </Button>
+                    )
                   ) : null}
                   {f.status === "approved" && !f.mission_id ? (
                     <Button

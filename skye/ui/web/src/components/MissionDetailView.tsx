@@ -93,7 +93,9 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
     }
   };
 
-  if (error) return <p className="p-6 text-sm text-destructive">{error}</p>;
+  // A failed refresh must not wipe a mission we already rendered: keep the last known
+  // state (the app banner reports the outage) and show the error only when nothing loaded.
+  if (error && !detail) return <p className="p-6 text-sm text-destructive">{error}</p>;
   if (!detail) {
     return (
       <div className="animate-pulse space-y-4 p-6" aria-label="loading mission">
