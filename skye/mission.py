@@ -574,7 +574,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         artifacts_path.write_text(json.dumps(record) + "\n", "utf-8")
     bridge = bridge if bridge is not None else events.from_env(log_path=mission_dir / "events.jsonl")
     emit = bridge.publish
-    context = {"mission": mission["id"]}
+    context = {"mission": mission["id"], "run_instance": run_instance}
     # The cancel marker is the operator's stop order. It is consumed ONLY by an explicit
     # owner action (clear_cancel from the resume/redispatch endpoints or the CLI) - an
     # automatic restart (auto-pickup, a stray invocation) must not talk itself past it.
@@ -606,7 +606,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                     # escape hatch a dangling follow-up names. Journaled as their decision
                     # (a terminal event for the follow-up ledger), never implied.
                     journal.append(step_id, "redispatch",
-                                   reason="operator explicitly re-runs the settled step")
+                                   reason="operator explicitly re-runs the settled step",
+                                   run_instance=run_instance)
                     pending[step_id] = step
                     continue
                 outcomes[step_id] = state  # the recorded outcome feeds later briefs
@@ -653,7 +654,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         step_id = str(entry.get("step") or "")
         later = live_entries[i + 1:]
         if any(e.get("step") == step_id and (
-                e.get("event") in ("cancelled", "resume-rejected", "redispatch")
+                e.get("event") == "redispatch"  # the operator's explicit choice:
+                # an intentional resolution, identity-independent
+                or (e.get("event") in ("cancelled", "resume-rejected")
+                    and _same_run_instance(entry, e))  # a terminal record only
+                # resolves a follow-up from the SAME run generation; a delayed
+                # terminal from a prior process (or an unstamped legacy record)
+                # never does
                 or (e.get("event") == "follow-up-undelivered"
                     and e.get("follow_id") == fid))  # fid-matched: another
                 # follow-up's failure never resolves this one
@@ -812,6 +819,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 return MissionOutcome(status="needs-owner", mission_id=mission["id"],
                                       reason=reason, steps=outcomes)
             journal.append(target, "settled", status=outcome.status, reason=outcome.reason,
+                           run_instance=run_instance,
                            output=outcome.worker_output[-4000:], gates=outcome.gates,
                            worker_job=outcome.worker_job, role=step["role"])
             consumed_path.write_text(str(line_no + 1), "utf-8")
@@ -883,7 +891,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                     # this attempt.
                     journal.append(step_id, "redispatch",
                                    reason="operator explicitly re-runs the interrupted step",
-                                   superseded_job=prior_job or "")
+                                   superseded_job=prior_job or "",
+                                   run_instance=run_instance)
                     ready.append(step)
                 elif step["adapter"] == "root" and prior_job:
                     # Reattach only to a job the Root server STILL holds. If the journaled job
@@ -1098,7 +1107,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                      "adapter": step["adapter"]}
             if outcome.status == "cancelled":
                 # Operator stop: NOT settled - the step stays pending and resumable.
-                journal.append(step_id, "cancelled", reason=outcome.reason, role=step["role"])
+                journal.append(step_id, "cancelled", reason=outcome.reason,
+                               role=step["role"], run_instance=run_instance)
                 pending[step_id] = step
                 if wave_cancelled is None:
                     wave_cancelled = (step_id, outcome)
@@ -1106,6 +1116,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             if outcome.resume_rejected:
                 # Fail-closed: never settled, never retried fresh on its own.
                 journal.append(step_id, "resume-rejected", reason=outcome.reason,
+                               run_instance=run_instance,
                                session_id=outcome.session_id, role=step["role"])
                 pending[step_id] = step
                 if wave_resume_rejected is None:
@@ -1150,6 +1161,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                         pending[step_id] = {**step, "review_feedback": feedback[:2000]}
                         continue
             journal.append(step_id, "settled", status=outcome.status, reason=outcome.reason,
+                           run_instance=run_instance,
                            output=outcome.worker_output[-4000:], gates=outcome.gates,
                            worker_job=outcome.worker_job, role=step["role"])
             outcomes[step_id] = {"status": outcome.status, "reason": outcome.reason,

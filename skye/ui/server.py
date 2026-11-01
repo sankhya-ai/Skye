@@ -1219,6 +1219,30 @@ class UiHandler(BaseHTTPRequestHandler):
                         # never by age - a paused-but-alive handler must not lose its
                         # claim and later append/send under someone else's.
                         with _steer_serial_lock:
+                            # Re-verify the live generation INSIDE the critical
+                            # section: the snapshot above was taken BEFORE the lock,
+                            # and a turnover in between means this submission was
+                            # decided against a process that no longer holds the
+                            # registry slot. Reject BEFORE journaling or sending;
+                            # steer_live's registry check covers turnover after
+                            # this point.
+                            if run_instance is None:
+                                return self._json(
+                                    {"error": "the live run's generation is not "
+                                              "identifiable (it predates run-instance "
+                                              "tracking) - refusing to bind a "
+                                              "submission to an unknown generation",
+                                     "preserved_text": text}, 409)
+                            with _live_lock:
+                                _now = _live_missions.get(mission_id, {})
+                            if not _now.get("running") \
+                                    or _now.get("run_instance") != run_instance:
+                                return self._json(
+                                    {"error": "the live run turned over while this "
+                                              "request waited for the step's steer "
+                                              "slot - the follow-up was NOT sent; "
+                                              "retry against the current run",
+                                     "preserved_text": text}, 409)
                             if marker.exists():
                                 try:
                                     claim = json.loads(marker.read_text("utf-8"))
@@ -1276,12 +1300,25 @@ class UiHandler(BaseHTTPRequestHandler):
                                         if e.get("step") != step:
                                             continue
                                         ev = e.get("event")
-                                        if ev in ("cancelled", "resume-rejected",
-                                                  "redispatch", "settled"):
-                                            # the run ended / the operator acted: the
-                                            # engine scan owns any unknown state now
+                                        if ev == "redispatch":
+                                            # the operator's explicit choice: an
+                                            # intentional, identity-independent
+                                            # resolution
                                             resolved = True
                                             break
+                                        if ev in ("cancelled", "resume-rejected",
+                                                  "settled"):
+                                            if _same_run_instance(
+                                                    entries_all[intent_pos], e):
+                                                # the run this follow-up was steered
+                                                # into ENDED: the engine scan owns
+                                                # any unknown state now
+                                                resolved = True
+                                                break
+                                            # a delayed terminal record from a PRIOR
+                                            # run's process (or an unstamped legacy
+                                            # record) says nothing about THIS claim
+                                            continue
                                         if ev == "follow-up-undelivered" \
                                                 and e.get("follow_id") == pending_fid:
                                             resolved = True
@@ -1326,8 +1363,10 @@ class UiHandler(BaseHTTPRequestHandler):
                                     continue
                                 after = prior[idx + 1:]
                                 fid0 = e["follow_id"]
-                                if any(a.get("event") in (
-                                        "cancelled", "resume-rejected", "redispatch")
+                                if any(a.get("event") == "redispatch"
+                                        or (a.get("event") in (
+                                            "cancelled", "resume-rejected")
+                                            and _same_run_instance(e, a))
                                         or (a.get("event") == "follow-up-undelivered"
                                             and a.get("follow_id") == fid0)
                                         for a in after):
@@ -1414,7 +1453,8 @@ class UiHandler(BaseHTTPRequestHandler):
                                                   "unresolved intent); inspect the "
                                                   "step, then retry",
                                          "preserved_text": text}, 409)
-                                steered = _adapter_base.steer_live(run_key, text)
+                                steered = _adapter_base.steer_live(
+                                    run_key, text, run_instance)
                                 if steered == "steered":
                                     journal.append(step, "follow-up-submitted",
                                                    follow_id=follow_id)
@@ -1441,6 +1481,12 @@ class UiHandler(BaseHTTPRequestHandler):
                                     # release OUR marker so the step is not wedged.
                                     marker.unlink(missing_ok=True)
                                 raise
+                        if steered == "stale-generation":
+                            return self._json(
+                                {"error": f"the live process for step '{step}' changed "
+                                          "generation mid-submission - the follow-up "
+                                          "was NOT sent; retry against the current "
+                                          "run"}, 409)
                         if steered == "unsupported":
                             return self._json(
                                 {"error": f"the {step_status['adapter']} exec protocol is "

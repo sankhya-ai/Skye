@@ -582,6 +582,8 @@ def test_follow_up_endpoint_steers_a_live_run(ui_server, tmp_path, monkeypatch, 
     status, body = _req(url, "/api/missions/m1/resume", method="POST", body={})
     assert status == 200 and body["resumed"] is True
     assert _wait_for(lambda: "m1:dev" in base._LIVE), "run never registered live"
+    registry_token = base._LIVE["m1:dev"].get("run_instance")
+    assert registry_token  # the registry slot carries the run's identity
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "also add logging"})
     # "submitted" = handed to the live process; consumption is the provider's own
@@ -608,7 +610,7 @@ def test_follow_up_endpoint_steers_a_live_run(ui_server, tmp_path, monkeypatch, 
     entries = _journal(state_dir).entries()
     tokens = {e.get("run_instance") for e in entries
               if e.get("event") in ("follow-up", "dispatched", "worker-progress")}
-    assert len(tokens) == 1 and next(iter(tokens))
+    assert tokens == {registry_token}  # server intent, engine records, registry: one run
 
 
 # ----- live-steer durability: intent without a confirmed outcome pauses the owner -----
@@ -808,7 +810,7 @@ def test_follow_up_endpoint_serializes_live_steers(ui_server, tmp_path, monkeypa
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
                    delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "add logging"})
     assert status == 409 and "awaiting its provider receipt" in body["error"], body
@@ -826,7 +828,7 @@ def test_two_simultaneous_live_steers_exactly_one_accepted(ui_server, tmp_path,
     # step get exactly ONE acceptance; the loser gets 409 with its input preserved.
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     barrier = threading.Barrier(2)
 
     def _slow_steer(*_a):
@@ -857,7 +859,7 @@ def test_marker_takeover_refused_while_owner_alive(ui_server, tmp_path, monkeypa
     # indefinitely (fail closed) - only a proven-dead owner releases it.
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     marker = state_dir / "missions" / "m1" / "steer-pending-dev"
     marker.write_text(json.dumps({"follow_id": "f-old", "owner_pid": os.getpid(),
                                   "run_key": "m1:dev", "created": time.time() - 9999}))
@@ -882,7 +884,7 @@ def test_unrelated_step_activity_never_releases_a_marker(ui_server, tmp_path,
                                                          monkeypatch):
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
                    delivery="steered-live", state="intent", run_instance="run-a")
@@ -906,7 +908,7 @@ def test_failed_steer_never_deletes_a_reclaimed_marker(ui_server, tmp_path,
     # NEW owner reclaimed mid-flight.
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     marker = state_dir / "missions" / "m1" / "steer-pending-dev"
 
     def _steal_then_fail(*_a):
@@ -961,7 +963,7 @@ def test_unsubmitted_intent_blocks_new_posts(ui_server, tmp_path, monkeypatch):
     # the worker. New sends fail closed until the operator resolves it.
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     _journal(state_dir).append("dev", "follow-up", follow_id="f1", text="risky",
                                delivery="steered-live", state="intent")
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
@@ -976,7 +978,7 @@ def test_post_intent_exception_preserves_claim_and_blocks_retry(ui_server, tmp_p
     # keeps the claim and the intent: no cleanup-and-retry into a possible duplicate.
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     marker = state_dir / "missions" / "m1" / "steer-pending-dev"
     from skye import mission as _m
     original = _m.Journal.append
@@ -1011,7 +1013,7 @@ def test_other_followups_undelivered_does_not_clear_claim(ui_server, tmp_path,
                                                           monkeypatch):
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
                    delivery="steered-live", state="intent")
@@ -1063,7 +1065,7 @@ def test_legacy_unstamped_records_never_resolve_a_claim(ui_server, tmp_path,
     # the engine scan fail closed even when position and text line up.
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True, "run_instance": "run-a"}})
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
                    delivery="steered-live", state="intent")
@@ -1101,3 +1103,130 @@ def test_engine_stamps_run_instance_on_its_own_records(fake_path, tmp_path):
     assert dispatched2 and all(
         isinstance(e.get("run_instance"), str) and ":" in e["run_instance"]
         for e in dispatched2)
+
+
+def test_run_turnover_before_claim_rejects_without_sending(ui_server, tmp_path,
+                                                           monkeypatch):
+    # The combined TOCTOU probe: run_instance snapshotted BEFORE the steer lock; the
+    # old run ends and a NEW live instance starts while this request waits at the
+    # lock. The re-verification inside the critical section must reject BEFORE
+    # journaling or sending - a submission decided against the old process must
+    # never reach the new one under the old record.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions",
+                        {"m1": {"running": True, "run_instance": "old-run"}})
+    entered, release = threading.Event(), threading.Event()
+
+    class _PauseLock:
+        def __enter__(self):
+            entered.set()
+            assert release.wait(5)
+
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(ui, "_steer_serial_lock", _PauseLock())
+    calls: list = []
+    monkeypatch.setattr("skye.adapters.base.steer_live",
+                        lambda *a: calls.append(a) or "steered")
+    result: list = []
+    t = threading.Thread(
+        target=lambda: result.append(
+            _req(url, "/api/missions/m1/follow-up", method="POST",
+                 body={"step": "dev", "text": "old-run intended input"})))
+    t.start()
+    assert entered.wait(5)
+    monkeypatch.setattr(ui, "_live_missions",
+                        {"m1": {"running": True, "run_instance": "new-run"}})
+    release.set()
+    t.join(5)
+    assert result[0][0] == 409 and not calls, (result, calls)
+    assert result[0][1]["preserved_text"] == "old-run intended input"
+    # nothing journaled either: no intent was recorded for the dead generation
+    assert not [e for e in _journal(state_dir).entries()
+                if e.get("event") == "follow-up"]
+
+
+def test_old_run_terminal_never_releases_a_current_claim(ui_server, tmp_path,
+                                                         monkeypatch):
+    # A delayed terminal record (cancelled) from the PRIOR run's process must not
+    # release the current claim; the SAME run's terminal resolves it.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions",
+                        {"m1": {"running": True, "run_instance": "run-new"}})
+    journal = _journal(state_dir)
+    journal.append("dev", "dispatched", fingerprint="fp1", run_instance="run-new")
+    journal.append("dev", "follow-up", follow_id="f1", text="same text",
+                   delivery="steered-live", state="intent", run_instance="run-new")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
+        json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
+                    "run_key": "m1:dev", "run_instance": "run-new",
+                    "created": time.time()}))
+    journal.append("dev", "cancelled", reason="old process terminal",
+                   run_instance="run-old")
+    calls: list = []
+    monkeypatch.setattr("skye.adapters.base.steer_live",
+                        lambda *a: calls.append(a) or "steered")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "new submission"})
+    assert status == 409 and not calls, (status, body, calls)
+    # engine side: the old terminal must not resolve the intent either
+    mission = _mission(tmp_path, _one_step())
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner", outcome.status
+
+    # the CURRENT run's own terminal record resolves the claim (the engine scan
+    # owns any remaining unknowns)
+    journal.append("dev", "cancelled", reason="this run stopped",
+                   run_instance="run-new")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "new submission"})
+    assert status == 200 and len(calls) == 1, (status, body, calls)
+
+
+def test_redispatch_remains_an_operator_resolution(ui_server, tmp_path, monkeypatch):
+    # An explicit operator redispatch resolves a pending claim regardless of run
+    # identity: it is a human decision, not a process event.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions",
+                        {"m1": {"running": True, "run_instance": "run-new"}})
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="same text",
+                   delivery="steered-live", state="intent", run_instance="run-new")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
+        json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
+                    "run_key": "m1:dev", "run_instance": "run-new",
+                    "created": time.time()}))
+    journal.append("dev", "redispatch",
+                   reason="operator explicitly re-runs the settled step")
+    monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "new submission"})
+    assert status == 200 and body["delivery"] == "submitted", body
+
+
+def test_stale_registry_generation_rejected_at_send(monkeypatch):
+    # The registry itself binds the submission: a slot held by a DIFFERENT
+    # generation than the caller's record rejects before any write.
+    from skye.adapters import base
+
+    class _Proc:
+        def poll(self):
+            return None  # alive
+
+    entry = {"proc": _Proc(), "cancel": None, "adapter": object(),
+             "steers": 0, "closing": False, "lock": threading.Lock(),
+             "run_instance": "run-old"}
+    monkeypatch.setattr(base, "_LIVE", {"m1:dev": entry})
+    # a mismatched expected generation is rejected before any adapter/process call
+    assert base.steer_live("m1:dev", "text", "run-new") == "stale-generation"
+    # a matching generation passes the gate and reaches the adapter checks (this
+    # fake adapter has no steer channel, so "unsupported" proves it got past the
+    # generation gate); no expectation skips the gate entirely
+    assert base.steer_live("m1:dev", "text", "run-old") == "unsupported"
+    assert base.steer_live("m1:dev", "text") == "unsupported"

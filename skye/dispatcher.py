@@ -161,7 +161,7 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
                     s, timeout=timeout,
                     resume_session_id=str(s.get("resume_session_id") or "") or None,
                     run_key=_key, on_event=on_progress, cancel_event=cancel_event,
-                    live_file=_live)
+                    live_file=_live, run_instance=context.get("run_instance"))
         else:
             run = lambda s: adapter.run(s, timeout=timeout)
         try:
