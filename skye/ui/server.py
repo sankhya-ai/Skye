@@ -491,7 +491,10 @@ MISSION_SETUP: dict = {
         "goal": {"type": "string", "required": True},
         "id": {"type": "string", "required": False, "note": "generated when absent"},
         "project": {"type": "string", "required": False,
-                    "note": "existing project id; supplies the default repo when repo is absent"},
+                    "note": "existing project id; supplies the repo scope - the project's "
+                            "folder is the one repo when it is a git repository, otherwise "
+                            "its immediate git-repository subfolders become the mission's "
+                            "declared repos (bounded discovery; an explicit repos map wins)"},
         "repo": {"type": "string", "required": False,
                  "note": "default repo path; steps without a repo use it. Absent repo + "
                          "present repos means every step must name a repo."},
@@ -531,18 +534,6 @@ def create_mission(state_dir: Path, spec: dict) -> str:
     import tempfile
     goal = str(spec.get("goal") or "").strip()
     steps = spec.get("steps") or []
-    if spec.get("plan"):
-        brief = PLANNER_BRIEF.replace("{goal}", goal)
-        declared_repos = spec.get("repos")
-        if isinstance(declared_repos, dict) and declared_repos:
-            from .. import repocontext
-            digests = repocontext.repo_digests(declared_repos)
-            brief += PLANNER_ROUTING_ADDENDUM.replace(
-                "{repos}", repocontext.format_for_brief(digests))
-        steps = [{"id": "plan", "role": str(spec.get("planner_role") or "pm"),
-                  "adapter": str(spec.get("adapter") or "root"), "goal": goal,
-                  "brief": brief, "gates": [],
-                  "budget": {"max_steps": 12}}]
     project_id = str(spec.get("project") or "").strip()
     repo = str(spec.get("repo") or "").strip()
     if project_id:
@@ -553,6 +544,47 @@ def create_mission(state_dir: Path, spec: dict) -> str:
     repos = spec.get("repos")
     if repos is not None and not isinstance(repos, dict):
         raise MissionError("repos must be an object of name -> absolute path")
+    repos_source = ""
+    if not repos and project_id and repo:
+        # A project without an explicit repos map IS the declared scope: discover the repos
+        # inside its folder (the folder itself when it is a git repository, else its
+        # immediate git-repository subfolders) so the owner never hand-labels
+        # backend/frontend. Bounded to the declared folder - no filesystem scan. An
+        # explicit repos map always wins over discovery.
+        from .. import repocontext
+        discovery = repocontext.discover_repos(repo)
+        if discovery.get("error"):
+            raise MissionError(f"project '{project_id}': {discovery['error']}")
+        if not discovery["root_is_repo"] and discovery["repos"]:
+            repos = discovery["repos"]
+            # The scope folder is a container, not a repo: no guessed default repo, every
+            # step must name one of the discovered repos.
+            repo = ""
+            repos_source = (f"discovered in project '{project_id}' folder "
+                            f"({len(repos)} git repos, {discovery['skipped']} non-repo "
+                            f"subfolders skipped"
+                            + (f", overflow not included: "
+                               f"{', '.join(discovery['overflow'])}"
+                               if discovery["overflow"] else "") + ")")
+    # (Discovery finding no repos changes nothing: the project path stays the default
+    # repo exactly as before - the workspace layer owns the fail-closed non-git verdict.)
+    if spec.get("plan"):
+        brief = PLANNER_BRIEF.replace("{goal}", goal)
+        if isinstance(repos, dict) and repos:
+            from .. import repocontext
+            digests = repocontext.repo_digests(repos)
+            brief += PLANNER_ROUTING_ADDENDUM.replace(
+                "{repos}", repocontext.format_for_brief(digests))
+        plan_step = {"id": "plan", "role": str(spec.get("planner_role") or "pm"),
+                     "adapter": str(spec.get("adapter") or "root"), "goal": goal,
+                     "brief": brief, "gates": [],
+                     "budget": {"max_steps": 12}}
+        if isinstance(repos, dict) and repos:
+            # Every step must name a declared repo - the planner included. It does no repo
+            # work itself (its routing context arrives in the brief), so its session runs
+            # against the first declared repo, deterministically.
+            plan_step["repo"] = sorted(repos)[0]
+        steps = [plan_step]
     mission_id = str(spec.get("id") or "").strip() or f"mission-{secrets.token_hex(4)}"
     # With a repos map and no default repo, every step must name one of the declared repos;
     # load_mission enforces that and rejects bad names/duplicates/aliasing - the same
@@ -562,6 +594,8 @@ def create_mission(state_dir: Path, spec: dict) -> str:
     mission = {"id": mission_id, "goal": goal, "repo": default_repo, "steps": steps}
     if repos:
         mission["repos"] = {str(n): str(p) for n, p in repos.items()}
+    if repos_source:
+        mission["repos_source"] = repos_source
     if project_id:
         mission["project"] = project_id
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
