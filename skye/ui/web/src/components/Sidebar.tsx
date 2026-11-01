@@ -140,12 +140,12 @@ export function Sidebar({
             placeholder="repo path (must exist)"
             className="w-full rounded-sm border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
           />
-          {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
           <button
             type="button"
             onClick={() => void addProject()}
             disabled={!name.trim() || !repo.trim()}
-            className="rounded-sm bg-foreground px-2 py-1 text-[11px] font-medium text-background disabled:opacity-30"
+            className="rounded-sm bg-foreground px-2 py-1 text-xs font-medium text-background disabled:opacity-30"
           >
             Add project
           </button>
@@ -183,7 +183,7 @@ export function Sidebar({
           </p>
         ) : null}
       </div>
-      <p className="border-t border-border px-3 py-2 text-[11px] leading-4 text-muted-foreground">
+      <p className="border-t border-border px-3 py-2 text-xs leading-4 text-muted-foreground">
         Local only. Runs are journaled; interrupted work waits for an explicit operator decision.
       </p>
     </aside>

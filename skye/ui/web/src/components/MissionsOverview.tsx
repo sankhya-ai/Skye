@@ -45,7 +45,7 @@ function MissionRowButton({ row, onOpen }: { row: MissionRow; onOpen: () => void
             {row.goal || row.id}
           </span>
         </span>
-        <span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground/70">
+        <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground/70">
           {row.id}
         </span>
         <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">

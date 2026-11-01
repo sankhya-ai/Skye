@@ -146,7 +146,7 @@ export function BacklogView() {
                     </p>
                   ) : null}
                   {f.verification?.repo_revision ? (
-                    <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                    <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                       replayed against {f.verification.repo_revision}
                     </p>
                   ) : null}

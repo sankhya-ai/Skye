@@ -50,7 +50,7 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
           <button
             type="button"
             onClick={toggle}
-            className="ml-auto inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            className="ml-auto inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
           >
             {loading ? (
               <Loader2 className="size-3 animate-spin" />
