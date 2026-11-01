@@ -20,6 +20,8 @@
   skye backlog reopen <id> --evidence TEXT [--label L]...   reopen delivered work with evidence
   skye backlog comment <id> --as <actor> <message>          add to a ticket's thread
   skye backlog labels <id> <label>...                       replace a ticket's labels
+  skye issues report <ticket-id> --kind K [--label L]... <summary>
+                                 report a bug ON a ticket (delivered work reopens with evidence)
 """
 
 from __future__ import annotations
@@ -260,6 +262,35 @@ def _cmd_backlog(args: list[str]) -> int:
     return 2
 
 
+def _cmd_issues(args: list[str]) -> int:
+    from . import issues
+    if not args or args[0] != "report" or len(args) < 2:
+        print("usage: skye issues report <ticket-id> --kind K [--label L]... [--detail D] "
+              "[--as actor] <summary>", file=sys.stderr)
+        return 2
+    feature_id = args[1]
+    kind = _flag(args, "--kind", "user-report") or "user-report"
+    labels = [args[i + 1] for i, a in enumerate(args) if a == "--label" and i + 1 < len(args)]
+    # Positional words AFTER the id form the summary; flag values are never words.
+    flag_values = {kind, _flag(args, "--detail"), _flag(args, "--as", "pm"), *labels}
+    summary = " ".join(a for a in args[2:]
+                       if not a.startswith("--") and a not in flag_values)
+    try:
+        issue, action = issues.report_for_feature(
+            feature_id, kind, summary, detail=_flag(args, "--detail"),
+            labels=labels, actor=_flag(args, "--as", "pm") or "pm")
+    except Exception as error:
+        print(f"cannot report: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps({"reported": True, "issue": issue["id"], "action": action,
+                      "note": {"reopened": "the delivered ticket reopened with your evidence; "
+                                           "the owner decides the repair",
+                               "sent-back": "the unfinished work was sent back with your evidence",
+                               "attached": "the bug is attached to the queued work as evidence"}.get(action, action)},
+                     indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
@@ -298,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_agents(rest)
     if command == "backlog":
         return _cmd_backlog(rest)
+    if command == "issues":
+        return _cmd_issues(rest)
     print(USAGE, file=sys.stderr)
     return 2
 
