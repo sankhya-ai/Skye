@@ -6,6 +6,7 @@ operator explicitly redispatches fresh."""
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import urllib.error
@@ -843,3 +844,74 @@ def test_two_simultaneous_live_steers_exactly_one_accepted(ui_server, tmp_path,
     assert codes == [200, 409], outcomes
     loser = next(body for status, body in outcomes if status == 409)
     assert loser["preserved_text"] == "also add logging"
+
+
+def test_marker_takeover_refused_while_owner_alive(ui_server, tmp_path, monkeypatch):
+    # No age-only takeover: a claim with no journaled intent and a LIVE owner blocks
+    # indefinitely (fail closed) - only a proven-dead owner releases it.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    marker = state_dir / "missions" / "m1" / "steer-pending-dev"
+    marker.write_text(json.dumps({"follow_id": "f-old", "owner_pid": os.getpid(),
+                                  "run_key": "m1:dev", "created": time.time() - 9999}))
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "also add logging"})
+    assert status == 409 and "in flight" in body["error"]
+    assert body["preserved_text"] == "also add logging"
+    assert marker.exists()  # untouched
+
+    # a DEAD owner cannot journal or send later: takeover is safe
+    marker.write_text(json.dumps({"follow_id": "f-old", "owner_pid": 2**22 + 424242,
+                                  "run_key": "m1:dev", "created": time.time() - 9999}))
+    monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "also add logging"})
+    assert status == 200 and body["delivery"] == "submitted", body
+    claim = json.loads(marker.read_text())
+    assert claim["follow_id"] != "f-old" and claim["owner_pid"] == os.getpid()
+
+
+def test_unrelated_step_activity_never_releases_a_marker(ui_server, tmp_path,
+                                                         monkeypatch):
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
+        json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
+                    "run_key": "m1:dev", "created": time.time()}))
+    # another step's terminal + ack, plus a dev ack for DIFFERENT text: none resolve f1
+    journal.append("qa", "settled", status="done", reason="", output="x",
+                   gates=[], worker_job="", role="reviewer")
+    journal.append("qa", "worker-progress", kind="steer-ack", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-ack", text="different text")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "more work"})
+    assert status == 409 and "awaiting its provider receipt" in body["error"]
+
+
+def test_failed_steer_never_deletes_a_reclaimed_marker(ui_server, tmp_path,
+                                                       monkeypatch):
+    # The losing handler's cleanup is conditional: it must not remove a marker that a
+    # NEW owner reclaimed mid-flight.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    marker = state_dir / "missions" / "m1" / "steer-pending-dev"
+
+    def _steal_then_fail(*_a):
+        marker.write_text(json.dumps({"follow_id": "f-new-owner",
+                                      "owner_pid": os.getpid(),
+                                      "run_key": "m1:dev",
+                                      "created": time.time()}))
+        return "exiting"
+
+    monkeypatch.setattr("skye.adapters.base.steer_live", _steal_then_fail)
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "also add logging"})
+    assert status != 200
+    assert json.loads(marker.read_text())["follow_id"] == "f-new-owner"

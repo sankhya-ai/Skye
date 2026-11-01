@@ -111,6 +111,10 @@ class ClaudeCodeAdapter(SessionAdapter):
             # carry list content; only a plain string is an echoed user message.
             content = (data.get("message") or {}).get("content")
             if isinstance(content, str) and content:
+                # --replay-user-messages: the CLI's own acknowledgment that it took
+                # the stdin frame INTO THE SESSION. It does not prove the model acted
+                # on the text - that is the subsequent assistant output, separately
+                # visible in the stream.
                 return [{"kind": "steer-ack", "text": content[:300]}]
             return []
         # tool results return as user messages; they are not surfaced as worker text
