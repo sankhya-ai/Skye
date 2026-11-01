@@ -1139,6 +1139,115 @@ with sync_playwright() as pw:
           "PASS" if honest_auth else "FAIL")
     shot(page, out_dir / "ui-settings-adapters.png")
     browser.close()
+
+# --- project-folder discovery: the owner points a project at a folder, Skye finds the ---
+# --- repos inside itself; no manual repo naming is ever the final answer. ---
+apps_dir = demo / "apps"
+apps_dir.mkdir()
+_git_repo(apps_dir / "backend")
+_git_repo(apps_dir / "frontend")
+# a non-repo child the discovery must leave out and report, not silently skip
+(apps_dir / "notes").mkdir()
+disc_project = projects.add({"name": "Apps", "repo": str(apps_dir)})
+
+def _preview(pid):
+    return json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/projects/{pid}/repos",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+
+prev = _preview(disc_project["id"])
+ddisc = prev.get("discovery", {})
+# ordinary non-repo folders are counted under "skipped"; "invalid" names a folder whose
+# .git marker is broken - distinct honest exclusions.
+disc_map_ok = (not ddisc.get("error") and ddisc.get("root_exists")
+               and not ddisc.get("root_is_repo")
+               and set(ddisc.get("repos", {})) == {"backend", "frontend"}
+               and ddisc.get("skipped") == 1)
+print("DISCOVERY preview finds the project folder's repos by name, non-repo left out:",
+      "PASS" if disc_map_ok else f"FAIL {ddisc}")
+# a folder with no repos is an explicit outcome, not an error and not a silent empty
+empty_dir = demo / "empty-proj"
+empty_dir.mkdir()
+empty_proj = projects.add({"name": "Empty", "repo": str(empty_dir)})
+prev_e = _preview(empty_proj["id"])["discovery"]
+zero_ok = (not prev_e.get("error") and not prev_e.get("repos")
+           and not prev_e.get("root_is_repo"))
+print("DISCOVERY zero-repo folder reports empty scope, not an error:",
+      "PASS" if zero_ok else f"FAIL {prev_e}")
+
+with sync_playwright() as pw:
+    browser = pw.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(ui_url + "#/")
+    page.wait_for_timeout(2000)
+    # selecting the project shows the read-only scope preview before anything is created
+    page.locator("select").select_option(label="Apps")
+    page.wait_for_selector("[data-discovery-preview]", timeout=10000)
+    prev_text = page.locator("[data-discovery-preview]").inner_text()
+    prev_ok = ("2 repositories found" in prev_text and "backend" in prev_text
+               and "frontend" in prev_text and "1 folder without git" in prev_text)
+    print("DISCOVERY composer preview names the found repos and the exclusions:",
+          "PASS" if prev_ok else f"FAIL {prev_text!r}")
+    page.wait_for_timeout(400)
+    shot(page, out_dir / "ui-discovery-preview.png")
+    page.locator("[data-discovery-preview]").screenshot(
+        path=str(out_dir / "ui-discovery-preview-crop.png"))
+    # submit with no declared repos: the engine discovers the folder's repos itself
+    disc_plan = {"verdict": "pass", "reasons": [], "propose_steps": [
+        {"id": "api-work", "role": "developer", "adapter": "root",
+         "goal": "change the API", "repo": "backend",
+         "repo_reason": "the API code lives in backend",
+         "gates": [], "budget": {"max_steps": 4}},
+        {"id": "web-work", "role": "developer", "adapter": "root",
+         "goal": "update the web UI", "repo": "frontend",
+         "repo_reason": "the web client lives in frontend",
+         "gates": [], "budget": {"max_steps": 4}}]}
+    disc_script = demo / "discover-script.json"
+    disc_script.write_text(json.dumps([
+        "tool_call: " + json.dumps({"id": "r", "name": "ReadFile",
+                                    "arguments": json.dumps({"path": "README.md"})}),
+        "text: Here is the plan. " + json.dumps(disc_plan)]))
+    os.environ["TURA_CODE_SCRIPTED_ECHO"] = str(disc_script)
+    page.locator('textarea[placeholder="Describe the goal..."]').fill(
+        "Discovery probe: folder of repos, no manual naming")
+    page.locator('button[aria-label="Start mission"]').click()
+    page.wait_for_timeout(3000)
+    disc_id = page.url.rsplit("/", 1)[-1]
+    deadline = time.monotonic() + 60
+    dg = {}
+    while time.monotonic() < deadline:
+        dg = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{ui_port}/api/missions/{disc_id}/graph",
+            headers={"X-Skye-Token": token}), timeout=30).read())
+        if dg.get("meta", {}).get("status") in ("done", "failed", "needs-owner", "gate-failed"):
+            break
+        time.sleep(1)
+    os.environ["TURA_CODE_SCRIPTED_ECHO"] = main_script
+    dprop = {n["id"]: n for n in dg.get("nodes", []) if n.get("origin") == "proposed"}
+    d_routed = (dprop.get("api-work", {}).get("repo") == "backend"
+                and dprop.get("web-work", {}).get("repo") == "frontend"
+                and all(dprop.get(s, {}).get("state") == "done"
+                        for s in ("api-work", "web-work"))
+                and set(dg.get("meta", {}).get("repos", [])) == {"backend", "frontend"})
+    print("DISCOVERY auto start: discovered repos carry the routed proposed steps:",
+          "PASS" if dg.get("meta", {}).get("status") == "done" and d_routed else
+          f"FAIL status={dg.get('meta', {}).get('status')} "
+          f"nodes={ {k: (v.get('repo'), v.get('state')) for k, v in dprop.items()} }")
+    # the mission detail records where the repo map came from
+    ddetail = json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/missions/{disc_id}",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+    prov = ddetail.get("mission", {}).get("repos_source") or ""
+    prov_ok = "discovered" in prov
+    print("DISCOVERY mission records repo provenance:", "PASS" if prov_ok else f"FAIL {prov!r}")
+    page.wait_for_timeout(1500)
+    prov_ui = (page.locator("text=Repositories discovered automatically in project Apps's folder").count()
+               and not page.locator("text=proj-").count())
+    print("DISCOVERY detail view shows the discovery provenance:",
+          "PASS" if prov_ui else "FAIL")
+    shot(page, out_dir / "ui-discovery-detail.png")
+    browser.close()
+
 policy_now.pop("workspaces")
 (demo / "skye.policy.json").write_text(json.dumps(policy_now))
 

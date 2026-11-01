@@ -6,6 +6,8 @@ import {
   ackRecovery,
   resumeMission,
   type MissionDetail,
+  getProjects,
+  type Project,
 } from "../api";
 import { Button } from "./ui/Button";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
@@ -63,6 +65,8 @@ const EVENT_LABEL: Record<string, string> = {
 
 export function MissionDetailView({ id, onBack }: { id: string; onBack: () => void }) {
   const [detail, setDetail] = useState<MissionDetail | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  useEffect(() => { getProjects().then((d) => setProjects(d.projects)).catch(() => {}); }, []);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -210,6 +214,21 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
             </Button>
           )}
         </div>
+      ) : null}
+      {detail.mission.repos_source ? (
+        // Where the repo map came from - provenance the owner should never have to guess.
+        // The stored string names the project by id; the surface names it by its name.
+        <p className="text-xs text-muted-foreground/80">
+          {(() => {
+            const source = detail.mission.repos_source as string;
+            const pid = detail.mission.project;
+            const name = pid ? projects.find((p) => p.id === pid)?.name : undefined;
+            if (source.startsWith("discovered in project") && name) {
+              return <>Repositories discovered automatically in project {name}&apos;s folder.</>;
+            }
+            return <>Repositories {source}.</>;
+          })()}
+        </p>
       ) : null}
       {workspace?.mode === "multi-worktree" && workspace.repos ? (
         <div className="text-xs text-muted-foreground">

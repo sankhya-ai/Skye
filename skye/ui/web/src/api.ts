@@ -91,7 +91,7 @@ export type MissionDetail = {
   artifacts?: MissionArtifacts;
   workspace?: WorkspaceInfo;
   mission: { id: string; goal: string; steps: Array<Record<string, unknown>>;
-             repos?: Record<string, string> };
+             project?: string; repos?: Record<string, string>; repos_source?: string };
   status: { mission: string; status: string; steps: StepStatus[] };
   journal: JournalEntry[];
   dynamic_steps: Array<Record<string, unknown>>;
@@ -146,6 +146,26 @@ export type MissionGraph = {
   edges: { from: string; to: string; kind: string }[];
   timeline: Array<{ ts?: number; step?: string; event?: string; status?: string; reason?: string }>;
 };
+
+export type ProjectRepoDiscovery = {
+  project: string;
+  discovery: {
+    root: string;
+    root_exists: boolean;
+    root_is_repo: boolean;
+    root_marker_invalid?: boolean;
+    repos: Record<string, string>;
+    skipped: number;
+    overflow: string[];
+    outside_scope: string[];
+    inaccessible: string[];
+    invalid: string[];
+    error?: string;
+  };
+};
+
+export const getProjectRepos = (id: string) =>
+  api<ProjectRepoDiscovery>(`/api/projects/${encodeURIComponent(id)}/repos`);
 
 export const getMissionGraph = (id: string) =>
   api<MissionGraph>(`/api/missions/${encodeURIComponent(id)}/graph`);

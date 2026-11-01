@@ -13,6 +13,8 @@ import {
   type MissionRow,
   type MissionSetup,
   type Project,
+  getProjectRepos,
+  type ProjectRepoDiscovery,
 } from "../api";
 
 function HomeClock({ now }: { now: Date }) {
@@ -105,6 +107,7 @@ export function HomeView({
   const [error, setError] = useState<string | null>(null);
   const [features, setFeatures] = useState<FeatureRow[]>([]);
   const [setup, setSetup] = useState<MissionSetup | null>(null);
+  const [discovery, setDiscovery] = useState<ProjectRepoDiscovery["discovery"] | null>(null);
   const [repoRows, setRepoRows] = useState<Array<{ name: string; path: string }>>([]);
   const [defaultRepo, setDefaultRepo] = useState("");
 
@@ -123,6 +126,19 @@ export function HomeView({
   useEffect(() => {
     getMissionSetup().then(setSetup).catch(() => {});
   }, []);
+
+  // Read-only scope preview for a selected project: exactly which repositories a mission
+  // would start with, before anything is created. The preview grants no start authority -
+  // the mission is still created only when the owner submits.
+  useEffect(() => {
+    setDiscovery(null);
+    if (!project) return;
+    let live = true;
+    getProjectRepos(project)
+      .then((d) => { if (live) setDiscovery(d.discovery); })
+      .catch(() => { if (live) setDiscovery(null); });
+    return () => { live = false; };
+  }, [project]);
 
   // The composer never guesses a path: every repository is typed by the owner and validated
   // by the server's mission loader (duplicate realpaths, aliases and same-repo subdirectories
@@ -230,6 +246,49 @@ export function HomeView({
             </button>
           </div>
         </div>
+        {discovery ? (
+          <div data-discovery-preview className="mt-2 pl-4 text-xs text-muted-foreground">
+            {discovery.error ? (
+              <p>Can&apos;t inspect the project folder: {discovery.error}</p>
+            ) : discovery.root_is_repo ? (
+              <p>This project folder is one git repository - Skye works in it directly.</p>
+            ) : Object.keys(discovery.repos).length > 0 ? (
+              <p>
+                {Object.keys(discovery.repos).length === 1
+                  ? "1 repository found in this project: "
+                  : `${Object.keys(discovery.repos).length} repositories found in this project: `}
+                {Object.keys(discovery.repos).join(", ")}. Skye assigns each step to one
+                itself and shows why.
+              </p>
+            ) : (
+              <p>No git repositories found in this project folder.</p>
+            )}
+            {!discovery.error && (discovery.skipped > 0
+              || discovery.outside_scope.length > 0
+              || discovery.inaccessible.length > 0 || discovery.invalid.length > 0
+              || discovery.overflow.length > 0) ? (
+              <p className="mt-1 text-muted-foreground/80">
+                Left out:
+                {discovery.skipped > 0
+                  ? ` ${discovery.skipped} folder${discovery.skipped === 1 ? "" : "s"} without git`
+                  : ""}
+                {discovery.overflow.length > 0
+                  ? ` ${discovery.overflow.length} over the limit (${discovery.overflow.join(", ")})`
+                  : ""}
+                {discovery.outside_scope.length > 0
+                  ? ` outside the folder (${discovery.outside_scope.join(", ")})`
+                  : ""}
+                {discovery.inaccessible.length > 0
+                  ? ` unreadable (${discovery.inaccessible.join(", ")})`
+                  : ""}
+                {discovery.invalid.length > 0
+                  ? ` not a git repo (${discovery.invalid.join(", ")})`
+                  : ""}
+                .
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <details className="mt-2 pl-4 text-xs">
           <summary className="cursor-pointer text-muted-foreground/70 hover:text-foreground">
             Multiple repositories (monorepo or separate repos)
