@@ -134,6 +134,24 @@ export function Sidebar({
     .sort((a, b) => String(b.last_activity ?? "").localeCompare(String(a.last_activity ?? "")))
     .slice(0, 8);
 
+  // Same-goal runs (a ticket's first mission and its repair) must be distinguishable:
+  // number them oldest-first, only when a goal actually repeats.
+  const runNumber = (() => {
+    const byGoal = new Map<string, MissionRow[]>();
+    for (const m of missions) {
+      const key = m.goal || "";
+      byGoal.set(key, [...(byGoal.get(key) ?? []), m]);
+    }
+    const out = new Map<string, number>();
+    for (const group of byGoal.values()) {
+      if (group.length < 2) continue;
+      [...group]
+        .sort((a, b) => String(a.last_activity ?? "").localeCompare(String(b.last_activity ?? "")))
+        .forEach((m, i) => out.set(m.id, i + 1));
+    }
+    return out;
+  })();
+
   return (
     <aside className="fixed top-2 bottom-2 left-2 z-10 flex w-60 flex-col overflow-hidden rounded-md border border-border/60 glass-panel pt-[3px] max-sm:static max-sm:m-2 max-sm:w-auto">
       <div className="flex items-center justify-between pr-1.5">
@@ -235,6 +253,7 @@ export function Sidebar({
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{mission.goal || "Untitled mission"}</span>
                 <span className="block truncate text-xs text-muted-foreground">
+                  {runNumber.get(mission.id) ? `run ${runNumber.get(mission.id)} · ` : ""}
                   {chatStatus(mission)}
                   {mission.last_activity ? ` · ${formatRelative(mission.last_activity)}` : ""}
                 </span>
