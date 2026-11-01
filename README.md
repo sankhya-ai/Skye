@@ -6,7 +6,11 @@ builds it, reviews it and checks it, and stops to ask you before anything that n
 Skye runs on your machine and drives the coding agents you already use. It does not ship a model,
 resell tokens or download an agent for you.
 
-[Quick start](#quick-start) | [How it works](#how-it-works) | [Workers](#workers) | [Honest status](#honest-status) | [License](#license)
+[Quick start](#quick-start) | [How it works](#how-it-works) | [Workers](#workers) | [Screens](#screens) | [Honest status](#honest-status) | [License](#license)
+
+<p align="center">
+  <img src="docs/assets/readme/mission-done.webp" alt="A finished Skye mission: the workflow graph shows the plan and build steps done, and the changed-files list includes a poster preview the designer worker produced" width="100%">
+</p>
 
 ---
 
@@ -61,6 +65,34 @@ gates:        output contract, tests, reviewer verdict, journey check
 **Chamber** (vendored in `chamber/`) is the built-in coordination layer. Skye uses its relay to
 carry sealed team messages when you configure a line, and it stays optional for the engine, the
 journal, approvals and the UI.
+
+## Screens
+
+The local UI (`skye ui`), pictured on a scripted demo mission - no model calls, no cost.
+
+**Watch a mission run.** Steps report live, and you can follow up on the running step or stop it.
+
+<p align="center">
+  <img src="docs/assets/readme/mission-running.webp" alt="A live mission: the plan step is done, the build step is running, with links to follow up on the running step or stop the run" width="100%">
+</p>
+
+**Nothing outside your policy runs without you.** An out-of-policy step waits for a one-time approval tied to the exact contract.
+
+<p align="center">
+  <img src="docs/assets/readme/approval.webp" alt="A mission paused for approval: the plan step shows needs-you, and an approval card offers to approve this step once while the team discussion sits below" width="100%">
+</p>
+
+**Tickets remember.** Proposals, approvals, repairs and verified deliveries keep their thread and their evidence.
+
+<p align="center">
+  <img src="docs/assets/readme/backlog.webp" alt="The backlog: reopened and proposed tickets waiting on a decision, approved work ready to start, a verification failure with its replay evidence, and a delivered ticket resolved by a passing journey replay" width="100%">
+</p>
+
+**A team of roles that workers can extend.** Proposed specialists stay inactive until you promote them.
+
+<p align="center">
+  <img src="docs/assets/readme/agents.webp" alt="The agents screen: built-in roles with their tool lists, one worker-proposed security-auditor role marked needs-approval, and a form to add a new specialist" width="100%">
+</p>
 
 ## Quick start
 
