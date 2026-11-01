@@ -811,7 +811,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                     "adapter": step["adapter"]}
             if outcome.status == "cancelled" or outcome.resume_rejected:
                 event = "cancelled" if outcome.status == "cancelled" else "resume-rejected"
-                journal.append(target, event, reason=outcome.reason, role=step["role"])
+                journal.append(target, event, reason=outcome.reason,
+                               role=step["role"], run_instance=run_instance)
                 consumed_path.write_text(str(line_no + 1), "utf-8")
                 reason = (f"follow-up on step '{target}': {outcome.reason}")
                 emit(events.make_event("mission", {}, status="needs-owner", reason=reason,

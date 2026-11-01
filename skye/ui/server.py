@@ -1469,14 +1469,26 @@ class UiHandler(BaseHTTPRequestHandler):
                                     marker.unlink(missing_ok=True)
                                 journal.append(step, "follow-up-undelivered",
                                                follow_id=follow_id, reason=steered)
-                            except Exception:
+                            except Exception as send_error:
                                 if intent_journaled:
                                     # UNKNOWN state: the follow-up may have reached the
-                                    # worker. Preserve the claim AND the intent - the
-                                    # run scan pauses on it and later POSTs fail closed
-                                    # - never cleanup-and-retry into a duplicate.
-                                    pass
-                                elif _marker_owned(marker, follow_id):
+                                    # worker (a submitted-record failure AFTER a send,
+                                    # or a write/flush exception whose partial
+                                    # delivery cannot be ruled out). Preserve the claim
+                                    # AND the intent - the run scan pauses on it and
+                                    # later POSTs fail closed - never cleanup-and-retry
+                                    # into a duplicate. The caller gets an explicit
+                                    # response, not a dropped connection.
+                                    return self._json(
+                                        {"error": "the follow-up's delivery state is "
+                                                  f"UNKNOWN ({str(send_error)[:200]}): "
+                                                  "it may or may not have reached the "
+                                                  "worker. The claim and intent are "
+                                                  "preserved; further input to this "
+                                                  "step is blocked until the state is "
+                                                  "resolved - inspect the step",
+                                         "preserved_text": text}, 500)
+                                if _marker_owned(marker, follow_id):
                                     # pre-intent failure: nothing exists but the claim;
                                     # release OUR marker so the step is not wedged.
                                     marker.unlink(missing_ok=True)

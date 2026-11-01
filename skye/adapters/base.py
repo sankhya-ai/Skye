@@ -352,12 +352,15 @@ class SessionAdapter(Adapter):
             # in a pipe nobody consumes - report it undelivered instead of pretending.
             if entry["closing"] or proc.poll() is not None:
                 return "exiting"
-            try:
-                assert proc.stdin is not None
-                proc.stdin.write(frame)
-                proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                return "exiting"
+            # The pre-write checks above are the ONLY known-non-delivery signal.
+            # Once a write is ATTEMPTED, an exception leaves delivery UNKNOWN: a
+            # buffered write can be partially flushed before failing, and a failed
+            # flush can follow a fully accepted one. Never infer a partial write
+            # delivered zero bytes - propagate so the caller retains its claim and
+            # blocks retries instead of doubling the frame.
+            assert proc.stdin is not None
+            proc.stdin.write(frame)
+            proc.stdin.flush()
             entry["steers"] += 1
         return "steered"
 

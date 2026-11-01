@@ -234,11 +234,12 @@ class CodexAdapter(SessionAdapter):
                 "params": {"threadId": rpc["thread_id"],
                            "input": [{"type": "text", "text": text}],
                            "expectedTurnId": rpc["turn_id"]}}) + "\n"
-            try:
-                proc.stdin.write(frame)
-                proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                return "exiting"
+            # Same boundary as the base adapter: the pre-write checks are the only
+            # known-non-delivery signal; a write/flush exception means delivery is
+            # UNKNOWN (the frame may be partially or fully in the process) - propagate
+            # it so the caller retains its claim instead of retrying into a duplicate.
+            proc.stdin.write(frame)
+            proc.stdin.flush()
         return "steered"  # SUBMITTED; the provider's steer response is the receipt
 
     @staticmethod

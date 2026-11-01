@@ -992,15 +992,11 @@ def test_post_intent_exception_preserves_claim_and_blocks_retry(ui_server, tmp_p
 
     monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
     monkeypatch.setattr(_m.Journal, "append", _flaky)
-    import http.client
-    import urllib.error
-    try:
-        _req(url, "/api/missions/m1/follow-up", method="POST",
-             body={"step": "dev", "text": "also add logging"})
-        assert False, "the handler must surface the failure, not swallow it"
-    except (urllib.error.URLError, urllib.error.HTTPError,
-            http.client.RemoteDisconnected, ConnectionError, OSError):
-        pass  # the write failure surfaced as a dropped/failed response - not a 200
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "also add logging"})
+    # an explicit 500 with the UNKNOWN state - never a 200, never a swallowed error
+    assert status == 500 and "UNKNOWN" in body["error"], (status, body)
+    assert body["preserved_text"] == "also add logging"
     monkeypatch.setattr(_m.Journal, "append", original)
     # claim + intent preserved; a retry fails CLOSED (unknown submission state)
     assert marker.exists()
@@ -1230,3 +1226,102 @@ def test_stale_registry_generation_rejected_at_send(monkeypatch):
     # generation gate); no expectation skips the gate entirely
     assert base.steer_live("m1:dev", "text", "run-old") == "unsupported"
     assert base.steer_live("m1:dev", "text") == "unsupported"
+
+
+@pytest.mark.parametrize("adapter_name", ["claude", "codex"])
+def test_accepted_frame_then_flush_failure_stays_unknown(ui_server, tmp_path,
+                                                         monkeypatch, adapter_name):
+    # Both adapters, real steer_into: the write is ACCEPTED into the pipe but the
+    # flush fails - delivery is UNKNOWN, never "exiting". The handler answers an
+    # explicit 500, retains the claim + intent, and a retry is blocked (409) with
+    # NO second frame: a partial/accepted write is never inferred as zero delivery.
+    from skye.adapters import base
+    from skye.adapters.claude_code import ClaudeCodeAdapter
+    from skye.adapters.codex import CodexAdapter
+    adapter = ClaudeCodeAdapter() if adapter_name == "claude" else CodexAdapter()
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions",
+                        {"m1": {"running": True, "run_instance": "current"}})
+
+    class _Pipe:
+        def __init__(self):
+            self.writes: list = []
+
+        def write(self, frame):
+            self.writes.append(frame)
+            return len(frame)
+
+        def flush(self):
+            raise OSError("flush failure after write accepted")
+
+    class _Proc:
+        def __init__(self):
+            self.stdin = _Pipe()
+
+        def poll(self):
+            return None
+
+    proc = _Proc()
+    entry = {"proc": proc, "adapter": adapter, "run_instance": "current",
+             "closing": False, "steers": 0, "lock": threading.Lock(),
+             "rpc": {"thread_id": "t", "turn_id": "turn", "seq": 0}}
+    monkeypatch.setattr(base, "_LIVE", {"m1:dev": entry})
+    first = _req(url, "/api/missions/m1/follow-up", method="POST",
+                 body={"step": "dev", "text": "input"})
+    assert first[0] == 500 and "UNKNOWN" in first[1]["error"], first
+    second = _req(url, "/api/missions/m1/follow-up", method="POST",
+                  body={"step": "dev", "text": "input"})
+    assert second[0] == 409, second
+    assert len(proc.stdin.writes) == 1, proc.stdin.writes  # exactly ONE frame ever
+    # the claim and the intent are preserved for inspection/resolution
+    assert (state_dir / "missions" / "m1" / "steer-pending-dev").exists()
+    intents = [e for e in _journal(state_dir).entries()
+               if e.get("event") == "follow-up" and e.get("state") == "intent"]
+    assert len(intents) == 1
+    # and the engine scan pauses on the unresolved intent instead of guessing
+    mission = _mission(tmp_path, _one_step())
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner", outcome.status
+
+
+def test_steer_write_boundary_classification(monkeypatch):
+    # The adapter-level contract, directly: pre-write death is a KNOWN
+    # non-delivery ("exiting"); ANY write/flush exception propagates as
+    # delivery-UNKNOWN. A partial write is never inferred as zero bytes delivered.
+    from skye.adapters import base
+    from skye.adapters.claude_code import ClaudeCodeAdapter
+    adapter = ClaudeCodeAdapter()
+
+    class _DeadProc:
+        stdin = None
+
+        def poll(self):
+            return 1
+
+    dead = {"proc": _DeadProc(), "adapter": adapter, "closing": False,
+            "steers": 0, "lock": threading.Lock()}
+    monkeypatch.setattr(base, "_LIVE", {"m1:dev": dead})
+    assert base.steer_live("m1:dev", "text") == "exiting"  # known: nobody read it
+
+    class _BrokenPipe:
+        def write(self, frame):
+            raise BrokenPipeError("gone")
+
+        def flush(self):
+            pass
+
+    class _DyingProc:
+        stdin = _BrokenPipe()
+
+        def poll(self):
+            return None  # alive at the pre-write check, dead by the write
+
+    dying = {"proc": _DyingProc(), "adapter": adapter, "closing": False,
+             "steers": 0, "lock": threading.Lock()}
+    monkeypatch.setattr(base, "_LIVE", {"m1:dev": dying})
+    try:
+        base.steer_live("m1:dev", "text")
+        assert False, "a write exception must propagate, never read as undelivered"
+    except BrokenPipeError:
+        pass
