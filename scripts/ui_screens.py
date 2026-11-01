@@ -855,6 +855,16 @@ with sync_playwright() as pw:
     resolved = page.locator("text=resume when ready").count()
     print("MULTI ack->reload resolves pending:", "PASS" if resolved and not still_pending else "FAIL")
     page.screenshot(path=str(out_dir / "ui-recovery-multi-acked.png"), full_page=True)
+    nctx = browser.new_context(viewport={"width": 430, "height": 800})
+    npage = nctx.new_page()
+    npage.goto(ui_url + "#/mission/multi-recovery")
+    npage.wait_for_timeout(2500)
+    overflow = npage.evaluate("document.documentElement.scrollWidth > window.innerWidth")
+    ncard = npage.locator("text=Workspace recovery").count()
+    print("MULTI narrow 430px: no horizontal overflow, recovery card legible:",
+          "PASS" if ncard and not overflow else "FAIL")
+    npage.screenshot(path=str(out_dir / "ui-recovery-multi-narrow.png"), full_page=True)
+    nctx.close()
     browser.close()
 
 print("mission:", mission_id, final)

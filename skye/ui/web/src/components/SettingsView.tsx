@@ -197,6 +197,10 @@ export function SettingsView() {
               </button>
             </div>
           ))}
+          <p className="text-xs text-muted-foreground">
+            Specialists run your own tools: claude-code and codex must be installed and
+            signed in on this machine, or the step fails when dispatched.
+          </p>
           <button
             type="button"
             onClick={() => setRules([...rules, { adapter: "root", role: "developer" }])}
