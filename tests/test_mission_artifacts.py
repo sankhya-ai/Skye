@@ -54,3 +54,39 @@ def test_mission_artifacts_full_diff(tmp_path):
     out = mission_artifacts(tmp_path)
     assert out["complete"] is True
     assert out["added"] == ["c.py"] and out["modified"] == ["b.py"] and out["deleted"] == []
+
+
+def _mission_dir(tmp_path, repo):
+    import json as _json
+    mdir = tmp_path / "state" / "missions" / "m1"
+    mdir.mkdir(parents=True)
+    (mdir / "artifacts.json").write_text(_json.dumps({
+        "repo": str(repo), "start": {}, "start_truncated": False,
+        "end": {"poster.svg": "1", "app.py": "2", "notes.txt": "3"}, "end_truncated": False}))
+    return tmp_path / "state"
+
+
+def test_artifact_file_serves_recorded_svg(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write(repo, "poster.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>")
+    state = _mission_dir(tmp_path, repo)
+    from skye.ui.server import artifact_file
+    data, content_type = artifact_file(state, "m1", "poster.svg")
+    assert content_type == "image/svg+xml" and data.startswith(b"<svg")
+
+
+def test_artifact_file_refuses_unrecorded_and_unpreviewable(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write(repo, "app.py", "x = 1\n")       # recorded but not previewable
+    _write(repo, "secret.env", "TOKEN=x\n")  # previewable-looking target outside the diff
+    state = _mission_dir(tmp_path, repo)
+    from skye.ui.server import artifact_file
+    import pytest
+    with pytest.raises(KeyError):
+        artifact_file(state, "m1", "app.py")          # not a preview type
+    with pytest.raises(KeyError):
+        artifact_file(state, "m1", "secret.env")      # not in the recorded diff
+    with pytest.raises(KeyError):
+        artifact_file(state, "m1", "../outside.svg")  # traversal never reaches the repo check

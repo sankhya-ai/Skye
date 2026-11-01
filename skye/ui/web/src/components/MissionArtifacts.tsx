@@ -1,19 +1,79 @@
-import { FilePlus2, FileDiff, FileMinus2 } from "lucide-react";
-import type { MissionArtifacts as Artifacts } from "../api";
+import { Eye, EyeOff, FileDiff, FileMinus2, FilePlus2, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { getArtifactFileUrl, type MissionArtifacts as Artifacts } from "../api";
 import { Badge } from "./ui/Badge";
 
 // Files a mission actually changed, diffed from the start/end repo manifests the engine
-// records (never parsed from worker output). Shown product-first: Added/Modified/Deleted.
-function Row({ icon, path }: { icon: React.ReactNode; path: string }) {
+// records (never parsed from worker output). Image artifacts preview inline, loaded from
+// the confined artifact endpoint (only recorded changed paths are served).
+
+const PREVIEWABLE = new Set([".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+function previewable(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  return dot > 0 && PREVIEWABLE.has(path.slice(dot).toLowerCase());
+}
+
+function Row({ missionId, path, icon }: { missionId: string; path: string; icon: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const canPreview = previewable(path);
+
+  useEffect(() => {
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [url]);
+
+  const toggle = async () => {
+    if (!canPreview) return;
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      if (!url) setUrl(await getArtifactFileUrl(missionId, path));
+      setOpen(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="flex items-center gap-2 py-1">
-      {icon}
-      <span className="truncate font-mono text-xs text-foreground/90">{path}</span>
+    <div>
+      <div className="flex items-center gap-2 py-1">
+        {icon}
+        <span className="truncate font-mono text-xs text-foreground/90">{path}</span>
+        {canPreview ? (
+          <button
+            type="button"
+            onClick={toggle}
+            className="ml-auto inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          >
+            {loading ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : open ? (
+              <EyeOff className="size-3" />
+            ) : (
+              <Eye className="size-3" />
+            )}
+            {open ? "Hide" : "Preview"}
+          </button>
+        ) : null}
+      </div>
+      {open && url ? (
+        <div className="mb-2 ml-5 rounded-md border border-border bg-background p-2">
+          <img src={url} alt={path} className="h-auto max-h-96 w-full rounded-sm object-contain object-left" />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function Group({ label, paths, overflow, icon }: {
+function Group({ missionId, label, paths, overflow, icon }: {
+  missionId: string;
   label: string;
   paths: string[];
   overflow?: number;
@@ -26,7 +86,7 @@ function Group({ label, paths, overflow, icon }: {
         {label} ({paths.length + (overflow ?? 0)})
       </p>
       {paths.map((path) => (
-        <Row key={path} path={path} icon={icon} />
+        <Row key={path} missionId={missionId} path={path} icon={icon} />
       ))}
       {overflow ? (
         <p className="py-1 text-xs text-muted-foreground">and {overflow} more</p>
@@ -35,7 +95,10 @@ function Group({ label, paths, overflow, icon }: {
   );
 }
 
-export function MissionArtifactsPanel({ artifacts }: { artifacts?: Artifacts }) {
+export function MissionArtifactsPanel({ missionId, artifacts }: {
+  missionId: string;
+  artifacts?: Artifacts;
+}) {
   if (!artifacts?.recorded) {
     return (
       <div className="rounded-md border border-border bg-card p-4">
@@ -76,11 +139,11 @@ export function MissionArtifactsPanel({ artifacts }: { artifacts?: Artifacts }) 
         </p>
       ) : (
         <div>
-          <Group label="Added" paths={added} overflow={artifacts.added_overflow}
+          <Group missionId={missionId} label="Added" paths={added} overflow={artifacts.added_overflow}
                  icon={<FilePlus2 className="size-3.5 shrink-0 text-success" />} />
-          <Group label="Modified" paths={modified} overflow={artifacts.modified_overflow}
+          <Group missionId={missionId} label="Modified" paths={modified} overflow={artifacts.modified_overflow}
                  icon={<FileDiff className="size-3.5 shrink-0 text-info" />} />
-          <Group label="Deleted" paths={deleted} overflow={artifacts.deleted_overflow}
+          <Group missionId={missionId} label="Deleted" paths={deleted} overflow={artifacts.deleted_overflow}
                  icon={<FileMinus2 className="size-3.5 shrink-0 text-destructive" />} />
         </div>
       )}

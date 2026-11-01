@@ -78,6 +78,35 @@ def mission_artifacts(mission_dir: Path) -> dict:
     return out
 
 
+ARTIFACT_FILE_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+                       ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+                       ".md": "text/markdown; charset=utf-8"}
+ARTIFACT_FILE_LIMIT = 5 * 1024 * 1024
+
+
+def artifact_file(state_dir: Path, mission_id: str, rel_path: str) -> tuple[bytes, str]:
+    """Serve one file the mission actually changed, for inline preview. Strictly confined:
+    the path must be in the mission's recorded added/modified diff (never an arbitrary
+    path), must resolve inside the mission's repo, and must be a previewable type."""
+    mission_dir = state_dir / "missions" / mission_id
+    artifacts = mission_artifacts(mission_dir)
+    if not artifacts.get("complete"):
+        raise KeyError(rel_path)
+    changed = set(artifacts.get("added") or []) | set(artifacts.get("modified") or [])
+    if rel_path not in changed:
+        raise KeyError(rel_path)
+    suffix = Path(rel_path).suffix.lower()
+    if suffix not in ARTIFACT_FILE_TYPES:
+        raise KeyError(rel_path)
+    root = Path(artifacts.get("repo") or "").resolve()
+    target = (root / rel_path).resolve()
+    if root not in target.parents or not target.is_file():
+        raise KeyError(rel_path)
+    if target.stat().st_size > ARTIFACT_FILE_LIMIT:
+        raise ValueError("file too large to preview")
+    return target.read_bytes(), ARTIFACT_FILE_TYPES[suffix]
+
+
 def mission_payload(state_dir: Path, mission_id: str) -> dict:
     """Live detail for one mission: definition snapshot, journal trace, pending approvals."""
     mission_dir = state_dir / "missions" / mission_id
@@ -368,13 +397,25 @@ class UiHandler(BaseHTTPRequestHandler):
                     policy = Policy.load(path)
                     return self._json({"raw": raw, "path": str(path.resolve()),
                                        "max_concurrent": policy.max_concurrent})
+                if url.path.startswith("/api/mission-artifact/"):
+                    mission_id = url.path.rsplit("/", 1)[-1]
+                    rel_path = (parse_qs(url.query).get("path") or [""])[0]
+                    data, content_type = artifact_file(self.state_dir, mission_id, rel_path)
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if url.path.startswith("/api/missions/"):
                     mission_id = url.path.rsplit("/", 1)[-1]
                     payload = mission_payload(self.state_dir, mission_id)
                     payload["live"] = _live_missions.get(mission_id, {})
                     return self._json(payload)
             except KeyError:
-                return self._json({"error": "unknown mission"}, 404)
+                return self._json({"error": "unknown mission or artifact"}, 404)
+            except ValueError as error:
+                return self._json({"error": str(error)}, 400)
             return self._json({"error": "not found"}, 404)
         # Static SPA assets carry no state, so they are served without the token (the browser
         # fetches them with no header and no query token). Every /api/ call still requires it.

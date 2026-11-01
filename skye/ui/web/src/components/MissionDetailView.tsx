@@ -120,7 +120,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         onChanged={refresh}
         onRedispatch={(step) => act(() => redispatchStep(id, step))}
       />
-      <MissionArtifactsPanel artifacts={detail.artifacts} />
+      <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} />
       <details className="rounded-md border border-border bg-card p-4">
         <summary className="cursor-pointer text-sm font-medium text-foreground">
           Inspector - raw journal ({detail.journal.length} events)

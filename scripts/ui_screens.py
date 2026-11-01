@@ -28,9 +28,27 @@ plan = {"verdict": "pass", "reasons": [],
                            "goal": "build the cart widget", "brief": "Implement the cart widget",
                            "gates": [], "budget": {"max_steps": 8}}],
         "propose_features": [{"title": "Cart totals", "brief": "Line-item and grand totals in the cart."}]}
+POSTER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0b0d10"/>
+  <rect x="40" y="40" width="1120" height="550" rx="24" fill="#12161b" stroke="#232a33" stroke-width="2"/>
+  <circle cx="240" cy="315" r="120" fill="#1a2129"/>
+  <g transform="translate(180,255)" stroke="#7dd3a8" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 10 h18 l16 70 h78 l14 -50 h-100"/>
+    <circle cx="52" cy="108" r="10" fill="#7dd3a8" stroke="none"/>
+    <circle cx="108" cy="108" r="10" fill="#7dd3a8" stroke="none"/>
+  </g>
+  <text x="430" y="285" font-family="Inter, sans-serif" font-size="72" font-weight="700" fill="#f2f5f7">The cart that keeps</text>
+  <text x="430" y="370" font-family="Inter, sans-serif" font-size="72" font-weight="700" fill="#f2f5f7">its own receipts.</text>
+  <text x="430" y="440" font-family="Inter, sans-serif" font-size="26" fill="#9aa7b4">Line items, totals and a badge that counts what is there.</text>
+  <rect x="430" y="490" width="120" height="44" rx="22" fill="#7dd3a8"/>
+  <text x="490" y="520" font-family="Inter, sans-serif" font-size="22" font-weight="600" fill="#0b0d10" text-anchor="middle">Shop</text>
+</svg>"""
 (demo / "script.json").write_text(json.dumps([
     "tool_call: " + json.dumps({"id": "r", "name": "ReadFile",
                                 "arguments": json.dumps({"path": "app.py"})}),
+    "tool_call: " + json.dumps({"id": "w", "name": "WriteFile",
+                                "arguments": json.dumps({"path": "assets/cart-launch.svg",
+                                                         "content": POSTER_SVG})}),
     "text: Here is the plan. " + json.dumps(plan)]))
 os.environ["TURA_CODE_SCRIPTED_ECHO"] = str(demo / "script.json")
 
@@ -137,6 +155,12 @@ with sync_playwright() as pw:
                         ("settings", "#/settings")]:
         page.goto(ui_url + route)
         page.wait_for_timeout(2200)
+        if name == "mission-detail":
+            # open the real artifact preview (the SVG the scripted mission actually wrote)
+            preview = page.locator("text=Preview").first
+            if preview.count():
+                preview.click()
+                page.wait_for_timeout(1500)
         page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
     browser.close()
 ui_proc.terminate()

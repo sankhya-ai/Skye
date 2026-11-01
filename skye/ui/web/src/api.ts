@@ -199,3 +199,14 @@ export const reportIssue = (issue: {
   method: "POST",
   body: JSON.stringify(issue),
 });
+
+// Raw artifact fetch (image/markdown bytes) for inline preview - same header token as api(),
+// returned as an object URL the caller must revoke.
+export async function getArtifactFileUrl(mission: string, path: string): Promise<string> {
+  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+  const res = await fetch(`/api/mission-artifact/${mission}?path=${encodeURIComponent(path)}`, {
+    headers: { "X-Skye-Token": token },
+  });
+  if (!res.ok) throw new Error(`artifact preview failed (${res.status})`);
+  return URL.createObjectURL(await res.blob());
+}
