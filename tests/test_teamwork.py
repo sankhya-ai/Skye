@@ -457,6 +457,10 @@ def test_reattach_without_operator_decision_resumes_the_prior_job(tmp_path, monk
     import skye.mission as mission_mod
     state_dir = tmp_path / ".skye"
     _seed_interrupted_journal(state_dir, worker_job="job-live-1")
+    # The reattach pre-flight asks the real adapter whether the journaled job still exists;
+    # here it does (a live job), so the check passes and the reattach proceeds.
+    monkeypatch.setattr("skye.adapters.root.RootAdapter.job_state",
+                        lambda self, job_id: "running")
     seen = {}
     real_dispatch = mission_mod.dispatch
 
@@ -507,3 +511,51 @@ def test_interrupted_step_without_a_job_id_pauses_for_the_operator(tmp_path, mon
     assert outcome.status == "interrupted"
     assert "mission redispatch" in outcome.reason and "mission reset" in outcome.reason
     assert not dispatched  # nothing re-ran
+
+
+def test_reattach_to_a_vanished_prior_job_pauses_for_the_operator(tmp_path, monkeypatch):
+    """The journaled job id is on record, but the Root server no longer holds it (wiped home).
+    The mission must PAUSE - not settle failed, never silently launch a fresh job."""
+    state_dir = tmp_path / ".skye"
+    _seed_interrupted_journal(state_dir, worker_job="ghost-job-1")
+    monkeypatch.setattr("skye.adapters.root.RootAdapter.job_state", lambda self, job_id: None)
+    dispatched = []
+
+    def runner(spec):
+        dispatched.append(spec["role"])
+        class R:
+            ok = True
+            returncode = 0
+            job_id = ""
+            output = "ok"
+        return R
+
+    mission = _mission_file(tmp_path, [
+        {"id": "build", "role": "developer", "adapter": "root", "goal": "g", "gates": []}])
+    outcome = run_mission(mission, _policy(tmp_path, monkeypatch), runner=runner,
+                          state_dir=state_dir)
+    assert outcome.status == "interrupted"
+    assert "ghost-job-1" in outcome.reason and "no longer exists" in outcome.reason
+    assert "mission redispatch" in outcome.reason
+    assert not dispatched  # no silent fresh launch
+    journal = (state_dir / "missions/m-team/journal.jsonl").read_text()
+    assert "reattached" not in journal and "settled" not in journal  # nothing terminal recorded
+
+
+def test_reattach_to_an_unanswerable_server_also_pauses(tmp_path, monkeypatch):
+    """'Cannot reach the server' is not 'the job is gone' - but both pause; neither launches
+    a duplicate under partial-effects uncertainty."""
+    from skye.adapters.base import AdapterError
+    state_dir = tmp_path / ".skye"
+    _seed_interrupted_journal(state_dir, worker_job="ghost-job-2")
+
+    def refuse(self, job_id):
+        raise AdapterError("root: no Root server answering")
+
+    monkeypatch.setattr("skye.adapters.root.RootAdapter.job_state", refuse)
+    mission = _mission_file(tmp_path, [
+        {"id": "build", "role": "developer", "adapter": "root", "goal": "g", "gates": []}])
+    outcome = run_mission(mission, _policy(tmp_path, monkeypatch),
+                          runner=lambda spec: None, state_dir=state_dir)
+    assert outcome.status == "interrupted"
+    assert "could not confirm" in outcome.reason and "ghost-job-2" in outcome.reason

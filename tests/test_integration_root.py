@@ -456,3 +456,76 @@ def test_interrupted_before_job_id_pauses_for_the_operator_through_real_root(roo
     assert outcome.status == "interrupted"
     assert "mission redispatch" in outcome.reason and "mission reset" in outcome.reason
     assert {p.name for p in (home / "jobs").glob("*.json")} == jobs_before  # nothing re-ran
+
+
+@requires_runtime
+def test_reattach_to_a_wiped_root_home_pauses_then_redispatch_recovers(root_server, tmp_path, monkeypatch):
+    """The gone-job case on the real path: crash with the job id journaled, then the Root home
+    is REPLACED (fresh server, fresh home - the journaled job no longer exists anywhere).
+    Resume must pause as interrupted and launch nothing; the operator's redispatch then runs a
+    fresh real job on the new server and the mission completes."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([
+        tool_call("w", "WriteFile", {"path": "out-m-wiped.py", "content": "print('v1')\n"}),
+        text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "worker-job", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-wiped")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert len(list((home / "jobs").glob("*.json"))) == 1
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+
+    # The Root home is wiped and replaced: a second server with a fresh home answers now.
+    home2 = tmp_path / "root-home-2"
+    monkeypatch.setenv("TURA_CODE_HOME", str(home2))
+    import uvicorn  # noqa: PLC0415
+    from tura_code.app import create_app  # noqa: PLC0415
+    app2 = create_app(home2)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port2 = probe.getsockname()[1]
+    server2 = uvicorn.Server(uvicorn.Config(app2, host="127.0.0.1", port=port2, log_level="error"))
+    thread2 = threading.Thread(target=server2.run, daemon=True)
+    thread2.start()
+    deadline = time.monotonic() + 30
+    while not server2.started and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert server2.started
+    monkeypatch.setenv("SKYE_ROOT_URL", f"http://127.0.0.1:{port2}")
+    monkeypatch.setenv("SKYE_ROOT_HOME", str(home2))
+    try:
+        # Resume: the journaled job is gone everywhere -> interrupted pause, nothing launched.
+        outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+        assert outcome.status == "interrupted"
+        assert "no longer exists" in outcome.reason and "no duplicate was launched" in outcome.reason
+        assert not list((home2 / "jobs").glob("*.json"))  # no silent fresh job on the new server
+        journal = (state_dir / "missions/m-wiped/journal.jsonl").read_text()
+        assert "reattached" not in journal and "settled" not in journal
+
+        # The operator decides: redispatch. A fresh REAL job runs on the new server.
+        outcome = run_mission(load_mission(mission_path), policy, runner=None,
+                              state_dir=state_dir, redispatch="build")
+        assert outcome.status == "done", outcome.reason
+        new_jobs = list((home2 / "jobs").glob("*.json"))
+        assert len(new_jobs) == 1
+        result = json.loads(outcome.steps["build"]["output"])
+        assert result["job"] == new_jobs[0].stem
+        journal = (state_dir / "missions/m-wiped/journal.jsonl").read_text()
+        assert "redispatch" in journal and "reattached" not in journal
+    finally:
+        server2.should_exit = True
+        thread2.join(15)

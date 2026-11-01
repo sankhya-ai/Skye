@@ -420,9 +420,38 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    superseded_job=prior_job or "")
                     ready.append(step)
                 elif step["adapter"] == "root" and prior_job:
-                    resume_jobs[step_id] = prior_job  # reattach: poll the existing Root job, never duplicate it
-                    journal.append(step_id, "reattached", worker_job=prior_job)
-                    ready.append(step)
+                    # Reattach only to a job the Root server STILL holds. If the journaled job
+                    # is gone (wiped/replaced Root home) or the server cannot confirm it, the
+                    # attempt's side effects are unknown: pause for the operator. Never settle
+                    # this as a plain failure (which terminates the resume choices) and never
+                    # fall through to a fresh launch under partial-effects uncertainty.
+                    from . import adapters as _adapters
+                    try:
+                        prior_state = _adapters.get("root").job_state(prior_job)
+                    except Exception as error:
+                        if not interrupted_reason:
+                            interrupted_reason = (
+                                f"step '{step_id}' cannot reattach: the Root server could not "
+                                f"confirm journaled job {prior_job} ({error}). Its side effects are "
+                                "unknown and no duplicate was launched. Restore the server and "
+                                "resume, or choose: "
+                                f"`skye mission redispatch <file> --step {step_id}` to re-run the "
+                                "step, or `skye mission reset <file>` to start clean.")
+                    else:
+                        if prior_state is None:
+                            if not interrupted_reason:
+                                interrupted_reason = (
+                                    f"step '{step_id}' was attached to Root job {prior_job}, but "
+                                    "that job no longer exists on the Root server (the Root home "
+                                    "was likely wiped or replaced). Its side effects are unknown "
+                                    "and no duplicate was launched. Inspect for partial effects, "
+                                    "then choose: "
+                                    f"`skye mission redispatch <file> --step {step_id}` to re-run "
+                                    "the step, or `skye mission reset <file>` to start clean.")
+                        else:
+                            resume_jobs[step_id] = prior_job  # reattach: poll the existing Root job, never duplicate it
+                            journal.append(step_id, "reattached", worker_job=prior_job)
+                            ready.append(step)
                 elif not interrupted_reason:
                     # No reattach possible and no operator decision: STOP. The interrupted attempt
                     # may have left partial external effects; silently repeating the step could

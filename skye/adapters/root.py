@@ -64,9 +64,21 @@ class RootAdapter(Adapter):
             with urllib.request.urlopen(request, timeout=timeout) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as error:
-            raise AdapterError(f"root: {method} {path} -> {error.code}: {error.read()[:300]!r}") from error
+            raise AdapterError(f"root: {method} {path} -> {error.code}: {error.read()[:300]!r}",
+                               status_code=error.code) from error
         except OSError as error:
             raise AdapterError(f"root: no Root server answering at {self.base_url} ({error})") from error
+
+    def job_state(self, job_id: str) -> str | None:
+        """The recorded job's status, or None when the server definitively no longer holds it
+        (404 - e.g. the Root home was wiped or replaced). A server that cannot be reached at
+        all still raises: 'unknown' and 'gone' are different things to crash recovery."""
+        try:
+            return str(self._call("GET", f"/api/jobs/{job_id}", timeout=10).get("status") or "")
+        except AdapterError as error:
+            if error.status_code == 404:
+                return None
+            raise
 
     def available(self) -> bool:
         try:
