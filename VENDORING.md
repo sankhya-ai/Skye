@@ -22,4 +22,19 @@ request; per-file attribution headers and `skye/ui/NOTICE` carry the details:
   approval card patterns.
 - `block/berd` @ `2d2754640abbb5a7f26fe190551a7173f5c87788`
   (https://github.com/block/berd, Apache-2.0): automations overview row
-  pattern.
+  pattern, app shell geometry (floating glass sidebar over the dot-grid
+  canvas, Projects/Chats sections), home clock/greeting/composer layout,
+  and the light visual tokens.
+
+## Chamber needs-assessment (what Skye actually uses)
+
+Skye imports NO Chamber code. The only touchpoint is the optional event
+relay: when SKYE_LINE_INVITE names a Chamber line, `skye/events.py`'s
+LineBridge publishes dispatch lifecycle events to that line through Root's
+vendored Python line client (`root/server/tura_code/line`), and the line
+runs on `chamber/relay` (Cloudflare worker, `wrangler dev`; exercised by
+tests/test_line_bridge.py, env-skipped without the relay's npm deps). The
+default sink is the local events.jsonl (FileBridge) - Chamber is never
+required for the engine, the journal, approvals, or the UI. Everything else
+in the vendored chamber/ checkout (board, bin, create.sh, wrangler config
+beyond the relay) is unused by Skye and stays verbatim for provenance.
