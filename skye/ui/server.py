@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from skye import __version__
-from skye import approvals, gateway, roles
+from skye import approvals, gateway, projects, roles
 from skye.contract import ADAPTERS, ROLES
 from skye.mission import (Journal, MissionError, default_state_dir, load_mission,
                           mission_status, reset_mission, run_mission)
@@ -85,6 +85,7 @@ def missions_overview(state_dir: Path) -> list[dict]:
             except (KeyError, json.JSONDecodeError):
                 continue
             journal = payload["journal"]
+            project_id = payload["mission"].get("project", "")
             last = journal[-1]["ts"] if journal else None
             status = payload["status"]
             dynamic_ids = {str(s.get("id")) for s in payload["dynamic_steps"]}
@@ -101,6 +102,7 @@ def missions_overview(state_dir: Path) -> list[dict]:
                 return (entry.get("status") == "done") == want_done
 
             rows.append({"id": mission_dir.name, "goal": payload["mission"].get("goal", ""),
+                         "project": project_id,
                          "overall": status["status"],
                          "needs_owner": bool(payload["pending_contracts"]),
                          "approved": payload["approved"],
@@ -172,10 +174,18 @@ def create_mission(state_dir: Path, spec: dict) -> str:
                   "adapter": str(spec.get("adapter") or "root"), "goal": goal,
                   "brief": PLANNER_BRIEF.format(goal=goal), "gates": [],
                   "budget": {"max_steps": 12}}]
+    project_id = str(spec.get("project") or "").strip()
+    repo = str(spec.get("repo") or "").strip()
+    if project_id:
+        project = projects.get(project_id)
+        if project is None:
+            raise MissionError(f"unknown project '{project_id}'")
+        repo = repo or project["repo"]
     mission_id = str(spec.get("id") or "").strip() or f"mission-{secrets.token_hex(4)}"
-    mission = {"id": mission_id, "goal": goal,
-               "repo": str(spec.get("repo") or "").strip() or os.getcwd(),
+    mission = {"id": mission_id, "goal": goal, "repo": repo or os.getcwd(),
                "steps": steps}
+    if project_id:
+        mission["project"] = project_id
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
         json.dump(mission, handle)
         temp_path = handle.name
@@ -304,6 +314,8 @@ class UiHandler(BaseHTTPRequestHandler):
                                        "live": {k: v for k, v in _live_missions.items()}})
                 if url.path == "/api/approvals":
                     return self._json({"approvals": approvals.pending(self.approvals_path)})
+                if url.path == "/api/projects":
+                    return self._json({"projects": projects.list_projects()})
                 if url.path == "/api/roles":
                     return self._json(roles_payload(self.state_dir))
                 if url.path == "/api/policy":
@@ -341,6 +353,15 @@ class UiHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._json({"error": "invalid JSON body"}, 400)
         try:
+            if url.path == "/api/projects":
+                record = body.get("project")
+                if not isinstance(record, dict):
+                    return self._json({"error": "project must be a JSON object"}, 400)
+                try:
+                    saved = projects.add(record)
+                except projects.ProjectError as error:
+                    return self._json({"error": str(error)}, 400)
+                return self._json({"saved": True, "project": saved})
             if url.path == "/api/roles":
                 record = body.get("role")
                 if not isinstance(record, dict):

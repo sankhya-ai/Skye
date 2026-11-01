@@ -108,7 +108,8 @@ def load_mission(path: str | Path) -> dict[str, Any]:
     mission_id = str(raw.get("id") or "").strip() or fingerprint(
         {"goal": raw.get("goal", ""), "steps": steps})[:16]
     return {"id": mission_id, "goal": str(raw.get("goal") or "").strip(),
-            "repo": str(raw.get("repo") or "").strip(), "steps": steps}
+            "repo": str(raw.get("repo") or "").strip(), "steps": steps,
+            "project": str(raw.get("project") or "").strip()}
 
 
 class Journal:

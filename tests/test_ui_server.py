@@ -255,3 +255,83 @@ def test_create_mission_with_plan_builds_a_planner_step(ui_server, tmp_path):
     assert step["id"] == "plan" and step["role"] == "pm"
     assert "propose_steps" in step["brief"] and "ship a landing page" in step["brief"]
     assert "needs" not in step  # no fixed pipeline - the planner decides the shape
+
+
+def test_projects_group_missions(ui_server, tmp_path, monkeypatch):
+    """Berd's Projects architecture over the real engine: an owner-defined project (name +
+    repo path) groups the missions created under it, and the project supplies the repo."""
+    url, state_dir = ui_server
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "skye.projects.json"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    status, payload = _req(url, "/api/projects")
+    assert status == 200 and payload["projects"] == []
+
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "Skye", "repo": str(repo)}})
+    assert status == 200, payload
+    project_id = payload["project"]["id"]
+
+    # a project pointing nowhere is rejected before any mission can be filed under it
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "ghost", "repo": str(tmp_path / "nope")}})
+    assert status == 400
+
+    # the composer path: a planner mission under the project, repo inherited from the project
+    status, payload = _req(url, "/api/missions", method="POST",
+                           body={"goal": "ship the thing", "plan": True,
+                                 "project": project_id})
+    assert status == 200, payload
+    snapshot = json.loads(
+        (state_dir / "missions" / payload["id"] / "mission.json").read_text())
+    assert snapshot["project"] == project_id and snapshot["repo"] == str(repo)
+
+    status, payload = _req(url, "/api/missions")
+    row = next(r for r in payload["missions"] if r["id"] == snapshot["id"])
+    assert row["project"] == project_id
+
+
+def test_planner_mission_grows_the_workflow_at_runtime(tmp_path, monkeypatch):
+    """The composer's plan:true mission, end to end through the engine: ONE planner step runs,
+    its worker proposes the real steps, and the mission grows and finishes - nothing hardcoded."""
+    from skye.adapters.base import Result
+    from skye.events import FileBridge
+    from skye.mission import load_mission, mission_status, run_mission
+    from skye.policy import Policy
+    from skye.ui.server import create_mission
+
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "skye.roles.json"))
+    monkeypatch.chdir(tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir = tmp_path / "st"
+    mission_id = create_mission(state_dir,
+                                {"goal": "build and check a hello page", "plan": True,
+                                 "adapter": "claude-code", "repo": str(repo)})
+    mission = load_mission(state_dir / "missions" / mission_id / "mission.json")
+    assert [s["id"] for s in mission["steps"]] == ["plan"]
+
+    proposal = {"propose_steps": [
+        {"id": "build", "role": "developer", "adapter": "claude-code",
+         "goal": "build the page", "needs": []},
+        {"id": "check", "role": "tester", "adapter": "claude-code",
+         "goal": "check the page", "needs": ["build"]}]}
+    ran = []
+
+    def runner(spec):
+        ran.append(spec["role"])
+        if spec["step_id"] == "plan" if "step_id" in spec else spec["role"] == "pm":
+            return Result(ok=True, output="Plan: " + json.dumps(proposal))
+        return Result(ok=True, output=f"{spec['role']} done")
+
+    outcome = run_mission(mission,
+                          Policy({"allow_unattended": [{"adapter": "claude-code", "role": "*"}],
+                                  "test_command": "true"}),
+                          runner=runner, bridge=FileBridge(tmp_path / "events.jsonl"),
+                          state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert ran == ["pm", "developer", "tester"]
+    status = mission_status(mission, state_dir)
+    assert status["status"] == "done"
+    assert [s["id"] for s in status["steps"]] == ["plan", "build", "check"]

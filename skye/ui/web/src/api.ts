@@ -5,6 +5,7 @@
 export type MissionRow = {
   id: string;
   goal: string;
+  project?: string;
   overall: string;
   needs_owner: boolean;
   approved: boolean;
@@ -96,8 +97,22 @@ export const getPolicy = () =>
   api<{ raw: Record<string, unknown>; path: string; max_concurrent: number }>("/api/policy");
 export const savePolicy = (policy: Record<string, unknown>) =>
   api<{ saved: boolean }>("/api/policy", { method: "POST", body: JSON.stringify({ policy }) });
-export const createMission = (spec: { goal: string; plan?: boolean; run?: boolean }) =>
+export const createMission = (spec: {
+  goal: string;
+  plan?: boolean;
+  run?: boolean;
+  project?: string;
+}) =>
   api<{ id: string; running: boolean }>("/api/missions", {
     method: "POST",
     body: JSON.stringify(spec),
+  });
+
+export type Project = { id: string; name: string; repo: string };
+
+export const getProjects = () => api<{ projects: Project[] }>("/api/projects");
+export const createProject = (project: { name: string; repo: string }) =>
+  api<{ saved: boolean; project: Project }>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ project }),
   });

@@ -1,18 +1,37 @@
-// Settings: the team policy file, edited as validated JSON (the server rejects invalid policy).
+// Settings: the team policy as understandable controls - who may run unattended, the test
+// command, concurrency - with the raw file behind an advanced disclosure. Every save is
+// validated by the server exactly like a hand-edited policy file.
+import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { getPolicy, savePolicy } from "../api";
 
+type Rule = { adapter: string; role: string };
+const ADAPTERS = ["root", "claude-code", "codex"];
+
 export function SettingsView() {
-  const [text, setText] = useState("");
-  const [path, setPath] = useState("");
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [testCommand, setTestCommand] = useState("");
+  const [maxConcurrent, setMaxConcurrent] = useState(1);
+  const [raw, setRaw] = useState<Record<string, unknown>>({});
+  const [advanced, setAdvanced] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const policy = await getPolicy();
-      setText(JSON.stringify(policy.raw, null, 2));
-      setPath(policy.path);
+      const data = policy.raw;
+      setRaw(data);
+      const unattended = Array.isArray(data.allow_unattended) ? data.allow_unattended : [];
+      setRules(
+        unattended.map((r: Record<string, unknown>) => ({
+          adapter: String(r.adapter ?? "root"),
+          role: String(r.role ?? "*"),
+        })),
+      );
+      setTestCommand(String(data.test_command ?? ""));
+      setMaxConcurrent(Number(data.max_concurrent ?? policy.max_concurrent ?? 1));
+      setAdvanced(JSON.stringify(data, null, 2));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -26,9 +45,26 @@ export function SettingsView() {
   const save = async () => {
     setMessage(null);
     setError(null);
+    const policy: Record<string, unknown> = { ...raw };
+    policy.allow_unattended = rules.map((r) => ({ adapter: r.adapter, role: r.role || "*" }));
+    if (testCommand.trim()) policy.test_command = testCommand.trim();
+    else delete policy.test_command;
+    policy.max_concurrent = Math.max(1, Math.min(4, Math.trunc(maxConcurrent) || 1));
     try {
-      await savePolicy(JSON.parse(text || "{}"));
+      await savePolicy(policy);
       setMessage("Saved - the next dispatch runs under this policy.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const saveAdvanced = async () => {
+    setMessage(null);
+    setError(null);
+    try {
+      await savePolicy(JSON.parse(advanced || "{}"));
+      setMessage("Saved - the next dispatch runs under this policy.");
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -39,7 +75,7 @@ export function SettingsView() {
       <div>
         <h2 className="text-lg font-medium">Policy</h2>
         <p className="text-sm text-muted-foreground">
-          Who may run unattended, the test command, concurrency. <code>{path}</code>
+          What workers may do without asking, and how the team verifies work.
         </p>
       </div>
       {error ? (
@@ -52,13 +88,78 @@ export function SettingsView() {
           {message}
         </p>
       ) : null}
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={16}
-        spellCheck={false}
-        className="shadow-card w-full rounded-xl border border-border bg-card p-4 font-mono text-xs outline-none"
-      />
+
+      <section className="shadow-card rounded-xl border border-border bg-card p-4">
+        <h3 className="text-sm font-medium">May run without asking</h3>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Anything else pauses for your one-time approval before it runs.
+        </p>
+        <div className="mt-3 space-y-2">
+          {rules.map((rule, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <select
+                value={rule.adapter}
+                onChange={(e) =>
+                  setRules(rules.map((r, j) => (j === i ? { ...r, adapter: e.target.value } : r)))
+                }
+                className="rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
+              >
+                {ADAPTERS.map((a) => (
+                  <option key={a}>{a}</option>
+                ))}
+              </select>
+              <input
+                value={rule.role}
+                onChange={(e) =>
+                  setRules(rules.map((r, j) => (j === i ? { ...r, role: e.target.value } : r)))
+                }
+                placeholder="role or *"
+                className="w-32 rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setRules(rules.filter((_, j) => j !== i))}
+                className="text-muted-foreground hover:text-destructive"
+                aria-label="Remove rule"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => setRules([...rules, { adapter: "root", role: "developer" }])}
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <Plus className="size-3.5" /> Add rule
+          </button>
+        </div>
+      </section>
+
+      <section className="shadow-card rounded-xl border border-border bg-card p-4">
+        <h3 className="text-sm font-medium">Verification</h3>
+        <label className="mt-3 block text-xs text-muted-foreground">
+          Test command (the tests gate runs this; never worker-supplied)
+          <input
+            value={testCommand}
+            onChange={(e) => setTestCommand(e.target.value)}
+            placeholder="e.g. pytest -q"
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none"
+          />
+        </label>
+        <label className="mt-3 block text-xs text-muted-foreground">
+          Steps that may run at the same time (1-4)
+          <input
+            type="number"
+            min={1}
+            max={4}
+            value={maxConcurrent}
+            onChange={(e) => setMaxConcurrent(Number(e.target.value))}
+            className="mt-1 w-20 rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none"
+          />
+        </label>
+      </section>
+
       <button
         type="button"
         onClick={() => void save()}
@@ -66,6 +167,26 @@ export function SettingsView() {
       >
         Save policy
       </button>
+
+      <details className="shadow-card rounded-xl border border-border bg-card p-4">
+        <summary className="cursor-pointer text-xs text-muted-foreground">
+          Advanced: raw policy file
+        </summary>
+        <textarea
+          value={advanced}
+          onChange={(e) => setAdvanced(e.target.value)}
+          rows={10}
+          spellCheck={false}
+          className="mt-3 w-full rounded-md border border-border bg-background p-3 font-mono text-xs outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => void saveAdvanced()}
+          className="mt-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium"
+        >
+          Save raw JSON
+        </button>
+      </details>
     </div>
   );
 }
