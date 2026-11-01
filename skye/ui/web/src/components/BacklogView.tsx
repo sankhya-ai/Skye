@@ -85,10 +85,21 @@ export function BacklogView() {
   const order = (f: FeatureRow) =>
     ({ pending: 0, approved: 1, "awaiting-verification": 2, delivered: 3, rejected: 4 }[f.status] ?? 5);
   const sorted = [...features].sort((a, b) => order(a) - order(b) || b.proposed_at - a.proposed_at);
-  const activeIssues = issues.filter((i) => {
+  // A signal stays OPEN until its linked repair is verified delivered - work started or
+  // even finished is not a fix until the journey replay passes.
+  const issueState = (i: IssueRow): { label: string; resolved: boolean } => {
     const feature = features.find((f) => f.id === i.feature_id);
-    return !feature || feature.status === "pending";
-  });
+    if (!feature || feature.status === "pending")
+      return { label: "awaiting decision", resolved: false };
+    if (feature.status === "delivered")
+      return { label: "resolved - journey replay passed", resolved: true };
+    if (feature.status === "rejected")
+      return { label: "repair proposal rejected - still open", resolved: false };
+    return { label: "repair in progress", resolved: false };
+  };
+  const sortedIssues = [...issues].sort(
+    (a, b2) => Number(issueState(a).resolved) - Number(issueState(b2).resolved),
+  );
 
   return (
     <div className="space-y-6">
@@ -126,7 +137,7 @@ export function BacklogView() {
                     {projectName(f.project)} · {provenance(f)}
                     {f.mission_id && f.status !== "delivered" ? " · work started" : ""}
                     {f.status === "delivered" && f.verification?.journey_passed
-                      ? " · user journey replayed clean"
+                      ? " · journey replay passed"
                       : ""}
                     {f.decision_note ? ` · “${f.decision_note}”` : ""}
                   </p>
@@ -183,26 +194,40 @@ export function BacklogView() {
           ))}
         </ul>
       )}
-      {activeIssues.length > 0 ? (
+      {sortedIssues.length > 0 ? (
         <section>
           <h2 className="text-sm font-medium text-foreground">Signals</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Errors the team has seen. Each became a proposal above - approving it starts the
-            repair.
+            Errors the team has seen. A signal only counts as resolved once its repair is
+            verified delivered - work in progress keeps it open.
           </p>
           <ul className="mt-2 space-y-1.5">
-            {activeIssues.map((i) => (
-              <li
-                key={i.id}
-                className="rounded-sm border border-border bg-card px-3 py-2 text-xs"
-              >
-                <span className="font-medium text-foreground">{i.summary}</span>
-                <span className="ml-2 text-muted-foreground">
-                  {KIND_LABEL[i.kind] ?? i.kind}
-                  {i.occurrences > 1 ? ` · ${i.occurrences}x` : ""} · {projectName(i.project)}
-                </span>
-              </li>
-            ))}
+            {sortedIssues.map((i) => {
+              const state = issueState(i);
+              return (
+                <li
+                  key={i.id}
+                  className={`rounded-sm border border-border bg-card px-3 py-2 text-xs ${
+                    state.resolved ? "opacity-70" : ""
+                  }`}
+                >
+                  <span className="font-medium text-foreground">{i.summary}</span>
+                  <span className="ml-2 text-muted-foreground">
+                    {KIND_LABEL[i.kind] ?? i.kind}
+                    {i.occurrences > 1 ? ` · ${i.occurrences}x` : ""} · {projectName(i.project)}
+                  </span>
+                  <span
+                    className={`ml-2 rounded-full px-2 py-0.5 ${
+                      state.resolved
+                        ? "bg-success/20 text-foreground"
+                        : "bg-warning/20 text-foreground"
+                    }`}
+                  >
+                    {state.label}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </section>
       ) : null}

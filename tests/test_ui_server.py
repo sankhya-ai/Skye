@@ -442,3 +442,112 @@ def test_verify_endpoint_replays_the_journey_and_delivers(ui_server, tmp_path, m
     assert stored["status"] == "awaiting-verification"
     assert "still 500" in stored["verification"]["evidence"]
     policy_path_default().unlink()
+
+
+def _seed_awaiting_feature(tmp_path, monkeypatch, title="Fix checkout"):
+    from skye import backlog
+    feature = backlog.propose([{"title": title, "brief": "repair"}],
+                              project="", mission="seed")[0]
+    backlog.decide(feature["id"], "approved")
+    backlog.mark_started(feature["id"], f"m-{title}")
+    backlog.mark_delivered(f"m-{title}", journey_ok=False)
+    return feature
+
+
+def test_verify_rejects_invalid_transitions(ui_server, tmp_path, monkeypatch):
+    """The replay gate cannot deliver pending, rejected, or approved-but-unstarted work."""
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    url, _ = ui_server
+    from skye import backlog
+    pending = backlog.propose([{"title": "Idea", "brief": "x"}], mission="seed")[0]
+    rejected = backlog.propose([{"title": "No", "brief": "x"}], mission="seed")[0]
+    backlog.decide(rejected["id"], "rejected")
+    unstarted = backlog.propose([{"title": "Later", "brief": "x"}], mission="seed")[0]
+    backlog.decide(unstarted["id"], "approved")
+    expected = {pending["id"]: "pending", rejected["id"]: "rejected",
+                unstarted["id"]: "approved"}
+    for feature_id, want in expected.items():
+        status, payload = _req(url, "/api/backlog/verify", method="POST",
+                               body={"feature": feature_id})
+        assert status == 409, (want, payload)
+        assert backlog.get(feature_id)["status"] == want
+    status, payload = _req(url, "/api/backlog/verify", method="POST", body={"feature": "nope"})
+    assert status == 404
+
+
+def test_verify_ignores_caller_supplied_command_and_redacts(ui_server, tmp_path, monkeypatch):
+    """Caller-supplied command/evidence is untrusted: only the owner policy command runs,
+    and secret-looking output is masked before it is recorded."""
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "skye.projects.json"))
+    url, _ = ui_server
+    from skye import backlog
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "shop", "repo": str(tmp_path)}})
+    project_id = payload["project"]["id"]
+    feature = backlog.propose([{"title": "Fix", "brief": "x"}], project=project_id,
+                              mission="seed")[0]
+    backlog.decide(feature["id"], "approved")
+    backlog.mark_started(feature["id"], "m-redact")
+    backlog.mark_delivered("m-redact", journey_ok=False)
+    import json as _json
+    from skye.ui.server import policy_path_default
+    policy_path_default().write_text(_json.dumps(
+        {"journey_command": "echo DEPLOY_TOKEN=supersecret99; exit 1"}))
+    try:
+        status, payload = _req(url, "/api/backlog/verify", method="POST",
+                               body={"feature": feature["id"], "command": "echo pwned",
+                                     "evidence": "fake pass", "verified": True})
+        assert status == 200
+        assert payload["verified"] is False
+        stored = backlog.get(feature["id"])
+        assert stored["status"] == "awaiting-verification"
+        assert "supersecret99" not in stored["verification"]["evidence"]
+        assert "[redacted]" in stored["verification"]["evidence"]
+        assert "pwned" not in stored["verification"]["evidence"]
+        assert payload["command"] == "echo DEPLOY_TOKEN=supersecret99; exit 1"
+    finally:
+        policy_path_default().unlink(missing_ok=True)
+
+
+def test_verify_times_out_and_serializes_concurrent_replays(ui_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "skye.projects.json"))
+    url, _ = ui_server
+    from skye import backlog
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "shop", "repo": str(tmp_path)}})
+    project_id = payload["project"]["id"]
+    feature = backlog.propose([{"title": "Slow", "brief": "x"}], project=project_id,
+                              mission="seed")[0]
+    backlog.decide(feature["id"], "approved")
+    backlog.mark_started(feature["id"], "m-slow")
+    backlog.mark_delivered("m-slow", journey_ok=False)
+    import json as _json
+    import threading
+    from skye.ui.server import policy_path_default
+    policy_path_default().write_text(_json.dumps(
+        {"journey_command": "sleep 5", "journey_timeout_seconds": 1}))
+    try:
+        results: list[tuple[int, dict]] = []
+
+        def hit():
+            results.append(_req(url, "/api/backlog/verify", method="POST",
+                                body={"feature": feature["id"]}))
+
+        first = threading.Thread(target=hit)
+        first.start()
+        import time as _time
+        _time.sleep(0.5)  # let the first replay start
+        second = threading.Thread(target=hit)
+        second.start()
+        first.join(); second.join()
+        codes = sorted(code for code, _ in results)
+        assert codes == [200, 409], results
+        ok = [p for code, p in results if code == 200][0]
+        assert ok["timed_out"] is True and ok["verified"] is False
+        stored = backlog.get(feature["id"])
+        assert stored["status"] == "awaiting-verification"
+        assert "timed out" in stored["verification"]["evidence"]
+    finally:
+        policy_path_default().unlink(missing_ok=True)

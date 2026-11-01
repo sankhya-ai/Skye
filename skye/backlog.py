@@ -56,6 +56,13 @@ def list_features(path: str | Path | None = None,
     return rows
 
 
+def get(feature_id: str, path: str | Path | None = None) -> dict[str, Any]:
+    for feature in list_features(path):
+        if feature.get("id") == feature_id:
+            return feature
+    raise BacklogError(f"unknown feature {feature_id!r}")
+
+
 def propose(entries: list[dict[str, Any]], *, project: str = "", mission: str = "",
             path: str | Path | None = None) -> list[dict[str, Any]]:
     """Record team-proposed features as PENDING. Validated like contracts: a feature without a
@@ -140,16 +147,21 @@ def mark_delivered(mission_id: str, *, journey_ok: bool = False,
 def record_verification(feature_id: str, passed: bool, *, evidence: str = "",
                         path: str | Path | None = None) -> dict[str, Any]:
     """The outcome of replaying the user journey for a feature. Only a PASS moves a feature
-    (from approved or awaiting-verification) to delivered; a failure records the evidence
-    and leaves the feature awaiting verification. Verification never skips the owner
+    to delivered; a failure records the evidence and leaves the feature awaiting
+    verification. Verification can only run against work that was owner-approved AND
+    actually started (awaiting-verification, with its mission recorded): a pending,
+    rejected, or merely approved-but-unstarted feature has no delivered attempt to
+    verify, and a delivered feature stays delivered. Verification never skips the owner
     approval that started the work - it gates DELIVERY, not authorization."""
     target = Path(path or default_path())
     data = _read(target)
     for feature in data["features"]:
         if feature.get("id") == feature_id:
-            if feature.get("status") not in ("approved", "awaiting-verification", "delivered"):
+            if feature.get("status") != "awaiting-verification" or not feature.get("mission_id"):
                 raise BacklogError(
-                    f"feature {feature_id} is {feature.get('status')}; only started work can be verified")
+                    f"feature {feature_id} is {feature.get('status')}"
+                    f"{' with no mission' if not feature.get('mission_id') else ''}; "
+                    "only completed work awaiting verification can be replayed")
             feature["verification"] = {"journey_passed": bool(passed),
                                        "evidence": evidence[-2000:], "verified_at": time.time()}
             feature["status"] = "delivered" if passed else "awaiting-verification"

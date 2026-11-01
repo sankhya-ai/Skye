@@ -11,6 +11,7 @@ const ADAPTERS = ["root", "claude-code", "codex"];
 export function SettingsView() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [testCommand, setTestCommand] = useState("");
+  const [journeyCommand, setJourneyCommand] = useState("");
   const [maxConcurrent, setMaxConcurrent] = useState(1);
   const [raw, setRaw] = useState<Record<string, unknown>>({});
   const [advanced, setAdvanced] = useState("");
@@ -30,6 +31,7 @@ export function SettingsView() {
         })),
       );
       setTestCommand(String(data.test_command ?? ""));
+      setJourneyCommand(String(data.journey_command ?? ""));
       setMaxConcurrent(Number(data.max_concurrent ?? policy.max_concurrent ?? 1));
       setAdvanced(JSON.stringify(data, null, 2));
       setError(null);
@@ -49,6 +51,8 @@ export function SettingsView() {
     policy.allow_unattended = rules.map((r) => ({ adapter: r.adapter, role: r.role || "*" }));
     if (testCommand.trim()) policy.test_command = testCommand.trim();
     else delete policy.test_command;
+    if (journeyCommand.trim()) policy.journey_command = journeyCommand.trim();
+    else delete policy.journey_command;
     policy.max_concurrent = Math.max(1, Math.min(4, Math.trunc(maxConcurrent) || 1));
     try {
       await savePolicy(policy);
@@ -144,6 +148,18 @@ export function SettingsView() {
             value={testCommand}
             onChange={(e) => setTestCommand(e.target.value)}
             placeholder="e.g. pytest -q"
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none"
+          />
+        </label>
+        <label className="mt-3 block text-xs text-muted-foreground">
+          Journey replay command (the delivery gate runs this in the project repo; owner-set,
+          never worker-supplied). A plain check, e.g. a smoke test - exit 0 means the replay
+          passed. Leave empty and finished work waits as "awaiting verification" until you
+          set one and replay it from the backlog.
+          <input
+            value={journeyCommand}
+            onChange={(e) => setJourneyCommand(e.target.value)}
+            placeholder="e.g. python scripts/smoke.py"
             className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none"
           />
         </label>

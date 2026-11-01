@@ -29,7 +29,11 @@ from skye import approvals, backlog, gateway, issues, projects, roles
 from skye.contract import ADAPTERS, ROLES
 from skye.mission import (Journal, MissionError, default_state_dir, load_mission,
                           mission_status, reset_mission, run_mission)
+from skye import journey as journey_runner
 from skye.policy import Policy
+
+_VERIFY_LOCKS: dict[str, threading.Lock] = {}
+_VERIFY_LOCKS_GUARD = threading.Lock()
 
 DIST = Path(__file__).resolve().parent / "dist"
 
@@ -386,30 +390,49 @@ class UiHandler(BaseHTTPRequestHandler):
                 # runs in the feature's project repo; only a pass delivers. The evidence
                 # (output tail) is recorded either way. This gates DELIVERY - the owner
                 # approval that started the work is untouched.
+                # Only the feature id is accepted. The command, scope and policy come from
+                # the owner-managed policy file alone - anything the caller supplies
+                # (command, verdicts, "evidence") is untrusted and ignored.
                 feature_id = str(body.get("feature") or "")
                 features = {f["id"]: f for f in backlog.list_features()}
                 feature = features.get(feature_id)
                 if feature is None:
                     return self._json({"error": "unknown feature"}, 404)
+                if feature.get("status") != "awaiting-verification" or not feature.get("mission_id"):
+                    return self._json(
+                        {"error": "only completed work awaiting verification can be replayed"},
+                        409)
                 repo = ""
                 if feature.get("project"):
                     try:
                         repo = projects.get(feature["project"]).get("repo", "")
                     except Exception:
                         repo = ""
+                if not repo:
+                    return self._json(
+                        {"error": "the feature's project has no repo to replay the journey in"}, 400)
                 policy = Policy.load(policy_path_default())
                 if not policy.journey_command:
                     return self._json(
                         {"error": "the team policy names no journey command; "
                                   "set journey_command in Settings first"}, 400)
-                import subprocess as _sp
-                proc = _sp.run(policy.journey_command, cwd=repo or None, shell=True,
-                               capture_output=True, text=True, timeout=1800)
-                evidence = (proc.stdout + proc.stderr)[-2000:]
-                updated = backlog.record_verification(
-                    feature_id, proc.returncode == 0, evidence=evidence)
-                return self._json({"verified": proc.returncode == 0, "feature": updated,
-                                   "command": policy.journey_command, "evidence": evidence})
+                with _VERIFY_LOCKS_GUARD:
+                    lock = _VERIFY_LOCKS.setdefault(feature_id, threading.Lock())
+                if not lock.acquire(blocking=False):
+                    return self._json(
+                        {"error": "a journey replay for this work is already running"}, 409)
+                try:
+                    result = journey_runner.run_journey(
+                        policy.journey_command, cwd=repo,
+                        timeout=policy.journey_timeout_seconds)
+                    updated = backlog.record_verification(
+                        feature_id, result["passed"], evidence=result["evidence"])
+                finally:
+                    lock.release()
+                return self._json({"verified": result["passed"], "feature": updated,
+                                   "command": policy.journey_command,
+                                   "evidence": result["evidence"],
+                                   "timed_out": result["timed_out"]})
             if url.path == "/api/backlog/start":
                 feature_id = str(body.get("feature") or "")
                 features = {f["id"]: f for f in backlog.list_features()}
