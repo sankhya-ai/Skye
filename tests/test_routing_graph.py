@@ -255,7 +255,6 @@ def test_deferred_work_pauses_the_mission_for_the_owner(tmp_path, monkeypatch):
              "repo_reason": "the API lives in backend"}],
         "deferred": [
             {"goal": "mobile app totals", "reason": "no mobile repo is declared"},
-            {"goal": "", "reason": "malformed entry"},        # dropped, journaled
         ]})
     def run(spec):
         if spec["goal"] == "plan it":
@@ -274,7 +273,6 @@ def test_deferred_work_pauses_the_mission_for_the_owner(tmp_path, monkeypatch):
                (state / "missions" / "m-defer" / "journal.jsonl").read_text().splitlines()]
     deferred = [e for e in journal if e.get("event") == "work-deferred"]
     assert len(deferred) == 1 and deferred[0]["feature_id"]
-    assert any(e.get("event") == "deferred-rejected" for e in journal)  # malformed said, not lost
     # the owner's queue holds it, waiting for their decision
     from skye import backlog
     feature = backlog.list_features()[0]
@@ -328,3 +326,33 @@ def test_deferred_graph_meta_and_redacted_timeline(tmp_path, monkeypatch):
     # events, steps, statuses and gate summaries still show what happened and how
     kinds = {e.get("event") for e in graph["timeline"]}
     assert {"dispatched", "settled", "step-accepted", "work-deferred"} <= kinds
+
+
+def test_malformed_deferred_blocks_instead_of_faking_done(tmp_path, monkeypatch):
+    """A planner that says 'work is missing' in an unusable shape must not get a clean done."""
+    backend, frontend = two_repos(tmp_path)
+    state = tmp_path / "state"
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    output = json.dumps({
+        "propose_steps": [
+            {"id": "api", "role": "developer", "adapter": "claude-code",
+             "goal": "add the endpoint", "repo": "backend",
+             "repo_reason": "the API lives in backend"}],
+        "deferred": [{"goal": "", "reason": "no goal given"}]})  # unusable record
+    def run(spec):
+        if spec["goal"] == "plan it":
+            return Result(ok=True, output=output, command=["fake"])
+        return Result(ok=True, output="done", command=["fake"])
+    mission = {"id": "m-maldefer", "goal": "totals",
+               "repos": {"backend": str(backend), "frontend": str(frontend)},
+               "steps": [{"id": "plan", "role": "developer", "adapter": "claude-code",
+                          "goal": "plan it", "repo": "backend", "gates": []}]}
+    out = run_mission(mission, ON, runner=run, state_dir=state,
+                      catalogues_dir="catalogues")
+    assert out.status == "needs-owner"           # fail-closed, not done
+    assert "unrouted" in out.reason
+    from skye.mission import mission_status
+    status = mission_status(mission, state_dir=state)
+    assert status["status"] == "needs-owner"
+    assert "unreadable deferred work" in status["deferred"][0]["goal"]
+    assert "Re-run planning or reset" in status["deferred"][0]["reason"]

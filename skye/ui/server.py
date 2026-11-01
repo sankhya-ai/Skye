@@ -189,16 +189,17 @@ def mission_graph(state_dir: Path, mission_id: str) -> dict:
         for step in steps:
             state = states.get(step["id"], {})
             event = state.get("event", "")
+            from .. import redact
             node = {"id": step["id"], "role": step.get("role", ""),
                     "adapter": step.get("adapter", ""),
                     "repo": repo_label(step.get("repo", "")),
-                    "goal": str(step.get("goal", ""))[:200],
+                    "goal": redact.redact_text(str(step.get("goal", ""))[:200]),
                     "origin": origin,
                     "state": ("running" if event in ("dispatched", "redispatch", "reattached")
                               else "review" if event == "review-round"
                               else "pending" if not event
                               else str(state.get("status") or event)),
-                    "reason": str(state.get("reason", ""))[:300]}
+                    "reason": redact.redact_text(str(state.get("reason", ""))[:300])}
             if state.get("worker_job"):
                 node["worker_job"] = state["worker_job"]
             if origin == "proposed":
@@ -208,14 +209,16 @@ def mission_graph(state_dir: Path, mission_id: str) -> dict:
                      and isinstance(e.get("spec"), dict)
                      and e["spec"].get("id") == step["id"]), "")
                 if step.get("repo_reason"):
-                    node["repo_reason"] = step["repo_reason"]
+                    node["repo_reason"] = redact.redact_text(str(step["repo_reason"]))
             nodes.append(node)
     edges = []
     for step in list(mission.get("steps") or []) + journal.accepted_steps():
         for dependency in step.get("needs") or []:
             edges.append({"from": str(dependency), "to": step["id"], "kind": "needs"})
     status = mission_status(mission, state_dir=state_dir)
-    meta = {"id": mission["id"], "goal": mission.get("goal", ""),
+    from .. import redact as _redact_meta
+    meta = {"id": mission["id"],
+            "goal": _redact_meta.redact_text(str(mission.get("goal", ""))),
             "status": status.get("status", ""),
             "repos": sorted(repos_map),
             "workspace": workspace_payload(mission_dir).get("mode", "shared")}
@@ -236,9 +239,13 @@ _TIMELINE_FIELDS = ("ts", "step", "event", "status", "reason", "role", "proposal
 
 
 def _timeline_projection(entries: list[dict]) -> list[dict]:
+    from .. import redact
     safe = []
     for entry in entries:
-        row = {k: entry[k] for k in _TIMELINE_FIELDS if k in entry}
+        # Field allowlist first, then value redaction: a secret riding INSIDE an allowed
+        # string (a reason, a goal, an error) is masked, not displayed.
+        row = {k: redact.redact_text(str(entry[k])) if isinstance(entry[k], str) else entry[k]
+               for k in _TIMELINE_FIELDS if k in entry}
         if "reason" in row:
             row["reason"] = str(row["reason"])[:300]
         if isinstance(entry.get("gates"), list):
@@ -271,9 +278,17 @@ def mission_payload(state_dir: Path, mission_id: str) -> dict:
                        if e.get("event") == "needs-owner"}
     approved = bool(needs_owner_fps & approved_fps)
 
-    return {"mission": mission, "status": status, "artifacts": mission_artifacts(mission_dir),
-            "journal": _read_jsonl(mission_dir / "journal.jsonl"),
-            "dynamic_steps": dynamic, "pending_contracts": pending,
+    from .. import redact
+    # Display-facing payload: the UI's fields and structure are preserved exactly (the trace
+    # view reads output/reason/feedback), but credential-shaped substrings inside free text
+    # are masked. The raw journal on disk stays untouched - it is the recovery record.
+    return {"mission": redact.redact_value(mission),
+            "status": redact.redact_value(status),
+            "artifacts": mission_artifacts(mission_dir),
+            "journal": [redact.redact_value(e)
+                        for e in _read_jsonl(mission_dir / "journal.jsonl")],
+            "dynamic_steps": redact.redact_value(dynamic),
+            "pending_contracts": redact.redact_value(pending),
             "approved": approved and not pending,
             "workspace": workspace_payload(mission_dir)}
 

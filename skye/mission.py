@@ -837,9 +837,16 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                               if str(d.get("goal") or "").strip()
                               and str(d.get("reason") or "").strip()]
             if len(raw_deferred) != len(valid_deferred):
-                journal.append(step_id, "deferred-rejected",
-                               reason=f"{len(raw_deferred) - len(valid_deferred)} deferred "
-                                      "entr(ies) missing a goal or reason")
+                # A malformed deferred entry means the planner said work was left out but the
+                # record is unusable. Dropping it would fake completeness: block needs-owner
+                # like any unresolved deferral, with the resolution path named.
+                journal.append("", "work-deferred",
+                               goal="(unreadable deferred work from the planner)",
+                               reason=(f"{len(raw_deferred) - len(valid_deferred)} deferred "
+                                       "entr(ies) missing a goal or reason; the planner said "
+                                       "work was left out but the record is unusable. Re-run "
+                                       "planning or reset the mission to resolve."),
+                               from_step=step_id, feature_id="")
             for item in valid_deferred:
                 goal_text = str(item["goal"]).strip()
                 reason_text = str(item["reason"]).strip()
