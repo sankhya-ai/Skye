@@ -40,6 +40,7 @@ import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,8 @@ from .policy import Policy
 
 OUTPUT_TAIL = 1500
 MAX_STEPS = 32  # hard cap on authored + dynamically proposed steps: a runaway proposer stops here
+MAX_PARALLEL_STEPS = 4  # wave width for independent steps; the cross-process concurrency
+# registry in the dispatcher remains the real cap - this only bounds how wide one mission fans out
 
 
 class MissionError(ValueError):
@@ -271,128 +274,208 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     states = journal.step_states()
     outcomes: dict[str, dict[str, Any]] = {}
     worklist = list(mission["steps"]) + journal.accepted_steps()  # authored, then dynamic (journaled)
-    index = 0
-    while index < len(worklist):
-        step = worklist[index]
-        index += 1
+
+    # Seed from the journal: states a prior run already settled are carried, never re-run.
+    pending: dict[str, dict[str, Any]] = {}
+    for step in worklist:
         step_id = step["id"]
-        context["step"] = step_id
         state = states.get(step_id, {})
         kind = state.get("event", "")
-        if kind in ("settled", "skipped"):
+        if kind == "settled":
             if state.get("status") == "done":
-                outcomes[step_id] = state  # never re-run: the recorded outcome feeds later briefs
-                continue
-            if kind == "skipped":
-                outcomes[step_id] = {"status": "skipped", "role": step["role"],
-                                     "reason": state.get("reason", ""), "output": ""}
+                outcomes[step_id] = state  # the recorded outcome feeds later briefs
                 continue
             reason = (f"step '{step_id}' previously settled as {state.get('status')}: "
                       f"{state.get('reason', '')}. Fix the cause, then `skye mission reset` and run again.")
             emit(events.make_event("mission", {}, status="failed", reason=reason, **context))
             return MissionOutcome(status=state.get("status", "failed"), mission_id=mission["id"],
                                   reason=reason, steps=outcomes)
-        # Conditional step: an unmet when skips it; needing a skipped step skips in cascade.
-        when = step.get("when")
-        skipped_needs = [n for n in (step.get("needs") or [])
-                         if outcomes.get(n, {}).get("status") == "skipped"]
-        if skipped_needs or (when and outcomes.get(when["step"], {}).get("status") != when["status"]):
-            reason = (f"needs skipped step(s): {', '.join(skipped_needs)}" if skipped_needs else
-                      f"when: step '{when['step']}' settled as "
-                      f"'{outcomes.get(when['step'], {}).get('status', 'pending')}', "
-                      f"not '{when['status']}'")
-            journal.append(step_id, "skipped", status="skipped", reason=reason, role=step["role"])
-            emit(events.make_event("mission-step", {"goal": step["goal"], "role": step["role"],
-                                                    "adapter": step["adapter"]},
-                                   status="skipped", reason=reason, **context))
-            outcomes[step_id] = {"status": "skipped", "role": step["role"], "reason": reason,
-                                 "output": ""}
+        if kind == "skipped":
+            outcomes[step_id] = {"status": "skipped", "role": step["role"],
+                                 "reason": state.get("reason", ""), "output": ""}
             continue
-        contract = _step_contract(mission, step, outcomes)
-        resume_job_id = ""
-        if kind == "dispatched":
-            prior_job = state.get("worker_job", "")
-            if step["adapter"] == "root" and prior_job:
-                resume_job_id = prior_job  # reattach: poll the existing Root job, never duplicate it
-                journal.append(step_id, "reattached", worker_job=prior_job)
-            elif redispatch == step_id:
-                journal.append(step_id, "redispatch",
-                               reason="operator explicitly re-runs the interrupted step")
+        pending[step_id] = step
+
+    # Wave scheduler: independent steps (needs all terminal) dispatch CONCURRENTLY, capped at
+    # MAX_PARALLEL_STEPS; dependency order, skip cascades, the policy gate and the journal keep
+    # their exact sequential semantics. Settlement is processed in worklist order on the main
+    # thread, so the journal's settled/skip/proposal sequence is deterministic.
+    while pending:
+        ready: list[dict[str, Any]] = []
+        resume_jobs: dict[str, str] = {}
+        interrupted_reason = ""
+        skip_progress = False
+        for step_id, step in pending.items():
+            needs = step.get("needs") or []
+            when = step.get("when")
+            refs = list(needs) + ([when["step"]] if when else [])
+            if not all(ref in outcomes for ref in refs):
+                continue  # dependencies not terminal yet
+            skipped_needs = [n for n in needs if outcomes.get(n, {}).get("status") == "skipped"]
+            if skipped_needs or (when and outcomes.get(when["step"], {}).get("status") != when["status"]):
+                reason = (f"needs skipped step(s): {', '.join(skipped_needs)}" if skipped_needs else
+                          f"when: step '{when['step']}' settled as "
+                          f"'{outcomes.get(when['step'], {}).get('status', 'pending')}', "
+                          f"not '{when['status']}'")
+                journal.append(step_id, "skipped", status="skipped", reason=reason, role=step["role"])
+                emit(events.make_event("mission-step", {"goal": step["goal"], "role": step["role"],
+                                                        "adapter": step["adapter"]},
+                                       status="skipped", reason=reason, **context))
+                outcomes[step_id] = {"status": "skipped", "role": step["role"], "reason": reason,
+                                     "output": ""}
+                skip_progress = True
+                continue
+            kind = states.get(step_id, {}).get("event", "")
+            if kind in ("dispatched", "reattached", "redispatch"):
+                prior_job = states.get(step_id, {}).get("worker_job", "")
+                if step["adapter"] == "root" and prior_job:
+                    resume_jobs[step_id] = prior_job  # reattach: poll the existing Root job, never duplicate it
+                    journal.append(step_id, "reattached", worker_job=prior_job)
+                    ready.append(step)
+                elif redispatch == step_id:
+                    journal.append(step_id, "redispatch",
+                                   reason="operator explicitly re-runs the interrupted step")
+                    ready.append(step)
+                elif not interrupted_reason:
+                    # No reattach possible and no operator decision: STOP. The interrupted attempt
+                    # may have left partial external effects; silently repeating the step could
+                    # compound them. The operator inspects and chooses: redispatch or reset.
+                    orphan = ""
+                    if step["adapter"] == "root":
+                        # Crash window: POST accepted before the job id reached the journal leaves
+                        # an orphan Root job server-side. Reattach needs the id, so point the
+                        # operator at Root's own job records instead of guessing a match ourselves.
+                        orphan = (f" A Root job may have been submitted just before the crash without "
+                                  f"its id reaching the journal (dispatched at "
+                                  f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(states.get(step_id, {}).get('ts') or 0))}); "
+                                  f"check Root's job records under the Root home's jobs/ directory "
+                                  f"for that orphan before re-running.")
+                    interrupted_reason = (f"step '{step_id}' was interrupted before settling and cannot be "
+                                          f"reattached ({step['adapter']} jobs are not resumable without a "
+                                          f"journaled job id).{orphan} Inspect for partial effects, then choose: "
+                                          f"`skye mission redispatch <file> --step {step_id}` to re-run exactly "
+                                          f"this step, or `skye mission reset <file>` to start clean.")
             else:
-                # No reattach possible and no operator decision: STOP. The interrupted attempt
-                # may have left partial external effects; silently repeating the step could
-                # compound them. The operator inspects and chooses: redispatch or reset.
-                orphan = ""
-                if step["adapter"] == "root":
-                    # Crash window: POST accepted before the job id reached the journal leaves an
-                    # orphan Root job server-side. Reattach needs the id, so point the operator at
-                    # Root's own job records instead of guessing a match ourselves.
-                    orphan = (f" A Root job may have been submitted just before the crash without "
-                              f"its id reaching the journal (dispatched at "
-                              f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(state.get('ts') or 0))}); "
-                              f"check Root's job records under the Root home's jobs/ directory "
-                              f"for that orphan before re-running.")
-                reason = (f"step '{step_id}' was interrupted before settling and cannot be "
-                          f"reattached ({step['adapter']} jobs are not resumable without a "
-                          f"journaled job id).{orphan} Inspect for partial effects, then choose: "
-                          f"`skye mission redispatch <file> --step {step_id}` to re-run exactly "
-                          f"this step, or `skye mission reset <file>` to start clean.")
-                emit(events.make_event("mission", {}, status="interrupted", reason=reason, **context))
+                ready.append(step)
+        # Skips settled above remove steps from consideration; drop them from pending now.
+        for step_id in list(pending):
+            if step_id in outcomes:
+                del pending[step_id]
+        for step in ready:
+            if step["id"] in pending:
+                del pending[step["id"]]
+        if not ready:
+            if skip_progress:
+                continue  # a skip-only wave: dependencies settled, next wave re-evaluates
+            if interrupted_reason:
+                emit(events.make_event("mission", {}, status="interrupted",
+                                       reason=interrupted_reason, **context))
                 return MissionOutcome(status="interrupted", mission_id=mission["id"],
-                                      reason=reason, steps=outcomes)
-        journal.append(step_id, "dispatched", fingerprint=fingerprint(contract))
-        emit(events.make_event("mission-step", contract, status="dispatched", **context))
-        job_observer = lambda job_id, _s=step_id: journal.append(_s, "worker-job", worker_job=job_id)
-        outcome: Outcome = dispatch(
-            contract, policy, runner=runner, bridge=bridge, state_dir=state_dir,
-            approvals_path=approvals_path, catalogues_dir=catalogues_dir,
-            resume_job_id=resume_job_id or None, job_observer=job_observer,
-            event_context=dict(context))
-        if outcome.status == "needs-owner":
-            journal.append(step_id, "needs-owner", reason=outcome.reason,
-                           fingerprint=outcome.fingerprint)
+                                      reason=interrupted_reason, steps=outcomes)
+            # Nothing ready and nothing running: every remaining step waits on a need that can no
+            # longer settle (its dependency failed or was skipped in a way validation missed).
+            leftover = ", ".join(sorted(pending))
+            reason = f"no runnable steps remain; blocked: {leftover}"
+            emit(events.make_event("mission", {}, status="failed", reason=reason, **context))
+            return MissionOutcome(status="failed", mission_id=mission["id"], reason=reason,
+                                  steps=outcomes)
+
+        # Dispatch this wave concurrently. Contracts, briefs and the journal's dispatched entries
+        # are prepared in worklist order on the main thread; only the blocking dispatch() calls
+        # (worker run + gates) run on worker threads.
+        contracts: dict[str, dict[str, Any]] = {}
+        for step in ready:
+            step_id = step["id"]
+            context["step"] = step_id
+            contracts[step_id] = _step_contract(mission, step, outcomes)
+            journal.append(step_id, "dispatched", fingerprint=fingerprint(contracts[step_id]))
+            emit(events.make_event("mission-step", contracts[step_id], status="dispatched", **context))
+
+        def _run_one(step: dict[str, Any]) -> Outcome:
+            step_id = step["id"]
+            job_observer = lambda job_id, _s=step_id: journal.append(_s, "worker-job", worker_job=job_id)
+            return dispatch(
+                contracts[step_id], policy, runner=runner, bridge=bridge, state_dir=state_dir,
+                approvals_path=approvals_path, catalogues_dir=catalogues_dir,
+                resume_job_id=resume_jobs.get(step_id) or None, job_observer=job_observer,
+                event_context=dict(context, step=step_id))
+
+        # Wave width is bounded by BOTH the conservative module cap and the owner's policy:
+        # policy.max_concurrent (default 1) is the team-wide concurrency the owner actually
+        # allowed, so a default policy keeps missions strictly sequential. The cross-process
+        # registry in the dispatcher remains the enforcement of last resort.
+        width = max(1, min(MAX_PARALLEL_STEPS, policy.max_concurrent))
+        results: dict[str, Outcome] = {}
+        with ThreadPoolExecutor(max_workers=width, thread_name_prefix="skye-wave") as pool:
+            futures = {pool.submit(_run_one, step): step["id"] for step in ready}
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+
+        # Settle in worklist order: deterministic journal sequence, and the first
+        # needs-owner/failure in dependency order is the one the mission reports.
+        wave_needs_owner: tuple[str, Outcome] | None = None
+        wave_failed: tuple[str, Outcome] | None = None
+        for step in ready:
+            step_id = step["id"]
+            context["step"] = step_id
+            outcome = results[step_id]
+            if outcome.status == "needs-owner":
+                journal.append(step_id, "needs-owner", reason=outcome.reason,
+                               fingerprint=outcome.fingerprint)
+                pending_path = mission_dir / f"pending-{step_id}.json"
+                pending_path.write_text(json.dumps(outcome.contract, indent=2) + "\n", "utf-8")
+                if wave_needs_owner is None:
+                    wave_needs_owner = (step_id, outcome)
+                continue
+            journal.append(step_id, "settled", status=outcome.status, reason=outcome.reason,
+                           output=outcome.worker_output[-4000:], gates=outcome.gates,
+                           worker_job=outcome.worker_job, role=step["role"])
+            outcomes[step_id] = {"status": outcome.status, "reason": outcome.reason,
+                                 "role": step["role"], "output": outcome.worker_output[-4000:]}
+            if outcome.status != "done":
+                if wave_failed is None:
+                    wave_failed = (step_id, outcome)
+                continue
+            # Dynamic growth: a settled step may propose follow-up steps. Validated, capped,
+            # journaled BEFORE they join the workflow - and dispatched later through the same
+            # policy gate.
+            for proposal in extract_proposals(outcome.worker_output):
+                known = {s["id"] for s in worklist} | {
+                    str(p.get("id")) for p in journal.accepted_steps()}
+                problem = _validate_proposal(proposal, known, mission)
+                proposal_id = str(proposal.get("id") or "?")
+                if problem:
+                    journal.append(step_id, "proposal-rejected", reason=problem,
+                                   proposal_id=proposal_id)
+                    emit(events.make_event("mission-step", {}, status="proposal-rejected",
+                                           reason=problem, **context))
+                    continue
+                if len(worklist) >= MAX_STEPS:
+                    journal.append(step_id, "proposal-rejected", proposal_id=proposal_id,
+                                   reason=f"the mission already has {MAX_STEPS} steps (the cap)")
+                    continue
+                spec = {k: proposal[k] for k in ("id", "role", "adapter", "goal")}
+                for optional in ("brief", "needs", "gates", "budget", "when", "repo", "contract_keys"):
+                    if optional in proposal:
+                        spec[optional] = proposal[optional]
+                journal.append(step_id, "step-accepted", spec=spec)
+                emit(events.make_event("mission-step", spec, status="step-accepted", **context))
+                worklist.append(spec)
+                pending[spec["id"]] = spec
+        if wave_needs_owner is not None:
+            step_id, outcome = wave_needs_owner
             pending_path = mission_dir / f"pending-{step_id}.json"
-            pending_path.write_text(json.dumps(outcome.contract, indent=2) + "\n", "utf-8")
             emit(events.make_event("mission", {}, status="needs-owner", reason=outcome.reason, **context))
             return MissionOutcome(status="needs-owner", mission_id=mission["id"],
                                   reason=(f"step '{step_id}': {outcome.reason}. Approve exactly it with "
                                           f"`skye approve {pending_path}` then `skye mission run` again."),
                                   steps=outcomes, pending_contract=str(pending_path))
-        journal.append(step_id, "settled", status=outcome.status, reason=outcome.reason,
-                       output=outcome.worker_output[-4000:], gates=outcome.gates,
-                       worker_job=outcome.worker_job, role=step["role"])
-        record = {"status": outcome.status, "reason": outcome.reason, "role": step["role"],
-                  "output": outcome.worker_output[-4000:]}
-        outcomes[step_id] = record
-        if outcome.status != "done":
+        if wave_failed is not None:
+            step_id, outcome = wave_failed
             emit(events.make_event("mission", {}, status=outcome.status,
                                    reason=f"step '{step_id}': {outcome.reason}", **context))
             return MissionOutcome(status=outcome.status, mission_id=mission["id"],
                                   reason=f"step '{step_id}': {outcome.reason}", steps=outcomes)
-        # Dynamic growth: a settled step may propose follow-up steps. Validated, capped, journaled
-        # BEFORE they join the worklist - and dispatched later through the same policy gate.
-        for proposal in extract_proposals(outcome.worker_output):
-            known = {s["id"] for s in worklist} | {
-                str(p.get("id")) for p in journal.accepted_steps()}
-            problem = _validate_proposal(proposal, known, mission)
-            proposal_id = str(proposal.get("id") or "?")
-            if problem:
-                journal.append(step_id, "proposal-rejected", reason=problem,
-                               proposal_id=proposal_id)
-                emit(events.make_event("mission-step", {}, status="proposal-rejected",
-                                       reason=problem, **context))
-                continue
-            if len(worklist) >= MAX_STEPS:
-                journal.append(step_id, "proposal-rejected", proposal_id=proposal_id,
-                               reason=f"the mission already has {MAX_STEPS} steps (the cap)")
-                continue
-            spec = {k: proposal[k] for k in ("id", "role", "adapter", "goal")}
-            for optional in ("brief", "needs", "gates", "budget", "when", "repo", "contract_keys"):
-                if optional in proposal:
-                    spec[optional] = proposal[optional]
-            journal.append(step_id, "step-accepted", spec=spec)
-            emit(events.make_event("mission-step", spec, status="step-accepted", **context))
-            worklist.append(spec)
     emit(events.make_event("mission", {}, status="done", **context))
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 
@@ -412,12 +495,24 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
              for step in all_steps]
     if not states:
         overall = "not-started"
-    elif all(s["state"] == "settled" and s["status"] == "done" for s in steps):
-        overall = "done"
     else:
-        last = next((s for s in reversed(steps) if s["state"] != "pending"), steps[0])
-        overall = {"needs-owner": "needs-owner", "dispatched": "interrupted"}.get(
-            last["state"], last["status"] or last["state"])
+        # Aggregate, not "last step wins": with parallel waves an early step can pause
+        # needs-owner while a later independent step settles done - the mission is still paused.
+        kinds = [s["state"] for s in steps]
+        settled_not_done = [s for s in steps if s["state"] == "settled" and s["status"] != "done"]
+        if "needs-owner" in kinds:
+            overall = "needs-owner"
+        elif any(k in ("dispatched", "reattached", "redispatch") for k in kinds):
+            overall = "interrupted"  # in-flight at crash; the UI overlays "running" when live
+        elif settled_not_done:
+            overall = settled_not_done[0]["status"] or "failed"
+        elif all(s["state"] == "settled" and s["status"] == "done" for s in steps):
+            overall = "done"
+        elif any(s["state"] == "skipped" for s in steps) and all(
+                s["state"] in ("settled", "skipped") for s in steps):
+            overall = "done"  # everything terminal, nothing failed
+        else:
+            overall = "running"
     return {"mission": mission["id"], "status": overall, "steps": steps}
 
 

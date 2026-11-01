@@ -31,9 +31,10 @@ class FileBridge:
 
     def __init__(self, path: str | Path = "events.jsonl") -> None:
         self.path = Path(path)
+        self._lock = threading.Lock()  # parallel mission steps publish from worker threads
 
     def publish(self, event: dict[str, Any]) -> None:
-        with self.path.open("a", encoding="utf-8") as handle:
+        with self._lock, self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event) + "\n")
 
     def close(self) -> None:

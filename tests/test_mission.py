@@ -9,7 +9,8 @@ import pytest
 from skye import approvals
 from skye.adapters.base import Result
 from skye.events import FileBridge
-from skye.mission import (Journal, MissionError, load_mission, mission_status, reset_mission,
+from skye.mission import (Journal, MAX_PARALLEL_STEPS, MissionError, load_mission, mission_status,
+                          reset_mission,
                           run_mission)
 from skye.policy import Policy
 
@@ -325,3 +326,149 @@ def test_mission_validation_rejects_a_bad_when(tmp_path):
               "when": {"step": "ghost", "status": "done"}, "gates": []}]
     with pytest.raises(MissionError, match="when"):
         load_mission(_mission_file(tmp_path, steps))
+
+
+# ----- parallel fan-out -----
+
+def _parallel_policy():
+    return Policy({"allow_unattended": [{"adapter": "claude-code", "role": "*"}],
+                   "test_command": "true", "max_concurrent": 8})
+
+
+
+def test_independent_steps_run_concurrently(tmp_path):
+    """Two independent steps overlap in wall time: sequential execution would take ~2x as long."""
+    import threading
+    import time
+    steps = [{"id": "a", "role": "developer", "adapter": "claude-code", "goal": "a", "gates": []},
+             {"id": "b", "role": "tester", "adapter": "claude-code", "goal": "b", "gates": []}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+    entered = threading.Barrier(2, timeout=10)
+
+    def runner(spec):
+        entered.wait()  # only passes if BOTH steps are in flight at once
+        return Result(ok=True, output=f"{spec['role']} done", command=["fake"])
+
+    started = time.monotonic()
+    outcome = run_mission(mission, _parallel_policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done", outcome.reason
+    assert time.monotonic() - started < 10
+
+
+def test_dependency_order_survives_parallel_waves(tmp_path):
+    """A dependent step never starts before its need settles, even with siblings in flight."""
+    import time
+    steps = [{"id": "base", "role": "pm", "adapter": "claude-code", "goal": "base", "gates": []},
+             {"id": "sibling", "role": "developer", "adapter": "claude-code", "goal": "sib",
+              "gates": []},
+             {"id": "child", "role": "tester", "adapter": "claude-code", "goal": "child",
+              "needs": ["base"], "gates": []}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+    timeline = {}
+
+    def runner(spec):
+        timeline[f"{spec['goal']}:start"] = time.monotonic()
+        time.sleep(0.05)
+        timeline[f"{spec['goal']}:end"] = time.monotonic()
+        return Result(ok=True, output="ok", command=["fake"])
+
+    outcome = run_mission(mission, _parallel_policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done", outcome.reason
+    assert timeline["child:start"] >= timeline["base:end"]
+
+
+def test_wave_width_is_capped(tmp_path):
+    """Six independent steps never exceed MAX_PARALLEL_STEPS concurrent dispatches."""
+    import threading
+    steps = [{"id": f"s{i}", "role": "developer", "adapter": "claude-code", "goal": f"g{i}",
+              "gates": []} for i in range(6)]
+    mission = load_mission(_mission_file(tmp_path, steps))
+    lock = threading.Lock()
+    live = {"now": 0, "peak": 0}
+
+    def runner(spec):
+        with lock:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        try:
+            import time
+            time.sleep(0.05)
+            return Result(ok=True, output="ok", command=["fake"])
+        finally:
+            with lock:
+                live["now"] -= 1
+
+    outcome = run_mission(mission, _parallel_policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done", outcome.reason
+    assert 1 < live["peak"] <= MAX_PARALLEL_STEPS
+
+
+def test_parallel_wave_failure_fails_mission_after_wave(tmp_path):
+    """A failing step fails the mission; its independent sibling still completes (already
+    dispatched, killing it mid-flight would strand unknown state), and the dependent never runs."""
+    steps = [{"id": "bad", "role": "developer", "adapter": "claude-code", "goal": "bad",
+              "gates": []},
+             {"id": "good", "role": "developer", "adapter": "claude-code", "goal": "good",
+              "gates": []},
+             {"id": "child", "role": "tester", "adapter": "claude-code", "goal": "child",
+              "needs": ["bad"], "gates": []}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+    ran = []
+
+    def runner(spec):
+        ran.append(spec["goal"])
+        if spec["goal"] == "bad":
+            return Result(ok=False, output="boom", command=["fake"])
+        return Result(ok=True, output="ok", command=["fake"])
+
+    outcome = run_mission(mission, _parallel_policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "failed"
+    assert "good" in ran and "child" not in ran
+    assert outcome.steps["good"]["status"] == "done"
+
+
+def test_dynamic_proposal_joins_a_later_wave(tmp_path):
+    """A step proposed mid-run by a parallel worker is validated, journaled and dispatched."""
+    steps = [{"id": "a", "role": "developer", "adapter": "claude-code", "goal": "a", "gates": []},
+             {"id": "b", "role": "tester", "adapter": "claude-code", "goal": "b", "gates": []}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+    ran = []
+
+    def runner(spec):
+        ran.append(spec["role"])
+        if spec["goal"] == "a":
+            return Result(ok=True,
+                          output='done {"propose_steps": [{"id": "extra", "role": "tester",'
+                                 ' "adapter": "claude-code", "goal": "extra", "needs": ["b"],'
+                                 ' "gates": []}]}',
+                          command=["fake"])
+        return Result(ok=True, output="ok", command=["fake"])
+
+    outcome = run_mission(mission, _parallel_policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done", outcome.reason
+    assert outcome.steps["extra"]["status"] == "done"
+    journal = Journal(tmp_path / "st" / "missions" / "m1" / "journal.jsonl")
+    assert [s["id"] for s in journal.accepted_steps()] == ["extra"]
+
+
+def test_status_stays_needs_owner_when_a_later_dynamic_step_finished(tmp_path):
+    """Parallel waves: an early paused step must keep the mission needs-owner even after a later
+    independent step settles done - 'done' would be a lie."""
+    steps = [{"id": "dev", "role": "pm", "adapter": "claude-code", "goal": "x", "gates": []},
+             {"id": "guarded", "role": "tester", "adapter": "claude-code", "goal": "y",
+              "needs": ["dev"], "gates": []}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+    policy = Policy({"allow_unattended": [{"adapter": "claude-code", "role": "pm"}],
+                     "test_command": "true", "max_concurrent": 4})
+    proposer = '{"propose_steps": [{"id": "docs", "role": "pm", "adapter": "claude-code", "goal": "d", "needs": ["dev"], "gates": []}]}'
+    outcome = run_mission(mission, policy,
+                          runner=lambda spec: Result(ok=True, output=proposer, command=["f"]),
+                          bridge=FileBridge(tmp_path / "e.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "needs-owner"
+    status = mission_status(mission, tmp_path / "st")
+    assert status["status"] == "needs-owner", status

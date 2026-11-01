@@ -53,6 +53,13 @@ The supported working slice, all covered by tests in `tests/` (64 tests):
   (polled, never duplicated). CLI adapters (claude-code/codex) cannot reattach - resume
   re-dispatches the step and the journal says so; partial effects in the repo from the interrupted
   attempt are yours to inspect. A failed step fails the mission (no silent retries);
+  Independent steps (needs all settled) fan out CONCURRENTLY in waves: wave width is
+  `min(4, policy.max_concurrent)` - the default policy cap of 1 keeps missions strictly
+  sequential, and the dispatcher's cross-process registry remains the enforcement of last
+  resort. Settlement is journaled in worklist order on the main thread, so dependency order,
+  skip cascades, the policy gate and dynamic proposals keep their exact semantics under
+  parallelism; a failed step fails the mission after its wave completes (already-dispatched
+  siblings finish - killing them mid-flight would strand unknown state).
   `skye mission reset` archives the journal to start clean. `tests/test_mission.py` and
   `tests/test_integration_mission.py` cover the chain, the proposals, the skips, and a real
   kill-Skye recovery against the vendored Root with zero duplicate jobs.
