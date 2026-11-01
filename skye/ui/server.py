@@ -1213,6 +1213,13 @@ class UiHandler(BaseHTTPRequestHandler):
                                     claim = json.loads(marker.read_text("utf-8"))
                                     pending_fid = str(claim.get("follow_id") or "")
                                     owner_pid = int(claim.get("owner_pid") or 0)
+                                    if str(claim.get("run_key") or "") != run_key:
+                                        return self._json(
+                                            {"error": f"step '{step}' has a steer "
+                                                      "claim naming a different run - "
+                                                      "refusing to touch it; inspect "
+                                                      "the mission state dir",
+                                             "preserved_text": text}, 409)
                                 except (OSError, ValueError, TypeError):
                                     return self._json(
                                         {"error": f"step '{step}' has an unreadable "
@@ -1247,22 +1254,39 @@ class UiHandler(BaseHTTPRequestHandler):
                                 else:
                                     intent_text = str(
                                         entries_all[intent_pos].get("text") or "")[:300]
-                                    # follow_id + step scoped: only entries AFTER this
-                                    # intent, on THIS step, resolve it - and receipts
-                                    # must carry ITS text. An old terminal or another
-                                    # follow-up's ack never releases a later claim.
-                                    resolved = any(
-                                        (e.get("event") in (
-                                            "cancelled", "resume-rejected",
-                                            "redispatch", "follow-up-undelivered"))
-                                        or (e.get("event") == "worker-progress"
-                                            and e.get("kind") in (
-                                                "steer-ack", "steer-rejected",
-                                                "steer-unapplied")
-                                            and str(e.get("text") or "")[:300]
-                                            == intent_text)
-                                        for e in entries_all[intent_pos:]
-                                        if e.get("step") == step)
+                                    # follow_id + step + GENERATION scoped: entries
+                                    # before this intent or on other steps never
+                                    # resolve it; a receipt must carry ITS text and
+                                    # arrive within its dispatch generation - a
+                                    # delayed same-text ack from a PRIOR process
+                                    # (after a new dispatch) is not a receipt.
+                                    resolved = False
+                                    for e in entries_all[intent_pos:]:
+                                        if e.get("step") != step:
+                                            continue
+                                        ev = e.get("event")
+                                        if ev in ("cancelled", "resume-rejected",
+                                                  "redispatch", "settled"):
+                                            # the run ended / the operator acted: the
+                                            # engine scan owns any unknown state now
+                                            resolved = True
+                                            break
+                                        if ev == "follow-up-undelivered" \
+                                                and e.get("follow_id") == pending_fid:
+                                            resolved = True
+                                            break
+                                        if ev in ("dispatched", "reattached"):
+                                            break  # a NEWER dispatch: nothing after
+                                            # this line belongs to the claim's
+                                            # generation
+                                        if (ev == "worker-progress"
+                                                and e.get("kind") in (
+                                                    "steer-ack", "steer-rejected",
+                                                    "steer-unapplied")
+                                                and str(e.get("text") or "")[:300]
+                                                == intent_text):
+                                            resolved = True
+                                            break
                                     if resolved:
                                         marker.unlink(missing_ok=True)
                                     else:
@@ -1286,20 +1310,39 @@ class UiHandler(BaseHTTPRequestHandler):
                                 after = prior[idx + 1:]
                                 fid0 = e["follow_id"]
                                 if any(a.get("event") in (
-                                        "cancelled", "resume-rejected", "redispatch",
-                                        "follow-up-undelivered") for a in after):
+                                        "cancelled", "resume-rejected", "redispatch")
+                                        or (a.get("event") == "follow-up-undelivered"
+                                            and a.get("follow_id") == fid0)
+                                        for a in after):
                                     continue
                                 if not any(a.get("event") == "follow-up-submitted"
                                            and a.get("follow_id") == fid0
                                            for a in after):
-                                    continue  # never submitted - the run scan owns that
+                                    # Intent journaled, submission UNKNOWN (the writer
+                                    # died or errored mid-flight). A new send could
+                                    # duplicate unknown side effects - fail closed.
+                                    return self._json(
+                                        {"error": f"step '{step}' has a follow-up "
+                                                  "whose submission state is UNKNOWN "
+                                                  "(it may or may not have reached "
+                                                  "the worker) - inspect the step "
+                                                  "before sending more",
+                                         "preserved_text": text}, 409)
                                 text0 = str(e.get("text") or "")[:300]
+                                # generation boundary: a receipt must arrive before any
+                                # newer dispatch of the step - a delayed same-text echo
+                                # from a PRIOR process is not this follow-up's receipt
+                                generation: list = []
+                                for a in after:
+                                    if a.get("event") in ("dispatched", "reattached"):
+                                        break
+                                    generation.append(a)
                                 receipt = any(
                                     a.get("event") == "worker-progress"
                                     and a.get("kind") in ("steer-ack", "steer-rejected",
                                                           "steer-unapplied")
                                     and str(a.get("text") or "")[:300] == text0
-                                    for a in after)
+                                    for a in generation)
                                 if not receipt:
                                     return self._json(
                                         {"error": f"step '{step}' already has a "
@@ -1328,6 +1371,7 @@ class UiHandler(BaseHTTPRequestHandler):
                                               "steers are serialized per session; "
                                               "retry once it acknowledges",
                                      "preserved_text": text}, 409)
+                            intent_journaled = False
                             try:
                                 if not _marker_owned(marker, follow_id):
                                     return self._json(
@@ -1338,6 +1382,7 @@ class UiHandler(BaseHTTPRequestHandler):
                                 journal.append(step, "follow-up", follow_id=follow_id,
                                                text=text[:500],
                                                delivery="steered-live", state="intent")
+                                intent_journaled = True
                                 if not _marker_owned(marker, follow_id):
                                     # Stolen after the intent landed: do NOT submit.
                                     # The dangling intent fails closed on the next
@@ -1365,10 +1410,15 @@ class UiHandler(BaseHTTPRequestHandler):
                                 journal.append(step, "follow-up-undelivered",
                                                follow_id=follow_id, reason=steered)
                             except Exception:
-                                # Our own failure between claim and outcome: release OUR
-                                # claim (conditionally) so this process cannot wedge the
-                                # step; the journaled intent (if any) fails closed.
-                                if _marker_owned(marker, follow_id):
+                                if intent_journaled:
+                                    # UNKNOWN state: the follow-up may have reached the
+                                    # worker. Preserve the claim AND the intent - the
+                                    # run scan pauses on it and later POSTs fail closed
+                                    # - never cleanup-and-retry into a duplicate.
+                                    pass
+                                elif _marker_owned(marker, follow_id):
+                                    # pre-intent failure: nothing exists but the claim;
+                                    # release OUR marker so the step is not wedged.
                                     marker.unlink(missing_ok=True)
                                 raise
                         if steered == "unsupported":
