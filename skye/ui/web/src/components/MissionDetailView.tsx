@@ -1,6 +1,8 @@
 import { ArrowLeft, Play, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
+  cancelMission,
+  followUpStep,
   getMission,
   redispatchStep,
   ackRecovery,
@@ -65,6 +67,13 @@ const EVENT_LABEL: Record<string, string> = {
 
 export function MissionDetailView({ id, onBack }: { id: string; onBack: () => void }) {
   const [detail, setDetail] = useState<MissionDetail | null>(null);
+  // Stop feedback preserves the server's confirmed / unconfirmed / dispatch-marker states.
+  const [stopNote, setStopNote] = useState<string | null>(null);
+  const [followNote, setFollowNote] = useState<string | null>(null);
+  useEffect(() => { setStopNote(null); setFollowNote(null); }, [id]);
+  useEffect(() => {
+    if (detail && !detail.live?.running) setFollowNote(null);
+  }, [detail]);
   const [projects, setProjects] = useState<Project[]>([]);
   useEffect(() => { getProjects().then((d) => setProjects(d.projects)).catch(() => {}); }, []);
   const [error, setError] = useState<string | null>(null);
@@ -92,8 +101,10 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
     try {
       await fn();
       await refresh();
+      return true;
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -123,7 +134,8 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   // An acknowledged recovery offers Resume only while the mission is still waiting to run;
   // once it has settled, a Resume button and "resume when ready" copy would be stale.
   const missionDone = detail.status.status === "done";
-  const resumable = !live && (["needs-owner", "interrupted", "failed"].includes(detail.status.status)
+  const hasStoppedStep = detail.status.steps.some((s) => ["cancelled", "resume-rejected"].includes(s.state));
+  const resumable = !hasStoppedStep && !live && (["needs-owner", "interrupted", "failed"].includes(detail.status.status)
                               || (recoveryAcked && !missionDone));
   // Backlog-started missions compose the goal as "Title: brief". Split that
   // composition into a kicker + heading so the title isn't repeated into one
@@ -148,6 +160,27 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         </button>
         {overallBadge(detail.status.status, live, detail.approved)}
         <span className="flex-1" />
+        {live ? (
+          <Button
+            variant="danger-outline"
+            size="sm"
+            loading={busy}
+            onClick={() =>
+              act(async () => {
+                const res = await cancelMission(id);
+                // The server's exact vocabulary: "stopped" is verified process exit,
+                // "stop-unconfirmed" is named plainly, "marked" means nothing was live.
+                setStopNote(
+                  res.cancel === "stopped"
+                    ? `Stop confirmed - ${res.steps.length} running step${res.steps.length === 1 ? "" : "s"} stopped${res.steps.length ? ` (${res.steps.join(", ")})` : ""}. Remaining steps stay resumable.`
+                    : res.cancel === "stop-unconfirmed"
+                      ? `Stop signal sent to ${res.steps.length} step${res.steps.length === 1 ? "" : "s"}, but their exit is unconfirmed. Watch the activity log before relying on the stop.`
+                      : "Stop requested between steps. No live worker was registered to signal; waiting for the mission to stop dispatching.");
+              })}
+          >
+            Stop
+          </Button>
+        ) : null}
         {resumable ? (
           <Button size="sm" loading={busy} disabled={recoveryPending}
                   onClick={() => act(() => resumeMission(id))}>
@@ -289,6 +322,16 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           {detail.live.error}
         </p>
       ) : null}
+      {followNote ? (
+        <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          {followNote}
+        </p>
+      ) : null}
+      {stopNote ? (
+        <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          {stopNote}
+        </p>
+      ) : null}
       {actionError ? (
         <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
           {actionError}
@@ -296,12 +339,25 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
       ) : null}
       <MissionFlow missionId={detail.mission.id} />
       <MissionRunTrace
+        busy={busy}
         detail={detail}
         onChanged={refresh}
         onRedispatch={(step) => act(() => redispatchStep(id, step))}
+        onRedispatchFresh={(step) => act(() => redispatchStep(id, step, true))}
+        onFollowUp={async (step, text) => {
+          return await act(async () => {
+            const res = await followUpStep(id, step, text);
+            // "submitted" = queued on the running process's input for a later turn, never a
+            // guarantee the model consumed it; "queued" = a new run resumes the session.
+            setFollowNote(
+              res.delivery === "submitted"
+                ? `Follow-up sent to running step ${step} - submitted to its input for a later turn, not mid-tool-call. Provider receipt is still unconfirmed.`
+                : `Follow-up queued for step ${step} - a new run resumes its recorded session with your text.`);
+          });
+        }}
       />
       <DiscussionPanel missionId={detail.mission.id} />
-      <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} />
+      <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} running={live} />
       <details className="rounded-md border border-border bg-card p-4">
         <summary className="cursor-pointer text-sm font-medium text-foreground">
           Activity ({detail.journal.length} events)

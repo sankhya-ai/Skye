@@ -166,17 +166,17 @@ function DiffGroups({ missionId, repo, entry }: {
   );
 }
 
-export function MissionArtifactsPanel({ missionId, artifacts }: {
+export function MissionArtifactsPanel({ missionId, artifacts, running = false }: {
   missionId: string;
   artifacts?: Artifacts;
+  running?: boolean;
 }) {
   if (!artifacts?.recorded) {
     return (
       <div className="rounded-md border border-border bg-card p-4">
         <h3 className="text-sm font-medium text-foreground">Changed files</h3>
         <p className="mt-2 text-xs text-muted-foreground">
-          No file-change record for this mission. Missions record the repo file manifest at
-          start and completion; older missions predate that record.
+          {running ? "File changes have not been recorded yet. The final file record is written when the mission finishes." : "No file-change record is available for this mission."}
         </p>
       </div>
     );
@@ -200,7 +200,7 @@ export function MissionArtifactsPanel({ missionId, artifacts }: {
               <DiffGroups missionId={missionId} repo={name} entry={entry} />
             ) : (
               <p className="mt-2 text-xs text-muted-foreground">
-                No recorded changes yet - the final file record is written when the mission finishes.
+                {running ? "File changes have not been recorded yet. The final record is written when the mission finishes." : "No final file record yet. Files may have changed before the mission stopped."}
               </p>
             )}
           </div>
@@ -215,7 +215,7 @@ export function MissionArtifactsPanel({ missionId, artifacts }: {
       <div className="rounded-md border border-border bg-card p-4">
         <h3 className="text-sm font-medium text-foreground">Changed files</h3>
         <p className="mt-2 text-xs text-muted-foreground">
-          No recorded changes - the final file record is written when the mission finishes.
+          {running ? "File changes have not been recorded yet. The final record is written when the mission finishes." : "No final file record yet. Files may have changed before the mission stopped."}
         </p>
       </div>
     );

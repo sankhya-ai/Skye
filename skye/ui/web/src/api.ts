@@ -23,6 +23,13 @@ export type StepStatus = {
   state: string;
   status: string;
   reason: string;
+  // Session vocabulary: how the last run related to the vendor session (fresh/resumed/
+  // reattached), whether a session exists to follow up on, and the latest streamed
+  // progress line (already redacted server-side).
+  continuity?: string;
+  has_session?: boolean;
+  followupable?: boolean;
+  progress?: string;
 };
 
 export type JournalEntry = {
@@ -138,6 +145,8 @@ export type GraphNode = {
   proposed_by?: string;
   repo_reason?: string;
   worker_job?: string;
+  continuity?: string;
+  has_session?: boolean;
 };
 
 export type MissionGraph = {
@@ -176,8 +185,22 @@ export const ackRecovery = (id: string) =>
     `/api/missions/${encodeURIComponent(id)}/ack-recovery`, { method: "POST", body: "{}" });
 export const resumeMission = (id: string) =>
   api<{ resumed: boolean }>(`/api/missions/${id}/resume`, { method: "POST", body: "{}" });
-export const redispatchStep = (id: string, step: string) =>
-  api<{ redispatched: string }>(`/api/missions/${id}/redispatch`, { method: "POST", body: JSON.stringify({ step }) });
+export const redispatchStep = (id: string, step: string, fresh = false) =>
+  api<{ redispatched: string; continuity?: string }>(
+    `/api/missions/${id}/redispatch`,
+    { method: "POST", body: JSON.stringify(fresh ? { step, fresh: true } : { step }) });
+// Continue a settled recorded session in a new process, or submit supported live input.
+// A submitted live follow-up is not a provider-consumption receipt.
+export const followUpStep = (id: string, step: string, text: string) =>
+  api<{ accepted: boolean; step: string; continuity?: string;
+        delivery?: "submitted" | "queued"; receipt?: string }>(
+    `/api/missions/${id}/follow-up`,
+    { method: "POST", body: JSON.stringify({ step, text }) });
+// Operator stop: SIGTERM->SIGKILL to live steps plus a no-new-dispatch marker. The
+// response distinguishes confirmed process exit, unconfirmed exit, and a dispatch marker.
+export const cancelMission = (id: string) =>
+  api<{ cancel: "stopped" | "stop-unconfirmed" | "marked"; steps: string[] }>(
+    `/api/missions/${id}/cancel`, { method: "POST", body: "{}" });
 
 export type RoleRow = {
   name: string;

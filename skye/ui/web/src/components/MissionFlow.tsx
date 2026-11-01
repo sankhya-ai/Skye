@@ -10,7 +10,7 @@ import { Badge } from "./ui/Badge";
 // no journal record is "pending", and free-text worker output never renders here.
 
 const NODE_W = 176;
-const NODE_H = 64;
+const NODE_H = 84;
 const COL_GAP = 56;
 const ROW_GAP = 14;
 const PAD = 12;
@@ -26,6 +26,10 @@ function stateBadge(state: string) {
       return <Badge variant="info">running</Badge>;
     case "needs-owner":
       return <Badge variant="warning">needs you</Badge>;
+    case "cancelled":
+      return <Badge variant="warning">stopped</Badge>;
+    case "resume-rejected":
+      return <Badge variant="warning">session resume rejected</Badge>;
     case "interrupted":
       return <Badge variant="destructive">interrupted</Badge>;
     case "skipped":
@@ -47,6 +51,8 @@ function stateRing(state: string): string {
       return "border-destructive/50";
     case "running":
       return "border-info/60";
+    case "cancelled":
+    case "resume-rejected":
     case "needs-owner":
       return "border-warning/60";
     default:
@@ -185,17 +191,15 @@ export function MissionFlow({ missionId }: { missionId: string }) {
                   <span className="truncate font-mono text-[11px] text-foreground">{n.id}</span>
                   {stateBadge(n.state)}
                 </span>
-                <span className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <span className="truncate">
-                    {n.role} · {n.adapter}
-                  </span>
-                  {n.repo ? (
-                    <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border px-1.5">
-                      <GitBranch className="size-2.5" />
-                      {n.repo}
-                    </span>
-                  ) : null}
+                <span className="mt-1 block truncate text-[10px] text-muted-foreground" title={`${n.role} · ${n.adapter}`}>
+                  {n.role} · {n.adapter}
                 </span>
+                {n.repo ? (
+                  <span title={n.repo} className="mt-1 inline-flex max-w-full items-center gap-0.5 rounded-full border border-border px-1.5 text-[10px] text-muted-foreground">
+                    <GitBranch className="size-2.5 shrink-0" />
+                    <span className="truncate">{n.repo.split("/").filter(Boolean).pop() || n.repo}</span>
+                  </span>
+                ) : null}
               </button>
             );
           })}

@@ -147,6 +147,28 @@ state_dir = demo / "state"
 with socket.socket() as probe:
     probe.bind(("127.0.0.1", 0))
     ui_port = probe.getsockname()[1]
+# Suite-local fake CLIs for the lifecycle probes, staged BEFORE the UI server spawns:
+# the server process owns adapter dispatch, so its fixed env must carry the fakes' PATH.
+# The fakes speak the real stream protocols and read their sleep from FAKE_SLEEP_FILE
+# (per-invocation, so the suite controls timing despite the server's fixed env).
+fakebin = demo / "fakebin"
+fakebin.mkdir(exist_ok=True)
+claude_fake = (REPO / "tests/fakes/claude").read_text()
+claude_fake = claude_fake.replace('sleep = float(os.environ.get("FAKE_SLEEP", "0"))',
+    'sleep = float(open(os.environ["FAKE_SLEEP_FILE"]).read().strip() or "0")')
+claude_fake = claude_fake.replace('if sleep:\n    time.sleep(sleep)',
+    'print(json.dumps({"type":"assistant","message":{"content":[{"type":"text","text":"working on the step now"}]}}), flush=True)\nif sleep:\n    time.sleep(sleep)')
+(fakebin / "claude").write_text(claude_fake)
+(fakebin / "claude").chmod(0o755)
+codex_fake = (REPO / "tests/fakes/codex").read_text()
+codex_fake = codex_fake.replace('if not os.environ.get("FAKE_EXPECT_STEER"):',
+    'if open(os.environ["FAKE_SLEEP_FILE"]).read().strip() != "25":')
+(fakebin / "codex").write_text(codex_fake)
+(fakebin / "codex").chmod(0o755)
+(demo / "fake-sleep").write_text("0")
+os.environ["PATH"] = str(fakebin) + os.pathsep + os.environ.get("PATH", "")
+os.environ["FAKE_LOG"] = str(demo / "fake-claude.log")
+os.environ["FAKE_SLEEP_FILE"] = str(demo / "fake-sleep")
 env = dict(os.environ, SKYE_ROOT_URL=f"http://127.0.0.1:{root_port}",
            SKYE_ROOT_HOME=str(home), SKYE_ROOT_POLL_SECONDS="0.5", PYTHONUNBUFFERED="1")
 ui_proc = subprocess.Popen([sys.executable, "-m", "skye.cli", "ui", "--port", str(ui_port),
@@ -774,7 +796,7 @@ while time.monotonic() < deadline:
 print("RECOVERY resume pauses with journaled recovery context:",
       "PASS" if pending_ev else "FAIL")
 
-policy_now.pop("workspaces")
+policy_now.pop("workspaces", None)
 (demo / "skye.policy.json").write_text(json.dumps(policy_now))
 
 with sync_playwright() as pw:
@@ -894,7 +916,7 @@ while time.monotonic() < deadline:
     time.sleep(0.5)
 print("MULTI any lost tree pauses the mission for the owner:", "PASS" if mpending else "FAIL")
 
-policy_now.pop("workspaces")
+policy_now.pop("workspaces", None)
 (demo / "skye.policy.json").write_text(json.dumps(policy_now))
 
 with sync_playwright() as pw:
@@ -1131,9 +1153,9 @@ with sync_playwright() as pw:
     page.goto(ui_url + "#/settings")
     page.wait_for_timeout(2000)
     codex_line = page.locator("li", has_text="codex").first
-    codex_unavail = codex_line.count() and "not available" in codex_line.inner_text()
+    codex_unavail = codex_line.count() and "not available" not in codex_line.inner_text()
     honest_auth = page.locator("text=only exercised by a real run").count()
-    print("SETTINGS adapter availability: codex reported not available (no codex binary here):",
+    print("SETTINGS adapter availability: suite fake codex reported installed (not a sign-in claim):",
           "PASS" if codex_unavail else "FAIL")
     print("SETTINGS availability disclaims auth probing:",
           "PASS" if honest_auth else "FAIL")
@@ -1248,7 +1270,193 @@ with sync_playwright() as pw:
     shot(page, out_dir / "ui-discovery-detail.png")
     browser.close()
 
-policy_now.pop("workspaces")
+# --- CLI session lifecycle: streamed progress, continuity, follow-up, cancel ---------
+# The fake `claude` binary (tests/fakes) speaks the real stream-json protocol - init,
+# assistant text, result - with no network and no model, so the UI's session vocabulary
+# is verified against the actual adapter protocol, mechanism-level (a real signed-in
+# Claude Code run stays unverified).
+# The fakes staged before the UI server spawn speak the real stream protocols; the first
+# assistant line streams IMMEDIATELY so mid-run progress is observable, and each probe's
+# timing comes from the sleep FILE (the server's env is fixed at spawn).
+lifecycle_repo = demo / "lifecycle-repo"
+_git_repo(lifecycle_repo)
+policy_now = json.loads((demo / "skye.policy.json").read_text())
+policy_now["allow_unattended"].append({"adapter": "claude-code", "role": "*"})
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+
+def _write_lifecycle(mid, goal):
+    mdir = state_dir / "missions" / mid
+    mdir.mkdir(parents=True, exist_ok=True)
+    (mdir / "mission.json").write_text(json.dumps({
+        "id": mid, "goal": goal, "repo": str(lifecycle_repo),
+        "steps": [{"id": "dev", "role": "developer", "adapter": "claude-code",
+                   "goal": goal, "repo": str(lifecycle_repo),
+                   "gates": [], "budget": {"max_steps": 4}}]}, indent=2))
+
+def _graph(mid):
+    return json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/missions/{mid}/graph",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+
+def _detail(mid):
+    return json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/missions/{mid}",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+
+def _settle(mid, timeout=90):
+    deadline = time.monotonic() + timeout
+    g = {}
+    while time.monotonic() < deadline:
+        g = _graph(mid)
+        if g.get("meta", {}).get("status") in ("done", "failed", "needs-owner", "gate-failed"):
+            return g
+        time.sleep(1)
+    return g
+
+_write_lifecycle("lifecycle-probe", "Lifecycle probe: stream, follow-up, continuity")
+(demo / "fake-sleep").write_text("25")
+with sync_playwright() as pw:
+    browser = pw.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    # explicit owner-style start (GET views never start runs; the resume action does)
+    post("/api/missions/lifecycle-probe/resume", {})
+    page.goto(ui_url + "#/mission/lifecycle-probe")
+    # mid-run: the step card shows the latest streamed progress line, labelled as the
+    # latest report - never as live attachment
+    prog_ok = False
+    for _ in range(30):
+        if page.locator("[data-progress='dev']").count():
+            prog_ok = "Latest progress:" in page.locator("[data-progress='dev']").inner_text()
+            break
+        page.wait_for_timeout(500)
+    print("LIFECYCLE running step shows the worker's streamed progress line:",
+          "PASS" if prog_ok else "FAIL")
+    page.wait_for_timeout(300)
+    shot(page, out_dir / "ui-lifecycle-progress.png")
+    # mid-run follow-up on claude-code: STEERED into the running process's input queue
+    # (vendor-queued for the next turn - never claimed consumed by the model)
+    import urllib.error
+    try:
+        steer = post("/api/missions/lifecycle-probe/follow-up",
+                     {"step": "dev", "text": "also check the edge case"})
+    except urllib.error.HTTPError as exc:
+        steer = {"http_error": exc.code, "body": exc.read().decode()[:200]}
+    steered_ok = steer.get("accepted") and steer.get("delivery") == "submitted"
+    journal = _detail("lifecycle-probe")["journal"]
+    steered_journaled = any(e.get("event") == "follow-up"
+                            and e.get("delivery") == "steered-live" for e in journal)
+    print("LIFECYCLE mid-run follow-up steers into the live run (journaled steered-live):",
+          "PASS" if steered_ok and steered_journaled else
+          f"FAIL {steer} journaled={steered_journaled}")
+    g = _settle("lifecycle-probe")
+    consumed_receipt = any(e.get("event") == "worker-progress" and e.get("kind") == "steer-ack"
+                           and e.get("text") == "also check the edge case"
+                           for e in _detail("lifecycle-probe")["journal"])
+    print("LIFECYCLE Claude replay echo records the exact follow-up text:",
+          "PASS" if consumed_receipt else "FAIL")
+    st = _detail("lifecycle-probe")["status"]["steps"][0]
+    sess_ok = (g.get("meta", {}).get("status") == "done" and st["has_session"]
+               and st["followupable"] and st["continuity"] == "fresh")
+    print("LIFECYCLE settled step records its vendor session (follow-up eligible):",
+          "PASS" if sess_ok else f"FAIL {st}")
+    # the owner follows up on the settled step: same session resumed in a new process
+    (demo / "fake-sleep").write_text("2")
+    page.wait_for_selector("[data-followup='dev']", timeout=10000)
+    page.locator("[data-followup='dev'] >> button").click()
+    page.locator("[data-followup='dev'] input").fill("tighten the summary")
+    page.locator("[data-followup='dev'] >> text=Send follow-up").click()
+    page.wait_for_timeout(2000)
+    g2 = _settle("lifecycle-probe")
+    st2 = _detail("lifecycle-probe")["status"]["steps"][0]
+    fake_calls = (demo / "fake-claude.log").read_text().splitlines()
+    resumed_call = any("--resume" in json.loads(c) for c in fake_calls)
+    print("LIFECYCLE follow-up resumed the recorded session (--resume in the CLI call):",
+          "PASS" if g2.get("meta", {}).get("status") == "done" and resumed_call
+          and st2["continuity"] == "resumed" else
+          f"FAIL status={g2.get('meta', {}).get('status')} resumed={resumed_call}")
+    badge_ok = False
+    for _ in range(20):
+        if page.locator("text=session resumed").count():
+            badge_ok = True
+            break
+        page.wait_for_timeout(500)
+    print("LIFECYCLE step card badges the resumed session:", "PASS" if badge_ok else "FAIL")
+    page.wait_for_function("""() => {
+      const node = document.querySelector('[data-flow-node]');
+      return node && node.textContent.includes('done') && !document.querySelector('aside').textContent.includes('running');
+    }""", timeout=15000)
+    shot(page, out_dir / "ui-lifecycle-resumed.png")
+    browser.close()
+
+# cancel: a live run is signalled, the UI says signalled - never "cancelled" before the fact
+_write_lifecycle("lifecycle-cancel", "Lifecycle probe: operator stop")
+(demo / "fake-sleep").write_text("30")
+with sync_playwright() as pw:
+    browser = pw.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    post("/api/missions/lifecycle-cancel/resume", {})
+    page.goto(ui_url + "#/mission/lifecycle-cancel")
+    page.wait_for_selector("text=running", timeout=15000)
+    page.locator("button", has_text="Stop").click()
+    page.wait_for_timeout(1000)
+    note = page.locator("text=Stop confirmed").count()
+    no_premature = not page.locator("text=has been cancelled").count()
+    print("LIFECYCLE cancel reports verified stop, never a premature 'cancelled':",
+          "PASS" if note and no_premature else "FAIL")
+    page.wait_for_function("""() => {
+      const node = document.querySelector('[data-flow-node]');
+      return node && node.textContent.includes('stopped') && !document.querySelector('aside').textContent.includes('running');
+    }""", timeout=15000)
+    shot(page, out_dir / "ui-lifecycle-cancel.png")
+    g3 = _settle("lifecycle-cancel", timeout=60)
+    cancelled_ok = (g3.get("meta", {}).get("status") == "needs-owner"
+                    and any(n.get("state") == "cancelled" for n in g3.get("nodes", [])))
+    print("LIFECYCLE cancelled mission pauses needs-owner with the step cancelled:",
+          "PASS" if cancelled_ok else f"FAIL {g3.get('meta', {}).get('status')}")
+    # resume after cancel continues the recorded session (the fake printed its id first)
+    (demo / "fake-sleep").write_text("0")
+    before = len((demo / "fake-claude.log").read_text().splitlines())
+    page.wait_for_selector("text=Run this step again", timeout=10000)
+    page.locator("button", has_text="Run this step again").click()
+    time.sleep(1)
+    g4 = _settle("lifecycle-cancel")
+    after_calls = [json.loads(c) for c in
+                   (demo / "fake-claude.log").read_text().splitlines()[before:]]
+    resumed_after_cancel = any("--resume" in c for c in after_calls)
+    print("LIFECYCLE resume after cancel continues the recorded session:",
+          "PASS" if g4.get("meta", {}).get("status") == "done" and resumed_after_cancel
+          else f"FAIL status={g4.get('meta', {}).get('status')} calls={after_calls}")
+    browser.close()
+
+# Codex app-server: a real running turn accepts a submitted follow-up (not a consumption claim).
+mdir = state_dir / "missions" / "lifecycle-codex"
+mdir.mkdir(parents=True, exist_ok=True)
+(mdir / "mission.json").write_text(json.dumps({
+    "id": "lifecycle-codex", "goal": "Lifecycle probe: codex app-server", "repo": str(lifecycle_repo),
+    "steps": [{"id": "dev", "role": "developer", "adapter": "codex",
+               "goal": "codex probe", "repo": str(lifecycle_repo),
+               "gates": [], "budget": {"max_steps": 4}}]}, indent=2))
+policy_now = json.loads((demo / "skye.policy.json").read_text())
+policy_now["allow_unattended"].append({"adapter": "codex", "role": "*"})
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+(demo / "fake-sleep").write_text("25")
+post("/api/missions/lifecycle-codex/resume", {})
+time.sleep(2)  # let the run reach its live registration
+response = post("/api/missions/lifecycle-codex/follow-up", {"step": "dev", "text": "check edge cases"})
+print("LIFECYCLE codex app-server mid-run follow-up submitted:",
+      "PASS" if response.get("delivery") == "submitted" else f"FAIL {response}")
+g5 = _settle("lifecycle-codex", timeout=60)
+print("LIFECYCLE codex app-server turn completes after follow-up:",
+      "PASS" if g5.get("meta", {}).get("status") == "done" else f"FAIL {g5}")
+policy_now["allow_unattended"] = [a for a in policy_now["allow_unattended"]
+                                  if a.get("adapter") != "codex"]
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+
+policy_now["allow_unattended"] = [a for a in policy_now["allow_unattended"]
+                                  if a.get("adapter") != "claude-code"]
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+
+policy_now.pop("workspaces", None)
 (demo / "skye.policy.json").write_text(json.dumps(policy_now))
 
 print("mission:", mission_id, final)

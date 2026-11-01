@@ -68,8 +68,10 @@ function statesFromJournal(journal: JournalEntry[]): Map<string, StepState> {
         next.reason = entry.reason;
         next.at = entry.ts;
         break;
+      case "cancelled":
+      case "resume-rejected":
       case "interrupted":
-        next.state = "interrupted";
+        next.state = entry.event;
         next.reason = entry.reason;
         next.at = entry.ts;
         break;
@@ -125,6 +127,10 @@ function stateBadge(state: string, approved?: boolean) {
       return <Badge variant="info">running</Badge>;
     case "needs-owner":
       return <Badge variant="warning">needs you</Badge>;
+    case "cancelled":
+      return <Badge variant="warning">stopped</Badge>;
+    case "resume-rejected":
+      return <Badge variant="warning">session resume rejected</Badge>;
     case "interrupted":
       return <Badge variant="destructive">interrupted</Badge>;
     case "skipped":
@@ -138,11 +144,23 @@ export function MissionRunTrace({
   detail,
   onChanged,
   onRedispatch,
+  onRedispatchFresh,
+  onFollowUp,
+  busy,
 }: {
+  busy: boolean;
   detail: MissionDetail;
   onChanged: () => void;
   onRedispatch: (step: string) => void;
+  onRedispatchFresh: (step: string) => void;
+  onFollowUp: (step: string, text: string) => Promise<boolean>;
 }) {
+  const [followUps, setFollowUps] = useState<Record<string, string>>({});
+  const [followUpOpen, setFollowUpOpen] = useState<Record<string, boolean>>({});
+  // Session vocabulary from the authoritative status read (redacted server-side), keyed
+  // by step id: continuity, recorded-session presence, follow-up eligibility, and the
+  // latest streamed progress line.
+  const statusByStep = new Map((detail.status.steps ?? []).map((s) => [s.id, s]));
   const states = statesFromJournal(detail.journal);
   const overall = detail.status.status;
   const liveRunning = Boolean(detail.live?.running);
@@ -172,12 +190,14 @@ export function MissionRunTrace({
     <div className="space-y-3" data-testid="mission-run-trace">
       {steps.map((step) => {
         const st = states.get(step.id) ?? { state: "pending" };
+        const session = statusByStep.get(step.id);
         // A dispatch recorded before the mission stopped can never settle: show the
         // mission's outcome on the step instead of a spinner that implies live work.
         // The journal keeps the raw dispatch record; this is display-only.
         const staleDispatch =
           st.state === "dispatched" && !liveRunning && (overall === "interrupted" || overall === "failed");
         const display = staleDispatch ? overall : st.state;
+        const retryStep = !liveRunning && (staleDispatch || ["cancelled", "resume-rejected"].includes(st.state));
         const pending = pendingByStep.get(step.id);
         const open = openOutputs[step.id] ?? false;
         return (
@@ -200,6 +220,15 @@ export function MissionRunTrace({
                   <span className="text-xs text-muted-foreground">
                     {step.role} · {step.adapter}
                   </span>
+                  {session?.continuity === "resumed" ? (
+                    <Badge variant="info" title="continued the vendor session recorded by this step's earlier run">
+                      session resumed
+                    </Badge>
+                  ) : session?.continuity === "reattached" ? (
+                    <Badge variant="info" title="reattached to the still-running job">
+                      reattached
+                    </Badge>
+                  ) : null}
                   {stateBadge(display, detail.approved)}
                   {st.at ? (
                     <span className="text-xs text-muted-foreground">{formatRelative(st.at)}</span>
@@ -236,19 +265,135 @@ export function MissionRunTrace({
                       : st.reason}
                   </p>
                 ) : null}
-                {staleDispatch ? (
+                {retryStep ? (
                   <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                     <p className="mb-2 text-xs text-muted-foreground">
-                      Running it again re-runs exactly this step. Resetting starts the
-                      mission over - changes already made to files stay as they are.
+                      Running it again re-runs exactly this step, continuing its recorded
+                      session when one exists. "Start fresh instead" starts only this step
+                      without its recorded session. Neither option resets the mission or
+                      undoes file changes.
                     </p>
-                    <Button
-                      variant="danger-outline"
-                      size="sm"
-                      onClick={() => onRedispatch(step.id)}
-                    >
-                      <Send className="size-3" /> Run this step again
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="danger-outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => onRedispatch(step.id)}
+                      >
+                        <Send className="size-3" /> Run this step again
+                      </Button>
+                      {session?.has_session ? (
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                          disabled={busy}
+                          onClick={() => onRedispatchFresh(step.id)}
+                        >
+                          Start fresh instead (abandons the recorded session)
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {st.state === "dispatched" && liveRunning && session?.progress ? (
+                  // The latest line the worker streamed, delivered via the journal on the
+                  // poll cadence - recent progress, never a claim of live attachment.
+                  <p className="mt-1 truncate text-xs text-muted-foreground" data-progress={step.id}>
+                    Latest progress: {session.progress}
+                  </p>
+                ) : null}
+                {session?.followupable || (liveRunning && st.state === "dispatched") ? (
+                  <div className="mt-2" data-followup={step.id}>
+                    {liveRunning && st.state !== "dispatched" ? (
+                      <p className="text-xs text-muted-foreground/80">
+                        Follow-ups open once the mission settles.
+                      </p>
+                    ) : liveRunning ? (
+                      followUpOpen[step.id] ? (
+                        <div className="rounded-lg border border-border bg-muted/30 p-3">
+                          <p className="mb-2 text-xs text-muted-foreground">
+                            Submit a follow-up to this running step. Submission does not
+                            confirm that the provider received or used it. Unsupported
+                            protocols return an error without starting a fresh session.
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={followUps[step.id] ?? ""}
+                              onChange={(e) =>
+                                setFollowUps((f) => ({ ...f, [step.id]: e.target.value }))}
+                              placeholder="Follow up on the running step..."
+                              className="h-8 min-w-0 flex-1 rounded-md border border-border bg-card px-2 text-xs outline-none"
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy || !(followUps[step.id] ?? "").trim()}
+                              onClick={() => {
+                                const text = (followUps[step.id] ?? "").trim();
+                                if (!text) return;
+                                void onFollowUp(step.id, text).then((sent) => {
+                                  if (!sent) return;
+                                  setFollowUps((f) => ({ ...f, [step.id]: "" }));
+                                  setFollowUpOpen((o) => ({ ...o, [step.id]: false }));
+                                });
+                              }}
+                            >
+                              <Send className="size-3" /> Send to running step
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                          onClick={() => setFollowUpOpen((o) => ({ ...o, [step.id]: true }))}
+                        >
+                          Follow up on the running step
+                        </button>
+                      )
+                    ) : followUpOpen[step.id] ? (
+                      <div className="rounded-lg border border-border bg-muted/30 p-3">
+                        <p className="mb-2 text-xs text-muted-foreground">
+                          Starts a new run that continues this step&apos;s recorded session -
+                          not a live message to a running worker.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={followUps[step.id] ?? ""}
+                            onChange={(e) =>
+                              setFollowUps((f) => ({ ...f, [step.id]: e.target.value }))}
+                            placeholder="Follow up on this step..."
+                            className="h-8 min-w-0 flex-1 rounded-md border border-border bg-card px-2 text-xs outline-none"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy || !(followUps[step.id] ?? "").trim()}
+                            onClick={() => {
+                              const text = (followUps[step.id] ?? "").trim();
+                              if (!text) return;
+                              void onFollowUp(step.id, text).then((sent) => {
+                                  if (!sent) return;
+                                setFollowUps((f) => ({ ...f, [step.id]: "" }));
+                                setFollowUpOpen((o) => ({ ...o, [step.id]: false }));
+                              });
+                            }}
+                          >
+                            <Send className="size-3" /> Send follow-up
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                        onClick={() => setFollowUpOpen((o) => ({ ...o, [step.id]: true }))}
+                      >
+                        Follow up (continues this step&apos;s session)
+                      </button>
+                    )}
                   </div>
                 ) : null}
                 {st.output ? (
