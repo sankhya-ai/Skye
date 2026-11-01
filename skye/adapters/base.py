@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 
 
 class AdapterError(RuntimeError):
-    pass
+    """An adapter failure. status_code carries the HTTP status when one was involved, so
+    callers can tell "definitively gone" (404) from "cannot reach" (connection error)."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass
