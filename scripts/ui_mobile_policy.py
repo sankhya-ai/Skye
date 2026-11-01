@@ -85,6 +85,18 @@ post(port1, tok1, "/api/missions",
                  "goal": "long data probe", "gates": [], "budget": {"max_steps": 2}}]})
 
 from playwright.sync_api import sync_playwright
+def shot(page, path):
+    """Full-content capture that renders FIXED chrome (the sidebar) where the user actually
+    sees it. Playwright's full_page=True stitches scrolled segments and drops fixed elements
+    mid-page; expanding the viewport to the content height lays the page out as a tall
+    window instead, so top/bottom-pinned chrome pins correctly. Width is preserved."""
+    size = page.viewport_size or {"width": 1280, "height": 800}
+    h = page.evaluate("Math.max(document.documentElement.scrollHeight,"
+                      " document.body ? document.body.scrollHeight : 0, window.innerHeight)")
+    page.set_viewport_size({"width": size["width"], "height": max(400, min(int(h), 3000))})
+    page.wait_for_timeout(250)
+    page.screenshot(path=str(path))
+
 with sync_playwright() as pw:
     browser = pw.chromium.launch()
     ctx = browser.new_context(viewport={"width": 390, "height": 844})  # iPhone-class
@@ -98,7 +110,8 @@ with sync_playwright() as pw:
         overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
         print(f"MOBILE {name} 390px no horizontal overflow:", "PASS" if not overflow else "FAIL")
         if name in ("missions", "detail", "settings", "home"):
-            page.screenshot(path=str(out_dir / f"ui-mobile-{name}.png"), full_page=True)
+            
+            shot(page, out_dir / f"ui-mobile-{name}.png")
     long_visible = page.locator("text=Policy").count()
     browser.close()
 

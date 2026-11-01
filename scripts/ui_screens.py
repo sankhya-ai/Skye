@@ -154,6 +154,18 @@ while not token_file.exists() and time.monotonic() < deadline:
 token = token_file.read_text().strip()
 ui_url = f"http://127.0.0.1:{ui_port}/?token={token}"
 out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/skye-ui-screens")
+def shot(page, path):
+    """Full-content capture that renders FIXED chrome (the sidebar) where the user actually
+    sees it. Playwright's full_page=True stitches scrolled segments and drops fixed elements
+    mid-page; expanding the viewport to the content height lays the page out as a tall
+    window instead, so top/bottom-pinned chrome pins correctly. Width is preserved."""
+    size = page.viewport_size or {"width": 1280, "height": 800}
+    h = page.evaluate("Math.max(document.documentElement.scrollHeight,"
+                      " document.body ? document.body.scrollHeight : 0, window.innerHeight)")
+    page.set_viewport_size({"width": size["width"], "height": max(400, min(int(h), 3000))})
+    page.wait_for_timeout(250)
+    page.screenshot(path=str(path))
+
 
 import urllib.request
 def post(path, body):
@@ -185,7 +197,7 @@ with sync_playwright() as pw:
         if live_detail["live"].get("running"):
             # give the page's own polling a beat to render the live badge, then capture
             page.wait_for_timeout(1200)
-            page.screenshot(path=str(out_dir / "ui-mission-detail-running.png"), full_page=True)
+            shot(page, out_dir / "ui-mission-detail-running.png")
             live_shot = True
             print("LIVE running-state capture: taken")
             break
@@ -262,7 +274,7 @@ with sync_playwright() as pw:
             if preview.count():
                 preview.click()
                 page.wait_for_timeout(1500)
-        page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
+        shot(page, out_dir / f"ui-{name}.png")
         if name == "agents":
             proposed = page.locator("text=Needs approval").count()
             extends_badge = page.locator("text=extends senior-dev").count()
@@ -284,7 +296,7 @@ with sync_playwright() as pw:
                 link_nav = page.locator('a[href="https://example.invalid/docs"]').count()
                 print("MARKDOWN preview rendered:", "PASS" if rendered else "FAIL",
                       "| link not navigable:", "PASS" if not link_nav else "FAIL")
-                page.screenshot(path=str(out_dir / "ui-artifact-markdown.png"), full_page=True)
+                shot(page, out_dir / "ui-artifact-markdown.png")
 
             # sidebar layout: full-page captures misplace fixed elements, so verify with
             # real viewport shots - pinned at top before and after scrolling
@@ -324,7 +336,7 @@ with sync_playwright() as pw:
             # approval states: the codex-adapter mission paused at the policy gate
             page.goto(ui_url + f"#/mission/{approval_mission}")
             page.wait_for_timeout(3000)
-            page.screenshot(path=str(out_dir / "ui-approval-pending.png"), full_page=True)
+            shot(page, out_dir / "ui-approval-pending.png")
             card = page.locator("[data-testid='approval-card']")
             approve = card.locator("button", has_text="Approve this step once")
             if approve.count():
@@ -353,7 +365,7 @@ with sync_playwright() as pw:
                       else f"FAIL boxShadow={ring!r}")
                 page.keyboard.press("Enter")
                 page.wait_for_timeout(1500)
-                page.screenshot(path=str(out_dir / "ui-approval-approved.png"), full_page=True)
+                shot(page, out_dir / "ui-approval-approved.png")
                 settled = card.count() == 0
                 print("APPROVAL keyboard activation:", "PASS" if settled else "FAIL card still present")
                 # the sidebar list polls on its own 3s cycle: after it lands, an approved
@@ -379,7 +391,7 @@ with sync_playwright() as pw:
                   "| note:", "PASS" if note else "FAIL",
                   "| ack rendered:", "PASS" if acked else "FAIL",
                   "| unacked waiting_on:", "PASS" if waiting else "FAIL")
-            page.screenshot(path=str(out_dir / "ui-mission-discussion.png"), full_page=True)
+            shot(page, out_dir / "ui-mission-discussion.png")
         if name == "backlog":
             reopened_badge = page.locator("text=Reopened - needs your decision").count()
             reopen_meta = page.locator("text=reopened 1x").count()
@@ -475,7 +487,7 @@ with sync_playwright() as pw:
     reopened_line = page.locator("text=Reopened tickets included").count()
     print("SETTINGS pickup shows on with limits:",
           "PASS" if on_line and limit_line and reopened_line else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-settings-pickup-on.png"), full_page=True)
+    shot(page, out_dir / "ui-settings-pickup-on.png")
     # a change lands elsewhere AFTER the form loaded: the whole-policy save must conflict,
     # never silently overwrite it; after an explicit reload the save goes through
     post("/api/policy/auto_pickup", {"auto_pickup": {"enabled": True,
@@ -488,7 +500,7 @@ with sync_playwright() as pw:
               .get("auto_pickup", {}).get("max_missions") == 3)
     print("SETTINGS stale save conflicts, newer change untouched:",
           "PASS" if conflict and still3 else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-settings-conflict.png"), full_page=True)
+    shot(page, out_dir / "ui-settings-conflict.png")
     page.reload()
     page.wait_for_timeout(1800)
     page.locator("button", has_text="Save policy").first.click()
@@ -521,7 +533,7 @@ with sync_playwright() as pw:
     readable = page.locator("text=policy file could not be read").count()
     print("SETTINGS failed read locks the form with a readable banner:",
           "PASS" if save_disabled and readable else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-settings-pickup-unavailable.png"), full_page=True)
+    shot(page, out_dir / "ui-settings-pickup-unavailable.png")
     (demo / "skye.policy.json").write_text(json.dumps(policy_data))
     browser.close()
 
@@ -564,7 +576,7 @@ with sync_playwright() as pw:
     st = status["status"]["status"]
     print("INTERRUPTED mission state after kill+restart:", st)
     if st == "interrupted":
-        page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
+        shot(page, out_dir / "ui-mission-interrupted.png")
         print("INTERRUPTED capture: taken")
         again = page.locator("button", has_text="Run this step again")
         print("INTERRUPTED re-run affordance:", "PASS" if again.count() else "FAIL no button")
@@ -589,9 +601,9 @@ with sync_playwright() as pw:
         print("INTERRUPTED re-run journaled:", "PASS" if rerun_ev else "FAIL no re-run events",
               "| journal:", evs)
         page.wait_for_timeout(1000)
-        page.screenshot(path=str(out_dir / "ui-mission-rerun.png"), full_page=True)
+        shot(page, out_dir / "ui-mission-rerun.png")
     else:
-        page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
+        shot(page, out_dir / "ui-mission-interrupted.png")
         print("INTERRUPTED capture: taken but state was", st, "- inspect")
 
     # --- outage states, in honest order ---
@@ -615,7 +627,7 @@ with sync_playwright() as pw:
           "| unavailable state", "PASS" if unavail else "FAIL",
           "| no false empty", "PASS" if not false_empty and not false_side else "FAIL",
           "| sidebar unavailable", "PASS" if side_unavail == 2 else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-server-down-first-load.png"), full_page=True)
+    shot(page, out_dir / "ui-server-down-first-load.png")
     page.unroute("**/api/**")
 
     # (b) app open WITH data when the server dies: stale view + banner
@@ -628,7 +640,7 @@ with sync_playwright() as pw:
     rows = page.locator("text=Weekly sales report").count()
     print("SERVER-DOWN stale: banner", "PASS" if banner else "FAIL",
           "| last data kept", "PASS" if rows else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-server-down.png"), full_page=True)
+    shot(page, out_dir / "ui-server-down.png")
 
     # (c) Home composer: submitting during the outage shows a human error, not a hang
     page.goto(ui_url + "#/")
@@ -638,7 +650,7 @@ with sync_playwright() as pw:
     page.wait_for_timeout(3000)
     composer_err = page.locator("text=Connection lost").count()
     print("COMPOSER outage error:", "PASS" if composer_err else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-home-composer-error.png"), full_page=True)
+    shot(page, out_dir / "ui-home-composer-error.png")
 
     # (d) Sidebar add-project during the outage: inline error, form stays put
     page.click('[aria-label="New project"]')
@@ -648,7 +660,7 @@ with sync_playwright() as pw:
     page.wait_for_timeout(3000)
     add_err = page.locator("text=Connection lost").count()
     print("ADD-PROJECT outage error:", "PASS" if add_err else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-sidebar-addproject-error.png"), full_page=True)
+    shot(page, out_dir / "ui-sidebar-addproject-error.png")
 
     # (e) reconnect: server returns, the banner clears and data comes back
     old_token = token
@@ -677,7 +689,7 @@ with sync_playwright() as pw:
     rows = page.locator("text=Weekly sales report").count()
     print("RECONNECT banner cleared:", "PASS" if not banner else "FAIL",
           "| data back:", "PASS" if rows else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-server-recovered.png"), full_page=True)
+    shot(page, out_dir / "ui-server-recovered.png")
     browser.close()
 
 
@@ -757,7 +769,7 @@ with sync_playwright() as pw:
     print("RECOVERY review card with loss warning + branch context:",
           "PASS" if card and loss and branch else "FAIL")
     print("RECOVERY Resume withheld or disabled until acknowledged:", "PASS" if gated else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-recovery-review.png"), full_page=True)
+    shot(page, out_dir / "ui-recovery-review.png")
     page.locator("button", has_text="I reviewed the rebuilt workspace").click()
     page.wait_for_timeout(1200)
     acked_rec = json.loads((mission_dir / "workspace.json").read_text())
@@ -766,7 +778,7 @@ with sync_playwright() as pw:
                and resume_btn.evaluate("el => !el.matches(':disabled')"))
     print("RECOVERY acknowledge records who/when + Resume offered:",
           "PASS" if acked_rec.get("recovery_acknowledged") and ack_line and enabled else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-recovery-acknowledged.png"), full_page=True)
+    shot(page, out_dir / "ui-recovery-acknowledged.png")
     page.reload()
     page.wait_for_timeout(2500)
     still_pending = page.locator("button", has_text="I reviewed the rebuilt workspace").count()
@@ -875,7 +887,7 @@ with sync_playwright() as pw:
           "PASS" if card and fe_lost and be_listed else "FAIL")
     print("MULTI workspace mode surface lists both repositories:",
           "PASS" if mode else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-recovery-multi.png"), full_page=True)
+    shot(page, out_dir / "ui-recovery-multi.png")
     page.locator("button", has_text="I reviewed the rebuilt workspace").click()
     page.wait_for_timeout(1200)
     page.reload()
@@ -883,7 +895,7 @@ with sync_playwright() as pw:
     still_pending = page.locator("button", has_text="I reviewed the rebuilt workspace").count()
     resolved = page.locator("text=resume when ready").count()
     print("MULTI ack->reload resolves pending:", "PASS" if resolved and not still_pending else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-recovery-multi-acked.png"), full_page=True)
+    shot(page, out_dir / "ui-recovery-multi-acked.png")
     page.locator("button", has_text="Resume").first.click()
     deadline = time.monotonic() + 40
     multi_final = ""
@@ -913,7 +925,7 @@ with sync_playwright() as pw:
     print("MULTI artifacts payload carries the same path per repo (artifacts.repos):",
           "PASS" if per_repo_ok else f"FAIL repos={list(art_repos)}")
     page.wait_for_timeout(3500)  # let the detail refresh show the settled run
-    page.screenshot(path=str(out_dir / "ui-recovery-multi-resumed.png"), full_page=True)
+    shot(page, out_dir / "ui-recovery-multi-resumed.png")
     # Grouped Changed files: each repo's section is captioned with its name and previews
     # that repo's own bytes for the SAME relative path - the ambiguity the flat list hid.
     captions = all(page.locator("div[data-repo=\"" + r + "\"]").count() for r in ("backend", "frontend"))
@@ -935,7 +947,7 @@ with sync_playwright() as pw:
     no_err = not page.locator("text=artifact preview failed").count()
     print("MULTI same-path previews show each repo's own content, never the other's:",
           "PASS" if be_preview and fe_preview and not cross and no_err else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-artifacts-multirepo.png"), full_page=True)
+    shot(page, out_dir / "ui-artifacts-multirepo.png")
     nctx = browser.new_context(viewport={"width": 430, "height": 800})
     npage = nctx.new_page()
     npage.goto(ui_url + "#/mission/multi-recovery")
@@ -944,7 +956,7 @@ with sync_playwright() as pw:
     ncard = npage.locator("text=Workspace was recovered").count()
     print("MULTI narrow 430px: no horizontal overflow, recovery card legible:",
           "PASS" if ncard and not overflow else "FAIL")
-    npage.screenshot(path=str(out_dir / "ui-recovery-multi-narrow.png"), full_page=True)
+    shot(npage, out_dir / "ui-recovery-multi-narrow.png")
     nctx.close()
     browser.close()
 
@@ -968,7 +980,7 @@ with sync_playwright() as pw:
     page.locator('input[placeholder="name (e.g. backend)"]').nth(1).fill("frontend")
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill(str(repo_fe))
     page.select_option("details select", label="backend")
-    page.screenshot(path=str(out_dir / "ui-composer-form.png"), full_page=True)
+    shot(page, out_dir / "ui-composer-form.png")
     # validation is real: a relative path is refused before anything is sent
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill("relative/path")
     page.locator('button[aria-label="Start mission"]').click()
@@ -982,7 +994,7 @@ with sync_playwright() as pw:
     names = page.locator("text=frontend").count() and page.locator("text=backend").count()
     print("COMPOSER multi-repo mission runs with per-repo worktrees shown:",
           "PASS" if mode and names else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-composer-multirepo.png"), full_page=True)
+    shot(page, out_dir / "ui-composer-multirepo.png")
     page.wait_for_timeout(6000)  # two 3s poll cycles: the sidebar must catch up with done
     stale_running = page.locator("aside >> text=running").count()
     print("SIDEBAR consistent once the mission settles (no stale running):",
@@ -997,7 +1009,7 @@ with sync_playwright() as pw:
           "PASS" if codex_unavail else "FAIL")
     print("SETTINGS availability disclaims auth probing:",
           "PASS" if honest_auth else "FAIL")
-    page.screenshot(path=str(out_dir / "ui-settings-adapters.png"), full_page=True)
+    shot(page, out_dir / "ui-settings-adapters.png")
     browser.close()
 policy_now.pop("workspaces")
 (demo / "skye.policy.json").write_text(json.dumps(policy_now))
