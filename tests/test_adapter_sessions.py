@@ -261,3 +261,46 @@ def test_codex_cancel_during_handshake_fallback_returns_truthful_result(
     result = CodexAdapter().run_session(_contract(tmp_path), cancel_event=cancel)
     assert result.cancelled and not result.ok
     assert result.output and "cancelled" in result.output
+
+
+def test_codex_approval_request_is_explicitly_declined(fake_path, tmp_path, monkeypatch):
+    # Enforcement is at the decision point: a server approval request mid-turn gets an
+    # explicit "decline" (never an implicit approve), journaled as approval-declined.
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    monkeypatch.setenv("FAKE_ASK_APPROVAL", "1")
+    events: list = []
+    result = CodexAdapter().run_session(_contract(tmp_path), on_event=events.append)
+    assert result.ok, result.output[:200]
+    responses = [json.loads(line)["srv_response"]
+                 for line in fake_path.read_text().splitlines()
+                 if '"srv_response"' in line]
+    assert responses == [{"decision": "decline"}]
+    assert any(e.get("kind") == "approval-declined" for e in events)
+
+
+def test_codex_unknown_server_request_fails_closed(fake_path, tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    monkeypatch.setenv("FAKE_UNKNOWN_REQUEST", "1")
+    events: list = []
+    result = CodexAdapter().run_session(_contract(tmp_path), on_event=events.append)
+    assert result.ok, result.output[:200]  # the turn completes; the request was refused
+    responses = [json.loads(line)["srv_response"]
+                 for line in fake_path.read_text().splitlines()
+                 if '"srv_response"' in line]
+    assert responses and responses[0].get("code") == -32601
+    assert any(e.get("kind") == "server-request-unknown" for e in events)
+
+
+def test_codex_thread_start_error_fails_closed_no_exec_fallback(fake_path, tmp_path,
+                                                                monkeypatch):
+    # An explicit thread/start error arrives AFTER the request went out: thread state
+    # is unknown, so the run fails closed with the truthful state - no exec retry.
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    monkeypatch.setenv("FAKE_THREAD_START_ERROR", "1")
+    result = CodexAdapter().run_session(_contract(tmp_path))
+    assert not result.ok
+    assert "thread state unknown" in result.output
+    assert result.protocol.startswith("app-server")
+    rpcs = [json.loads(line)["rpc"] for line in fake_path.read_text().splitlines()
+            if '"rpc"' in line]
+    assert "thread/start" in rpcs and "turn/start" not in rpcs

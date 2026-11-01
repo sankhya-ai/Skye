@@ -1183,6 +1183,41 @@ class UiHandler(BaseHTTPRequestHandler):
                         # guessing. "steered" = SUBMITTED to the process; consumption is
                         # the provider's own event (replay echo / steer response),
                         # journaled by the engine as steer-ack progress.
+                        # Serialize live steers per step: at most ONE may await its
+                        # provider receipt. Text-echo correlation cannot distinguish two
+                        # identical in-flight texts, so an ambiguous repeat is REJECTED
+                        # here rather than given a false exact-consumption guarantee.
+                        prior = [e for e in journal.entries()
+                                 if e.get("step") == step]
+                        for idx, e in enumerate(prior):
+                            if not (e.get("event") == "follow-up"
+                                    and e.get("delivery") == "steered-live"
+                                    and e.get("state") == "intent"
+                                    and e.get("follow_id")):
+                                continue
+                            after = prior[idx + 1:]
+                            fid0 = e["follow_id"]
+                            if any(a.get("event") in (
+                                    "cancelled", "resume-rejected", "redispatch",
+                                    "follow-up-undelivered") for a in after):
+                                continue
+                            if not any(a.get("event") == "follow-up-submitted"
+                                       and a.get("follow_id") == fid0 for a in after):
+                                continue  # never submitted - the run scan owns that
+                            text0 = str(e.get("text") or "")[:300]
+                            receipt = any(
+                                a.get("event") == "worker-progress"
+                                and a.get("kind") in ("steer-ack", "steer-rejected",
+                                                      "steer-unapplied")
+                                and str(a.get("text") or "")[:300] == text0
+                                for a in after)
+                            if not receipt:
+                                return self._json(
+                                    {"error": f"step '{step}' already has a follow-up "
+                                              "awaiting its provider receipt - live "
+                                              "steers are serialized per session so "
+                                              "consumption is never misattributed; "
+                                              "retry once it acknowledges"}, 409)
                         follow_id = _uuid.uuid4().hex[:12]
                         journal.append(step, "follow-up", follow_id=follow_id,
                                        text=text[:500], delivery="steered-live",

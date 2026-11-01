@@ -24,6 +24,7 @@ if argv and argv[0] == "app-server":
     import os
     turn_no = 0
     active_turn = None
+    waiting_approval = None  # (thread_id) while a server->client request is unanswered
     for raw in sys.stdin:
         raw = raw.strip()
         if not raw:
@@ -44,6 +45,19 @@ if argv and argv[0] == "app-server":
         def notify(name, payload):
             print(json.dumps({"jsonrpc": "2.0", "method": name, "params": payload}),
                   flush=True)
+        if "result" in msg or "error" in msg:
+            # a response to OUR server->client request
+            if log:
+                with open(log, "a") as handle:
+                    handle.write(json.dumps({"srv_response": msg.get("result")
+                                             or msg.get("error")}) + "\n")
+            if waiting_approval:
+                thread_id = waiting_approval
+                waiting_approval = None
+                notify("turn/completed", {"threadId": thread_id,
+                       "turn": {"id": active_turn, "status": "completed"}})
+                active_turn = None
+            continue
         if method == "initialize":
             if os.environ.get("FAKE_BAD_HANDSHAKE"):
                 # A build whose app-server speaks something else: the adapter must
@@ -53,8 +67,11 @@ if argv and argv[0] == "app-server":
                 reply({"userAgent": "codex-fake/1.0", "codexHome": "/tmp/fake-codex-home",
                        "platformFamily": "unix", "os": "linux"})
         elif method == "thread/start":
-            reply({"thread": {"id": "thr-new-1"}, "model": "fake",
-                   "modelProvider": "fake"})
+            if os.environ.get("FAKE_THREAD_START_ERROR"):
+                reply(error={"code": -32603, "message": "internal thread error"})
+            else:
+                reply({"thread": {"id": "thr-new-1"}, "model": "fake",
+                       "modelProvider": "fake"})
         elif method == "thread/resume":
             if params.get("threadId") == "bad-session":
                 reply(error={"code": -32602, "message": "no rollout found"})
@@ -79,7 +96,23 @@ if argv and argv[0] == "app-server":
                    "item": {"id": "i2", "type": "commandExecution", "command": "pytest -q",
                             "aggregatedOutput": "ok", "exitCode": 0,
                             "status": "completed"}})
-            if not os.environ.get("FAKE_EXPECT_STEER"):
+            if os.environ.get("FAKE_ASK_APPROVAL"):
+                # Server->client approval request mid-turn (item.rs shape); the turn
+                # completes only after the client's decision arrives.
+                print(json.dumps({"jsonrpc": "2.0", "id": "srv-1",
+                                  "method": "item/commandExecution/requestApproval",
+                                  "params": {"threadId": thread_id,
+                                             "turnId": active_turn,
+                                             "itemId": "i2",
+                                             "command": "rm -rf build"}}),
+                      flush=True)
+                waiting_approval = thread_id
+            elif os.environ.get("FAKE_UNKNOWN_REQUEST"):
+                print(json.dumps({"jsonrpc": "2.0", "id": "srv-9",
+                                  "method": "custom/unknownRequest",
+                                  "params": {}}), flush=True)
+                waiting_approval = thread_id
+            elif not os.environ.get("FAKE_EXPECT_STEER"):
                 notify("turn/completed", {"threadId": thread_id,
                        "turn": {"id": active_turn, "status": "completed"}})
                 active_turn = None

@@ -303,6 +303,14 @@ class CodexAdapter(SessionAdapter):
                                                "sandbox": sandbox}, "thread")
                     effect_sent = True
                 elif rid == "thread":
+                    if msg.get("error") is not None and not resume_session_id:
+                        # thread/start failed AFTER the request went out: an explicit
+                        # error is not proof no thread was created - classify
+                        # conservatively as unknown-effect and fail closed.
+                        protocol_error = (f"thread/start returned an error after the "
+                                          f"request was sent; thread state unknown - "
+                                          f"failing closed: {str(msg.get('error'))[:200]}")
+                        break
                     if msg.get("error") is not None:
                         if resume_session_id:
                             # Rejected resume: fail CLOSED, never a silent fresh thread.
@@ -313,8 +321,6 @@ class CodexAdapter(SessionAdapter):
                                 session_id=resume_session_id,
                                 output=f"thread/resume rejected: "
                                        f"{str(msg.get('error'))[:300]}")
-                        raise _FallbackToExec(f"thread/start failed: "
-                                              f"{str(msg.get('error'))[:200]}")
                     thread = (msg.get("result") or {}).get("thread") or {}
                     session_id = str(thread.get("id") or "")
                     if not session_id:

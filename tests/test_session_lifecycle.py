@@ -771,3 +771,43 @@ def test_resume_endpoint_names_interrupted_steps_and_supported_actions(ui_server
                                gates=[], worker_job="", role="developer")
     status, body = _req(url, "/api/missions/m1/resume", method="POST", body={})
     assert status == 200 and "interrupted" not in body
+
+
+def test_stale_or_early_receipt_never_resolves_a_submission(fake_path, tmp_path):
+    # An ack positioned BEFORE the submission (a stale echo from an earlier journey)
+    # must not resolve it: receipts only count after their own submitted entry.
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    journal = _journal(state_dir)
+    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner" and "unconfirmed" in outcome.reason
+    # and the REAL receipt, arriving after, resolves exactly it
+    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+
+
+def test_follow_up_endpoint_serializes_live_steers(ui_server, tmp_path, monkeypatch):
+    # A second live steer while one awaits its provider receipt is REJECTED (409):
+    # identical texts could not be told apart by echo correlation, so ambiguity is
+    # refused up front rather than given a false exact-consumption guarantee.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "add logging"})
+    assert status == 409 and "awaiting its provider receipt" in body["error"], body
+    # once the receipt lands, the next steer is accepted
+    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "add logging"})
+    assert status == 200 and body["delivery"] == "submitted", body
