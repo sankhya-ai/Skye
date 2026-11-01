@@ -14,6 +14,7 @@ backlog and policy registries.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import secrets
@@ -80,20 +81,19 @@ def report(kind: str, summary: str, *, detail: str = "", project: str = "",
                 issue["occurrences"] = int(issue.get("occurrences", 1)) + 1
                 issue["last_seen"] = time.time()
                 # The proposal an owner approved is bound to the content digest it carried.
-                # If the source changed since, say so on the ticket's thread - an approval
-                # covers the imported snapshot, never whatever the source says now.
+                # A changed source INVALIDATES that binding - it never mutates content under
+                # an old approval. An undecided or approved-but-unstarted ticket goes back to
+                # pending with its decision and any pickup reservation cleared (under the
+                # pickup lock, so a launch in flight re-reads the invalidated status and
+                # aborts instead of starting stale work). A started/delivered ticket keeps
+                # its history; the thread records the change there.
                 if content_digest and issue.get("content_digest") and \
                         issue["content_digest"] != content_digest:
                     issue["content_digest"] = content_digest
+                    issue["summary"] = summary
+                    issue["detail"] = str(detail or "")[:4000]
                     if issue.get("feature_id"):
-                        try:
-                            backlog.add_thread(
-                                issue["feature_id"], actor="intake", kind="status",
-                                body=("the source content changed since import (new digest "
-                                      f"{content_digest}); any approval covers the earlier "
-                                      "snapshot - re-review before acting on this ticket"))
-                        except Exception:
-                            pass  # the issue record still carries the new digest
+                        _invalidate_decision(issue, summary, detail, content_digest)
                     _write(target, data)
                     return issue, True  # changed content: treat as new for the caller's count
                 _write(target, data)
@@ -125,6 +125,42 @@ def report(kind: str, summary: str, *, detail: str = "", project: str = "",
     data["issues"].append(issue)
     _write(target, data)
     return issue, True
+
+
+def _invalidate_decision(issue: dict[str, Any], summary: str, detail: str,
+                        digest: str) -> None:
+    """Pull an unstarted ticket back to pending when its source content changed. Serialized
+    through the pickup lock so reserve/launch cannot interleave a stale read-modify-write."""
+    from . import pickup
+    target = Path(backlog.default_path())
+    with open(pickup._lock_path(target), "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = backlog._read(target)
+        for feature in data["features"]:
+            if feature.get("id") != issue["feature_id"]:
+                continue
+            if feature.get("mission_id"):
+                backlog._thread(feature, actor="intake", kind="status",
+                                body=(f"source content changed after work started (new digest "
+                                      f"{digest}); the running mission keeps its approved "
+                                      "snapshot - review the outcome against the new content"))
+                backlog._write(target, data)
+                return
+            had_reservation = bool(feature.get("pickup"))
+            feature.pop("pickup", None)
+            feature["status"] = "pending"
+            feature["decided_at"] = None
+            feature["decision_note"] = ""
+            feature["brief"] = (f"{issue['kind']} reported by {issue.get('source')}: {summary}"
+                                + (f"\n\nDetail:\n{str(detail or '')[:4000]}" if detail else "")
+                                + f"\n\nSource content digest: {digest} "
+                                  "(approval binds this snapshot)")
+            backlog._thread(feature, actor="intake", kind="status",
+                            body=("source content changed; decision invalidated, ticket back "
+                                  "to pending for a fresh owner decision"
+                                  + ("; pickup reservation cleared" if had_reservation else "")))
+            backlog._write(target, data)
+            return
 
 
 def report_for_feature(feature_id: str, kind: str, summary: str, *, detail: str = "",

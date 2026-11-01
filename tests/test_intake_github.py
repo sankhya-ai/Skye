@@ -108,9 +108,10 @@ def test_changed_source_content_flags_approval_binds_earlier_snapshot(store):
     result = intake_github.import_issues("acme/app", opener=opener2)
     assert len(result["content_changed"]) == 1
     assert len(result["already_known"]) == 1  # unchanged issue stays known
-    feature = backlog.list_features()[0]
-    notes = [e for e in feature.get("thread", []) if e.get("actor") == "intake"]
-    assert notes and "earlier" in notes[0]["body"] and "snapshot" in notes[0]["body"]
+    changed_feature = [f for f in backlog.list_features() if "Safari" in f["title"]][0]
+    assert changed_feature["status"] == "pending"  # decision invalidated, if any
+    notes = [e for e in changed_feature.get("thread", []) if e.get("actor") == "intake"]
+    assert notes and "decision invalidated" in notes[0]["body"]
 
 
 def test_coverage_states_page_facts(store):
