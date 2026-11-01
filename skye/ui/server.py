@@ -560,22 +560,49 @@ def create_mission(state_dir: Path, spec: dict) -> str:
             # The scope folder is a container, not a repo: no guessed default repo, every
             # step must name one of the discovered repos.
             repo = ""
+            notes = [f"{len(repos)} git repos",
+                     f"{discovery['skipped']} non-repo subfolders skipped"]
+            if discovery["overflow"]:
+                notes.append("over the cap, not included: "
+                             + ", ".join(discovery["overflow"]))
+            if discovery["outside_scope"]:
+                notes.append("symlinks outside the declared folder, excluded: "
+                             + ", ".join(discovery["outside_scope"]))
+            if discovery["inaccessible"]:
+                notes.append("unreadable subfolders, excluded: "
+                             + ", ".join(discovery["inaccessible"]))
+            if discovery["invalid"]:
+                notes.append(".git markers that are not real repositories, excluded: "
+                             + ", ".join(discovery["invalid"]))
             repos_source = (f"discovered in project '{project_id}' folder "
-                            f"({len(repos)} git repos, {discovery['skipped']} non-repo "
-                            f"subfolders skipped"
-                            + (f", overflow not included: "
-                               f"{', '.join(discovery['overflow'])}"
-                               if discovery["overflow"] else "") + ")")
+                            f"({'; '.join(notes)})")
     # (Discovery finding no repos changes nothing: the project path stays the default
     # repo exactly as before - the workspace layer owns the fail-closed non-git verdict.)
     if spec.get("plan"):
+        # The composed planner step is a NONWRITING context step: it proposes the workflow,
+        # it never does repo work. Verify the effective planner role's tool catalogue
+        # (team file > roles registry > builtin - the same resolution the dispatcher
+        # applies) before composing; a writable planner role is rejected here, not after
+        # it had write access to the first declared repo.
+        from .. import gateway
+        planner_role = str(spec.get("planner_role") or "pm")
+        try:
+            catalogue = gateway.resolve(planner_role)
+        except KeyError as error:
+            raise MissionError(f"planner role: {error}") from error
+        if catalogue.get("writable"):
+            raise MissionError(
+                f"planner role '{planner_role}' is writable (catalogue source: "
+                f"{catalogue['source']}); the composed planner step is a nonwriting "
+                "context step - narrow that role's catalogue or choose a read-only "
+                "planner_role")
         brief = PLANNER_BRIEF.replace("{goal}", goal)
         if isinstance(repos, dict) and repos:
             from .. import repocontext
             digests = repocontext.repo_digests(repos)
             brief += PLANNER_ROUTING_ADDENDUM.replace(
                 "{repos}", repocontext.format_for_brief(digests))
-        plan_step = {"id": "plan", "role": str(spec.get("planner_role") or "pm"),
+        plan_step = {"id": "plan", "role": planner_role,
                      "adapter": str(spec.get("adapter") or "root"), "goal": goal,
                      "brief": brief, "gates": [],
                      "budget": {"max_steps": 12}}
@@ -736,6 +763,17 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"issues": issues.list_issues()})
                 if url.path == "/api/projects":
                     return self._json({"projects": projects.list_projects()})
+                if url.path.startswith("/api/projects/") and url.path.endswith("/repos"):
+                    from .. import repocontext
+                    project_id = url.path[len("/api/projects/"):-len("/repos")].strip("/")
+                    project = projects.get(project_id)
+                    if project is None:
+                        return self._json({"error": f"unknown project '{project_id}'"}, 404)
+                    # Read-only preview: exactly which repo names/scope a mission under
+                    # this project would start with, BEFORE anything is created.
+                    return self._json({"project": project_id,
+                                       "discovery": repocontext.discover_repos(
+                                           project["repo"])})
                 if url.path == "/api/roles":
                     return self._json(roles_payload(self.state_dir))
                 if url.path == "/api/mission-setup":
