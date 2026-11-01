@@ -54,7 +54,7 @@ function ModelPicker({
               .catch((err) => setError(humanError(err, "role")))
               .finally(() => setSaving(false));
           }}
-          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none disabled:opacity-60"
+          className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-xs text-foreground outline-none disabled:opacity-60"
         >
           {!known ? <option value={value}>{value}</option> : null}
           {choices.map((c) => (

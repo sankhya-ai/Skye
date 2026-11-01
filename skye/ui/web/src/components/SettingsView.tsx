@@ -173,7 +173,7 @@ export function SettingsView() {
         )}
       </section>
 
-      <fieldset disabled={!loaded} className="m-0 min-w-0 space-y-4 border-0 p-0">
+      <fieldset disabled={!loaded} className="min-w-0 space-y-4 border-0 p-0">
       <section className="shadow-card rounded-xl border border-border bg-card p-4">
         <h3 className="text-sm font-medium">May run without asking</h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
@@ -187,7 +187,7 @@ export function SettingsView() {
                 onChange={(e) =>
                   setRules(rules.map((r, j) => (j === i ? { ...r, adapter: e.target.value } : r)))
                 }
-                className="max-w-full min-w-0 rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
+                className="max-w-full min-w-0 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs outline-none"
               >
                 {ADAPTERS.map((a) => {
                   const detail = adapters?.find((d) => d.name === a);
@@ -208,7 +208,7 @@ export function SettingsView() {
                   setRules(rules.map((r, j) => (j === i ? { ...r, role: e.target.value } : r)))
                 }
                 placeholder="role or *"
-                className="w-32 rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
+                className="w-32 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs outline-none"
               />
               <button
                 type="button"
@@ -284,21 +284,24 @@ export function SettingsView() {
             max={4}
             value={maxConcurrent}
             onChange={(e) => setMaxConcurrent(Number(e.target.value))}
-            className="mt-1 w-20 rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none"
+            className="mt-1 block w-24 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs outline-none"
           />
         </label>
       </section>
 
-      <Button
-        size="sm"
-        loading={saving}
-        onClick={() => {
-          setSaving(true);
-          void save().finally(() => setSaving(false));
-        }}
-      >
-        Save policy
-      </Button>
+      <div className="flex items-center justify-end gap-3 pt-1">
+        <p className="text-xs text-muted-foreground">Changes apply to the next step that starts.</p>
+        <Button
+          size="sm"
+          loading={saving}
+          onClick={() => {
+            setSaving(true);
+            void save().finally(() => setSaving(false));
+          }}
+        >
+          Save policy
+        </Button>
+      </div>
       </fieldset>
 
       <details className="shadow-card rounded-xl border border-border bg-card p-4">
