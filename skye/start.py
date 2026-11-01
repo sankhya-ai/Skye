@@ -107,7 +107,18 @@ def preflight() -> list[str]:
 
 
 def _free_port(preferred: int) -> int:
-    for port in [preferred] + list(range(preferred + 1, preferred + 20)):
+    """The preferred port, else the next free one. A just-stopped server can hold its port
+    for a moment, so wait briefly for the preferred one before moving on."""
+    for _ in range(15):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", preferred))
+                return preferred
+            except OSError:
+                time.sleep(0.2)
+    # 8788 is the vendored Root server's default port - never take it from Root.
+    for port in [p for p in [preferred] + list(range(preferred + 1, preferred + 20))
+                 if p != 8788 or p == preferred]:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             try:
                 sock.bind(("127.0.0.1", port))
