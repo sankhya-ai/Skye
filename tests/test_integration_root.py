@@ -215,3 +215,100 @@ def test_review_sendback_repairs_and_passes_through_real_root(root_server, tmp_p
     assert ("build", "review-round") in kinds
     assert kinds[-1] == ("build", "settled")
     assert journal[-1]["status"] == "done"
+
+
+class SimulatedCrash(Exception):
+    """The process 'dies' right after the review-round journal entry is fsync'd."""
+
+
+@requires_runtime
+def test_crash_after_review_sendback_recovers_through_real_root(root_server, tmp_path, monkeypatch):
+    """Root + crash repair loop, the previously outstanding combination: real worker job, real
+    reviewer job requesting changes, then a CRASH after the review-round entry is journaled but
+    before the redo starts. The resume (a fresh run_mission over the journal alone) re-seeds the
+    feedback into the redo's brief, the repair runs as a NEW real Root job, a second real
+    reviewer passes. Phase 1 and phase 2 both go through the vendored Root binary."""
+    import skye.dispatcher as dispatcher
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+
+    scripts = {
+        ("developer", 1): [tool_call("w1", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items)\n"}),
+                            text('done {"summary": "cart total, v1"}')],
+        ("developer", 2): [tool_call("w2", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items) if items else 0\n"}),
+                            text('fixed {"summary": "empty cart returns 0"}')],
+        ("reviewer", 1): [text('Reviewed. {"verdict": "request-changes", "feedback": ["empty cart must return 0"]}')],
+        ("reviewer", 2): [text('Reviewed again. {"verdict": "pass"}')],
+    }
+    calls: dict[str, int] = {"developer": 0, "reviewer": 0}
+
+    def per_job_scripting(contract, *args, **kwargs):
+        role = contract["role"]
+        calls[role] += 1
+        path = tmp_path / f"crash-script-{role}-{calls[role]}.json"
+        path.write_text(json.dumps(scripts[(role, calls[role])]))
+        monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(path))
+        return real_dispatch(contract, *args, **kwargs)
+
+    real_dispatch = dispatcher.dispatch
+    monkeypatch.setattr(mission_mod, "dispatch", per_job_scripting)
+    monkeypatch.setattr(dispatcher, "dispatch", per_job_scripting)
+
+    # Crash seam: the journal append for the review-round lands (fsync'd), then the run dies.
+    real_append = mission_mod.Journal.append
+    crashed_once = {"done": False}
+
+    def append_then_crash(self, step, event, **fields):
+        real_append(self, step, event, **fields)
+        if event == "review-round" and not crashed_once["done"]:
+            crashed_once["done"] = True
+            raise SimulatedCrash("process died right after journaling the send-back")
+
+    monkeypatch.setattr(mission_mod.Journal, "append", append_then_crash)
+
+    mission_path = tmp_path / "mission.json"
+    mission_path.write_text(json.dumps({
+        "id": "m-crash", "goal": "cart totals", "repo": str(repo),
+        "max_review_rounds": 3,
+        "steps": [{"id": "build", "role": "developer", "adapter": "root",
+                   "goal": "write cart.py with a total()", "gates": ["review"],
+                   "contract_keys": ["summary"], "budget": {"max_steps": 6}}]}))
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}],
+                     "review_role": "reviewer"})
+    state_dir = tmp_path / ".skye"
+
+    # Phase 1: real worker job, real reviewer job, send-back journaled, then the crash.
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert calls == {"developer": 1, "reviewer": 1}
+    journal_path = state_dir / "missions/m-crash/journal.jsonl"
+    entries = [json.loads(line) for line in journal_path.read_text().splitlines()]
+    assert [e["event"] for e in entries].count("review-round") == 1
+    assert not any(e["event"] == "settled" for e in entries)
+    assert "sum(i['price']" in (repo / "cart.py").read_text()
+
+    # Phase 2: resume from the journal alone. The redo is a NEW real Root job whose brief
+    # carries the reviewer's feedback; the second real reviewer passes.
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert calls == {"developer": 2, "reviewer": 2}
+
+    jobs = [json.loads(p.read_text()) for p in (home / "jobs").glob("*.json")]
+    dev_jobs = sorted((j for j in jobs if j["role"] == "developer"), key=lambda j: j["started"])
+    assert len(dev_jobs) == 2
+    assert "empty cart must return 0" in dev_jobs[1]["goal"]  # feedback survived the crash
+    assert "else 0" in (repo / "cart.py").read_text()
+    entries = [json.loads(line) for line in journal_path.read_text().splitlines()]
+    assert [e["event"] for e in entries].count("dispatched") == 2  # original + redo, no more
+    assert entries[-1]["event"] == "settled" and entries[-1]["status"] == "done"
