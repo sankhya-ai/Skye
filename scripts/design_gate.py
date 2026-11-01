@@ -4,12 +4,17 @@ design artifact and treat its TEXT-MODE exit code as the verdict.
 Owner wires it exactly like any journey command (Settings -> journey command), e.g.:
     python3 scripts/design_gate.py artifacts/poster.html
 
-Semantics, verified against impeccable 4.8.0 (Apache-2.0, NOTICE.md):
-- Text mode exit 2 = failure-level findings (e.g. low-contrast, undersized text) -> gate FAILS.
-- Advisory findings (overused-font, straggler, ...) print but never change the exit code.
-- --json mode exits 2 on ANY finding including advisories, so this gate deliberately uses
-  text mode and the CLI's own exit code; the JSON severity field does not distinguish
-  failure-level from advisory.
+Semantics, verified empirically against impeccable 4.8.0 (Apache-2.0, NOTICE.md):
+- Exit 2 = at least one warning-or-error severity finding (low-contrast, undersized text,
+  overused-font, hero-eyebrow-chip, ...) -> gate FAILS. Exit codes are identical in text and
+  --json modes.
+- The 16 registry rules with severity "advisory" (em-dash-overuse, straggler, ...) print in a
+  separate "Advisory (not counted as failures)" section and never change the exit code, in
+  either mode (verified: advisory-only page exits 0 in text and --json).
+- overused-font is severity "warning" and DOES gate - an earlier observation of it exiting 0
+  was a shell measurement artifact, corrected.
+- This gate uses text mode: same exit codes, human-readable evidence straight into the
+  journey record, no JSON parsing to get wrong.
 - Coverage honesty: on raw .css/.js/.svg the element rules do not run and the tool prints an
   undercount banner. That banner is forwarded into the evidence verbatim - a partial pass is
   never presented as a clean bill. For .svg artifacts we wrap them inline in a minimal HTML
