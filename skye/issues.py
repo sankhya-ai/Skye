@@ -60,7 +60,7 @@ def list_issues(path: str | Path | None = None, project: str = "") -> list[dict[
 
 
 def report(kind: str, summary: str, *, detail: str = "", project: str = "",
-           source: str = "", external: str = "", path: str | Path | None = None) -> tuple[dict[str, Any], bool]:
+           source: str = "", external: str = "", content_digest: str = "", path: str | Path | None = None) -> tuple[dict[str, Any], bool]:
     """Record one error signal and file a PENDING backlog proposal for it.
 
     Returns (issue, created) - created is False when the same source+summary was already
@@ -79,6 +79,23 @@ def report(kind: str, summary: str, *, detail: str = "", project: str = "",
             if issue.get("external") == external:
                 issue["occurrences"] = int(issue.get("occurrences", 1)) + 1
                 issue["last_seen"] = time.time()
+                # The proposal an owner approved is bound to the content digest it carried.
+                # If the source changed since, say so on the ticket's thread - an approval
+                # covers the imported snapshot, never whatever the source says now.
+                if content_digest and issue.get("content_digest") and \
+                        issue["content_digest"] != content_digest:
+                    issue["content_digest"] = content_digest
+                    if issue.get("feature_id"):
+                        try:
+                            backlog.add_thread(
+                                issue["feature_id"], actor="intake", kind="status",
+                                body=("the source content changed since import (new digest "
+                                      f"{content_digest}); any approval covers the earlier "
+                                      "snapshot - re-review before acting on this ticket"))
+                        except Exception:
+                            pass  # the issue record still carries the new digest
+                    _write(target, data)
+                    return issue, True  # changed content: treat as new for the caller's count
                 _write(target, data)
                 return issue, False
     key = (project, source, summary.lower())
@@ -91,14 +108,16 @@ def report(kind: str, summary: str, *, detail: str = "", project: str = "",
     issue = {"id": f"issue-{secrets.token_hex(4)}", "kind": kind, "project": project,
              "summary": summary, "detail": str(detail or "")[:4000], "source": source,
              "occurrences": 1, "first_seen": time.time(), "last_seen": time.time(),
-             "external": external, "feature_id": ""}
+             "external": external, "content_digest": content_digest, "feature_id": ""}
     # The proposal is the only way an issue reaches work. Title/brief stay factual - the
     # planner decides the actual fix after the owner approves.
     title = summary[:80]
     brief = (f"{kind} reported"
              + (f" by {source}" if source else "")
              + f": {summary}"
-             + (f"\n\nDetail:\n{issue['detail']}" if issue["detail"] else ""))
+             + (f"\n\nDetail:\n{issue['detail']}" if issue["detail"] else "")
+             + (f"\n\nSource content digest: {content_digest} (approval binds this snapshot)"
+                if content_digest else ""))
     proposed = backlog.propose([{"title": title, "brief": brief}],
                                project=project, mission=issue["id"], path=None)
     if proposed:

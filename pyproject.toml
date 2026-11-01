@@ -11,5 +11,7 @@ requires-python = ">=3.10"
 [project.scripts]
 skye = "skye.cli:main"
 
+# Pure-stdlib package (verified: skye/ imports nothing third-party); every subpackage is
+# listed explicitly so a wheel install carries the UI server and adapters, not just the core.
 [tool.setuptools]
-packages = ["skye", "skye.adapters"]
+packages = ["skye", "skye.adapters", "skye.ui"]
