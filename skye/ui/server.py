@@ -234,6 +234,26 @@ def policy_path_default() -> Path:
     return Path(os.environ.get("SKYE_POLICY", "").strip() or "skye.policy.json")
 
 
+def policy_lock(path: Path):
+    """The ONE lock every policy writer holds, so a whole-file replace and a narrow toggle
+    serialize against each other instead of clobbering across endpoints."""
+    import fcntl
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    handle = open(lock_path, "a+")
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def policy_revision(path: Path) -> str:
+    """Content hash of the current policy file - the currency a writer presents to prove it
+    saw the state it is replacing ('' when no file exists)."""
+    import hashlib
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
 PLANNER_BRIEF = """You are the planner for this goal:
 
 {goal}
@@ -418,6 +438,7 @@ class UiHandler(BaseHTTPRequestHandler):
                     policy = Policy.load(path)
                     from .. import pickup as pickup_module
                     return self._json({"raw": raw, "path": str(path.resolve()),
+                                       "revision": policy_revision(path),
                                        "max_concurrent": policy.max_concurrent,
                                        "auto_pickup": pickup_module.config(policy)})
                 if url.path.startswith("/api/mission-artifact/"):
@@ -620,13 +641,31 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"error": str(error)}, 400)
                 return self._json({"saved": True, "role": saved})
             if url.path == "/api/policy":
+                # Whole-file replace, for intentional policy editing only. It holds the same
+                # lock as the narrow toggles and requires base_revision to match the file it
+                # replaces, so a stale Settings form cannot wipe a pickup toggle or security
+                # edit that landed after the form loaded. A current file that cannot be read
+                # fails closed.
                 data = body.get("policy")
                 if not isinstance(data, dict):
                     return self._json({"error": "policy must be a JSON object"}, 400)
                 Policy(data)  # validate before touching disk
                 path = policy_path_default()
-                path.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
-                return self._json({"saved": True, "path": str(path.resolve())})
+                with policy_lock(path):
+                    current = policy_revision(path)
+                    base = body.get("base_revision") or ""
+                    if current and not base:
+                        return self._json(
+                            {"error": "base_revision required to replace an existing policy; "
+                                      "GET /api/policy returns the current one",
+                             "revision": current}, 409)
+                    if base != current:
+                        return self._json(
+                            {"error": "policy changed since you read it; reload and retry",
+                             "revision": current}, 409)
+                    path.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
+                return self._json({"saved": True, "path": str(path.resolve()),
+                                   "revision": policy_revision(path)})
             if url.path == "/api/policy/auto_pickup":
                 # The toggle's safe mutation: ONLY the auto_pickup block changes, under a
                 # lock, with strict validation, and a current file we cannot parse fails
@@ -652,10 +691,7 @@ class UiHandler(BaseHTTPRequestHandler):
                         return self._json({"error": "max_missions must be a positive integer"},
                                           400)
                 path = policy_path_default()
-                lock_path = path.with_suffix(path.suffix + ".lock")
-                import fcntl
-                with open(lock_path, "a+") as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX)
+                with policy_lock(path):
                     try:
                         current = json.loads(path.read_text("utf-8")) if path.exists() else {}
                     except ValueError:
