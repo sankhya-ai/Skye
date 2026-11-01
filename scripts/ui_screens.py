@@ -10,8 +10,13 @@ sys.path.insert(0, str(REPO))
 demo = Path(tempfile.mkdtemp())
 ws = demo / "ws"
 ws.mkdir()
-(ws / "app.py").write_text('def checkout(items):\n    return round(sum(i["price"] * i["qty"] for i in items), 2)\n')
-(ws / "journey.py").write_text('from app import checkout\nassert checkout([{"price": 10.0, "qty": 2}]) == 20.0\nprint("JOURNEY OK")\n')
+(ws / "app.py").write_text('def checkout(items):\n    return round(sum(i["price"] * i["qty"] for i in items), 2)\n\ndef cart_badge(count):\n    return str(count)\n')
+(ws / "journey.py").write_text(
+    'from app import checkout, cart_badge\n'
+    'total = checkout([{"price": 10.0, "qty": 2}, {"price": 3.5, "qty": 1}])\n'
+    'assert abs(total - 23.5) < 1e-9, f"totals: expected 23.5, got {total}"\n'
+    'assert cart_badge(3) == "3", "badge shows 0 with 3 items in the cart"\n'
+    'print("JOURNEY OK: checkout 2x10.0 + 1x3.5 = 23.5; badge 3 items")\n')
 
 home = demo / "root-home"
 os.environ["TURA_CODE_HOME"] = str(home)
@@ -56,7 +61,7 @@ fixed = backlog.get(issue["feature_id"])
 backlog.decide(fixed["id"], "approved")
 backlog.mark_started(fixed["id"], "m-repair")
 backlog.mark_delivered("m-repair", journey_ok=False)
-backlog.record_verification(fixed["id"], True, evidence="JOURNEY OK: checkout 2x10.0 = 20.0",
+backlog.record_verification(fixed["id"], True, evidence="JOURNEY OK: checkout 2x10.0 + 1x3.5 = 23.5; badge 3 items",
                             repo_revision=journey.repo_revision(str(ws)),
                             journey_digest=journey.journey_digest("python3 journey.py", str(ws)))
 # an awaiting-verification feature with failing evidence
@@ -67,7 +72,7 @@ backlog.decide(pending_repair["id"], "approved")
 backlog.mark_started(pending_repair["id"], "m-badge")
 backlog.mark_delivered("m-badge", journey_ok=False)
 backlog.record_verification(pending_repair["id"], False,
-                            evidence="JOURNEY FAIL: badge shows 0 with 3 items in the cart",
+                            evidence="JOURNEY FAIL: badge shows 0 with 3 items in the cart (totals pass: 23.5)",
                             repo_revision=journey.repo_revision(str(ws)),
                             journey_digest=journey.journey_digest("python3 journey.py", str(ws)))
 # a fresh proposal awaiting the owner + a started mission for the Missions screens
