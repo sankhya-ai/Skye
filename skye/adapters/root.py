@@ -25,6 +25,12 @@ class RootAdapter(Adapter):
     configured with - the owner's setup, never a key Skye supplies.
     """
     name = "root"
+    # max_steps and wall-clock are hard bounds in Root's runtime (its loop stops at them).
+    ENFORCED_BUDGET = ("timeout_seconds", "max_steps")
+    # max_cost_usd reaches Root's budget machinery, but Root's cost accounting comes from what
+    # the PROVIDER reports per call: with no provider prices (scripted model, some proxies) the
+    # dollar cap cannot bind. Forwarded honestly, not claimed as a hard guarantee.
+    FORWARDED_BUDGET = ("max_cost_usd",)
 
     def __init__(self, base_url: str = "", *, token: str = "",
                  root_home: str | Path = "", poll_seconds: float = 2.0) -> None:
@@ -63,16 +69,25 @@ class RootAdapter(Adapter):
         except AdapterError:
             return False
 
-    def run(self, contract: dict, timeout: int = 1800) -> Result:
-        budget = dict(contract.get("budget") or {})
-        budget.setdefault("max_steps", 25)
-        body = {"goal": contract.get("brief") or contract["goal"], "workspace": contract["repo"],
-                "role": contract["role"], "budget": budget, "credentials": []}
-        if contract.get("contract_keys"):
-            body["contract"] = list(contract["contract_keys"])
-        item = self._call("POST", "/api/jobs", body)
-        job_id = item.get("id")
-        command = ["POST", f"{self.base_url}/api/jobs", f"job={job_id}"]
+    def run(self, contract: dict, timeout: int = 1800, resume_job_id: str = "") -> Result:
+        if resume_job_id:
+            # Crash recovery: the job was started by an earlier Skye process and journaled. Poll
+            # the EXISTING job - starting a duplicate would redo billable work blindly.
+            job_id = resume_job_id
+            item = self._call("GET", f"/api/jobs/{job_id}")
+            command = ["GET", f"{self.base_url}/api/jobs/{job_id}", "(reattached)"]
+        else:
+            budget = dict(contract.get("budget") or {})
+            budget.setdefault("max_steps", 25)
+            body = {"goal": contract.get("brief") or contract["goal"], "workspace": contract["repo"],
+                    "role": contract["role"], "budget": budget, "credentials": []}
+            if contract.get("contract_keys"):
+                body["contract"] = list(contract["contract_keys"])
+            item = self._call("POST", "/api/jobs", body)
+            job_id = item.get("id")
+            command = ["POST", f"{self.base_url}/api/jobs", f"job={job_id}"]
+        if self.job_observer and job_id:
+            self.job_observer(job_id)  # let the mission journal record the id before any settling
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if item.get("status") not in UNSETTLED:
@@ -81,7 +96,7 @@ class RootAdapter(Adapter):
             item = self._call("GET", f"/api/jobs/{job_id}")
         else:
             return Result(ok=False, output=f"root job {job_id} did not settle within {timeout}s",
-                          command=command, returncode=124)
+                          command=command, returncode=124, job_id=job_id)
         status = item.get("status", "")
         result = item.get("result") or {}
         contract_check = result.get("contract") or {}
@@ -90,6 +105,7 @@ class RootAdapter(Adapter):
         if status == "finished" and not result.get("error"):
             if contract_check and not contract_check.get("ok", True):
                 return Result(ok=False, output=f"root job {job_id} finished but its contract failed: {output}",
-                              command=command, returncode=1)
-            return Result(ok=True, output=output, command=command)
-        return Result(ok=False, output=f"root job {job_id} ended '{status}': {output}", command=command, returncode=1)
+                              command=command, returncode=1, job_id=job_id)
+            return Result(ok=True, output=output, command=command, job_id=job_id)
+        return Result(ok=False, output=f"root job {job_id} ended '{status}': {output}",
+                      command=command, returncode=1, job_id=job_id)

@@ -110,12 +110,47 @@ def test_dispatch_worker_failure_stops_before_gates(tmp_path):
     assert outcome.status == "failed" and outcome.gates == []
 
 
+PASS = 'Reviewed. {"verdict": "pass"}'
+BLOCK = 'Problems. {"verdict": "block", "reasons": ["no error handling"]}'
+
+
 def test_review_gate_dispatches_a_second_worker_not_self_review():
     seen = []
 
     def runner(spec):
         seen.append(spec["role"])
-        return Result(ok=True, output="ok")
+        return Result(ok=True, output=PASS if spec["role"] == "reviewer" else "ok")
 
     outcome = dispatch(_contract(repo="/tmp", gates=["review"]), _policy(), runner=runner)
     assert outcome.status == "done" and seen == ["developer", "reviewer"]
+    assert outcome.gates[0]["ok"] and outcome.gates[0]["detail"] == "reviewer passed the changes"
+
+
+def test_review_gate_fails_when_the_reviewer_says_block():
+    # The audit's correctness hole, fixed: a cleanly finished reviewer whose verdict is "block"
+    # must NOT pass the gate.
+    def runner(spec):
+        return Result(ok=True, output=BLOCK if spec["role"] == "reviewer" else "ok")
+
+    outcome = dispatch(_contract(repo="/tmp", gates=["review"]), _policy(), runner=runner)
+    assert outcome.status == "gate-failed"
+    assert "blocked" in outcome.reason and "no error handling" in outcome.reason
+
+
+def test_review_gate_fails_without_a_verdict():
+    # A reviewer that finishes but never says approve is not an approval.
+    outcome = dispatch(_contract(repo="/tmp", gates=["review"]), _policy(),
+                       runner=lambda spec: Result(ok=True, output="looks fine to me"))
+    assert outcome.status == "gate-failed" and "without a parseable verdict" in outcome.reason
+
+
+def test_review_gate_uses_the_policy_review_role():
+    seen = []
+
+    def runner(spec):
+        seen.append(spec["role"])
+        return Result(ok=True, output=PASS if spec["role"] == "designer" else "ok")
+
+    outcome = dispatch(_contract(repo="/tmp", gates=["review"]), _policy(review_role="designer"),
+                       runner=runner)
+    assert outcome.status == "done" and seen == ["developer", "designer"]

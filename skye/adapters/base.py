@@ -15,6 +15,7 @@ class Result:
     output: str
     command: list[str] = field(default_factory=list)
     returncode: int = 0
+    job_id: str = ""  # the worker's own job/run id when the adapter has one (Root does)
 
 
 class Adapter:
@@ -23,6 +24,15 @@ class Adapter:
 
     name = "base"
     binary = ""
+    #: Budget fields this adapter enforces as a hard bound (timeout_seconds is honored by the
+    #: shared run() below). Fields in FORWARDED_BUDGET are passed into the worker's own budget
+    #: machinery, whose enforcement may depend on its configuration - forwarded, not guaranteed.
+    #: Anything else in a contract's budget is reported as a note, never silently ignored.
+    ENFORCED_BUDGET: tuple = ("timeout_seconds",)
+    FORWARDED_BUDGET: tuple = ()
+    #: Optional callable the dispatcher sets to learn the worker's job id the moment it exists
+    #: (used to journal it for crash recovery before the worker settles).
+    job_observer = None
 
     def available(self) -> bool:
         return bool(self.binary) and shutil.which(self.binary) is not None

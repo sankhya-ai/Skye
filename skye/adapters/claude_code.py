@@ -12,6 +12,9 @@ class ClaudeCodeAdapter(Adapter):
     """
     name = "claude-code"
     binary = "claude"
+    # Only the wall-clock timeout is enforceable here: the CLI has no step or dollar cap Skye can
+    # set. max_steps/max_cost_usd in a contract surface as dispatcher notes, not silent no-ops.
+    ENFORCED_BUDGET = ("timeout_seconds",)
 
     def build_command(self, contract: dict) -> list[str]:
         prompt = contract.get("brief") or contract["goal"]

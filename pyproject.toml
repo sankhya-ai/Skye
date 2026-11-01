@@ -8,5 +8,8 @@ version = "0.1.0"
 description = "An autonomous engineering team in a box: Chamber coordination + your own coding agents, dispatched by plain code."
 requires-python = ">=3.10"
 
+[project.scripts]
+skye = "skye.cli:main"
+
 [tool.setuptools]
 packages = ["skye", "skye.adapters"]

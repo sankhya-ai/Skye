@@ -11,6 +11,8 @@ class CodexAdapter(Adapter):
     """
     name = "codex"
     binary = "codex"
+    # Only the wall-clock timeout is enforceable here; max_steps/max_cost_usd surface as notes.
+    ENFORCED_BUDGET = ("timeout_seconds",)
 
     def build_command(self, contract: dict) -> list[str]:
         prompt = contract.get("brief") or contract["goal"]

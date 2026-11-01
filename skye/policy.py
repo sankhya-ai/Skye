@@ -30,13 +30,21 @@ class Policy:
         except (OSError, ValueError):
             return cls()  # absent or broken: the conservative default
 
+    def check(self, contract: dict[str, Any], running: int = 0) -> tuple[str, str]:
+        """("ok"|"cap"|"rule", reason). The cap and the no-rule case are distinct: a one-time
+        owner approval may override a missing RULE, but never the concurrency CAP - an approval
+        is consent for one contract, not a raise of the team's parallelism limit."""
+        if running >= self.max_concurrent:
+            return ("cap",
+                    f"the team already runs {running} contract(s); the cap is {self.max_concurrent}")
+        for rule in self.allow_unattended:
+            if rule.get("adapter") == contract["adapter"] and rule.get("role") in (contract["role"], "*"):
+                return ("ok", "")
+        return ("rule",
+                f"no policy rule allows unattended {contract['adapter']}/{contract['role']}: "
+                "the owner confirms this contract first")
+
     def unattended_ok(self, contract: dict[str, Any], running: int = 0) -> str:
         """Why a contract may not run unattended, or '' when it may. Adapter and role must both be
         named by one rule; the concurrency cap is team-wide."""
-        if running >= self.max_concurrent:
-            return f"the team already runs {running} contract(s); the cap is {self.max_concurrent}"
-        for rule in self.allow_unattended:
-            if rule.get("adapter") == contract["adapter"] and rule.get("role") in (contract["role"], "*"):
-                return ""
-        return (f"no policy rule allows unattended {contract['adapter']}/{contract['role']}: "
-                "the owner confirms this contract first")
+        return self.check(contract, running=running)[1]
