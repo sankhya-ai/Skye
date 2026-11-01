@@ -297,6 +297,17 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     if not snapshot.exists() or snapshot.read_text("utf-8") != rendered:
         snapshot.write_text(rendered, "utf-8")
     journal = Journal(mission_dir / "journal.jsonl")
+    # Artifact baseline: snapshot the mission repo's file manifest once, at the FIRST run of
+    # this mission (a resume keeps the original baseline - re-baselining would quietly excuse
+    # changes from earlier attempts). The end snapshot lands when the mission settles done, so
+    # the UI can show what the team actually changed, derived from the tree itself.
+    artifacts_path = mission_dir / "artifacts.json"
+    if mission.get("repo") and not artifacts_path.exists():
+        from .journey import repo_manifest
+        start_manifest, start_truncated = repo_manifest(mission["repo"])
+        artifacts_path.write_text(json.dumps(
+            {"repo": mission["repo"], "start": start_manifest,
+             "start_truncated": start_truncated}) + "\n", "utf-8")
     bridge = bridge if bridge is not None else events.from_env(log_path=mission_dir / "events.jsonl")
     emit = bridge.publish
     context = {"mission": mission["id"]}
@@ -541,6 +552,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             if gate.get("gate") == "journey" and gate.get("ok"):
                 journey_ok = True
                 journey_evidence = str(gate.get("evidence") or gate.get("detail") or "")
+    if mission.get("repo") and artifacts_path.exists():
+        from .journey import repo_manifest
+        end_manifest, end_truncated = repo_manifest(mission["repo"])
+        record = json.loads(artifacts_path.read_text("utf-8"))
+        record["end"] = end_manifest
+        record["end_truncated"] = end_truncated
+        artifacts_path.write_text(json.dumps(record) + "\n", "utf-8")
     backlog.mark_delivered(mission["id"], journey_ok=journey_ok, evidence=journey_evidence)
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 

@@ -37,7 +37,22 @@ export type JournalEntry = {
   [key: string]: unknown;
 };
 
+export type MissionArtifacts = {
+  recorded: boolean;
+  repo?: string;
+  complete?: boolean;
+  start_truncated?: boolean;
+  end_truncated?: boolean;
+  added?: string[];
+  modified?: string[];
+  deleted?: string[];
+  added_overflow?: number;
+  modified_overflow?: number;
+  deleted_overflow?: number;
+};
+
 export type MissionDetail = {
+  artifacts?: MissionArtifacts;
   mission: { id: string; goal: string; steps: Array<Record<string, unknown>> };
   status: { mission: string; status: string; steps: StepStatus[] };
   journal: JournalEntry[];

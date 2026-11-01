@@ -6,6 +6,7 @@ import {
   resumeMission,
   type MissionDetail,
 } from "../api";
+import { MissionArtifactsPanel } from "./MissionArtifacts";
 import { MissionRunTrace } from "./MissionRunTrace";
 import { Badge } from "./ui/Badge";
 import { formatTime } from "../lib";
@@ -119,6 +120,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         onChanged={refresh}
         onRedispatch={(step) => act(() => redispatchStep(id, step))}
       />
+      <MissionArtifactsPanel artifacts={detail.artifacts} />
       <details className="rounded-md border border-border bg-card p-4">
         <summary className="cursor-pointer text-sm font-medium text-foreground">
           Inspector - raw journal ({detail.journal.length} events)

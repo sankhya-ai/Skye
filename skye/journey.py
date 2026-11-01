@@ -52,6 +52,45 @@ def repo_revision(cwd: str) -> str:
     return "tree:" + digest.hexdigest()[:16]
 
 
+MANIFEST_FILE_LIMIT = 2000
+
+
+def repo_manifest(cwd: str, *, limit: int = MANIFEST_FILE_LIMIT) -> tuple[dict[str, str], bool]:
+    """A path -> content-hash map of the repo's files (bounded; .git internals skipped).
+
+    This is the diffable form of repo_revision's non-git fallback: two manifests taken at
+    different times yield real added/modified/deleted file lists for ANY repo, git or not -
+    so 'what the mission actually changed' is derived from the tree, never from a worker's
+    own claims. Returns (manifest, truncated): truncated means files beyond the limit were
+    not hashed and the diff is known-incomplete (surfaced, never hidden)."""
+    import hashlib
+    root = Path(cwd) if cwd else Path.cwd()
+    manifest: dict[str, str] = {}
+    truncated = False
+    if not root.is_dir():
+        return manifest, truncated
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = str(path.relative_to(root))
+        if rel.startswith(".git/") or "/.git/" in rel:
+            continue
+        if len(manifest) >= limit:
+            truncated = True
+            break
+        try:
+            manifest[rel] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            continue
+    return manifest, truncated
+
+
+def diff_manifests(start: dict[str, str], end: dict[str, str]) -> dict[str, list[str]]:
+    """added/modified/deleted path lists between two repo_manifest snapshots, sorted."""
+    added = sorted(p for p in end if p not in start)
+    deleted = sorted(p for p in start if p not in end)
+    modified = sorted(p for p in end if p in start and end[p] != start[p])
+    return {"added": added, "modified": modified, "deleted": deleted}
+
+
 def journey_digest(command: str, cwd: str) -> str:
     """A digest of the journey CHECK itself: every token of the command that names an existing
     file is hashed, so a worker quietly rewriting the check inside its writable repo shows up

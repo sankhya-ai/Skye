@@ -49,6 +49,35 @@ def _read_jsonl(path: Path) -> list[dict]:
     return out
 
 
+ARTIFACTS_LIST_LIMIT = 200
+
+
+def mission_artifacts(mission_dir: Path) -> dict:
+    """The real file changes of a mission, diffed from the start/end repo manifests the engine
+    recorded (skye.journey.repo_manifest). Derived from the tree, not from worker claims.
+    complete=False means the mission has not settled done yet, so only the baseline exists."""
+    artifacts_file = mission_dir / "artifacts.json"
+    if not artifacts_file.exists():
+        return {"recorded": False}
+    record = json.loads(artifacts_file.read_text("utf-8"))
+    start = record.get("start") or {}
+    end = record.get("end")
+    out = {"recorded": True, "repo": record.get("repo", ""),
+           "start_truncated": bool(record.get("start_truncated")),
+           "complete": end is not None}
+    if end is None:
+        return out
+    from ..journey import diff_manifests
+    diff = diff_manifests(start, end)
+    for kind in ("added", "modified", "deleted"):
+        paths = diff[kind]
+        out[kind] = paths[:ARTIFACTS_LIST_LIMIT]
+        if len(paths) > ARTIFACTS_LIST_LIMIT:
+            out[f"{kind}_overflow"] = len(paths) - ARTIFACTS_LIST_LIMIT
+    out["end_truncated"] = bool(record.get("end_truncated"))
+    return out
+
+
 def mission_payload(state_dir: Path, mission_id: str) -> dict:
     """Live detail for one mission: definition snapshot, journal trace, pending approvals."""
     mission_dir = state_dir / "missions" / mission_id
@@ -71,7 +100,9 @@ def mission_payload(state_dir: Path, mission_id: str) -> dict:
     needs_owner_fps = {e.get("fingerprint") for e in journal.step_states().values()
                        if e.get("event") == "needs-owner"}
     approved = bool(needs_owner_fps & approved_fps)
-    return {"mission": mission, "status": status, "journal": _read_jsonl(mission_dir / "journal.jsonl"),
+
+    return {"mission": mission, "status": status, "artifacts": mission_artifacts(mission_dir),
+            "journal": _read_jsonl(mission_dir / "journal.jsonl"),
             "dynamic_steps": dynamic, "pending_contracts": pending,
             "approved": approved and not pending}
 
