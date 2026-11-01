@@ -142,20 +142,55 @@ def _flag(args: list[str], name: str, default: str = "") -> str:
     return args[args.index(name) + 1] if name in args and args.index(name) + 1 < len(args) else default
 
 
+def _parse_opts(args: list[str], value_flags: set[str]) -> tuple[list[str], dict[str, str]]:
+    """Split CLI arguments into (positionals, option values). Every --flag must be a known
+    value-taking flag from value_flags; a repeated flag keeps its LAST value. A bare "--"
+    ends option parsing so free text can safely start with dashes. Unknown flags and flags
+    missing their value raise ValueError - a malformed command is rejected loudly, never
+    silently folded into a message body the way naive token joining would."""
+    positionals: list[str] = []
+    opts: dict[str, str] = {}
+    i = 0
+    options_done = False
+    while i < len(args):
+        arg = args[i]
+        if options_done:
+            positionals.append(arg)
+        elif arg == "--":
+            options_done = True
+        elif arg.startswith("--"):
+            if arg not in value_flags:
+                raise ValueError(f"unknown option {arg}")
+            if i + 1 >= len(args):
+                raise ValueError(f"option {arg} needs a value")
+            opts[arg] = args[i + 1]
+            i += 1
+        else:
+            positionals.append(arg)
+        i += 1
+    return positionals, opts
+
+
 def _cmd_say(args: list[str]) -> int:
-    if len(args) < 2 or "--as" not in args:
-        print("usage: skye say <mission-id> --as <role> [--kind K] [--ack-needed R,...] <message>",
-              file=sys.stderr)
+    usage = ("usage: skye say <mission-id> --as <role> [--kind K] [--ack-needed R,...] "
+             "[--] <message>")
+    try:
+        positionals, opts = _parse_opts(args, {"--as", "--kind", "--ack-needed"})
+    except ValueError as error:
+        print(f"{error}\n{usage}", file=sys.stderr)
+        return 2
+    if not positionals or "--as" not in opts or len(positionals) < 2:
+        print(usage, file=sys.stderr)
         return 2
     from . import discuss, events
     from .mission import default_state_dir
-    mission_id = args[0]
-    message = " ".join(a for a in args[1:] if not a.startswith("--"))
-    ack_needed = [r for r in _flag(args, "--ack-needed").split(",") if r.strip()]
+    mission_id = positionals[0]
+    message = " ".join(positionals[1:])
+    ack_needed = [r for r in opts.get("--ack-needed", "").split(",") if r.strip()]
     try:
         entry = discuss.post(default_state_dir(), mission_id,
-                             author=_flag(args, "--as"),
-                             kind=_flag(args, "--kind", "broadcast") or "broadcast",
+                             author=opts["--as"],
+                             kind=opts.get("--kind", "") or "broadcast",
                              body=message, requires_ack=ack_needed,
                              bridge=events.from_env())
     except discuss.DiscussionError as error:
@@ -166,27 +201,43 @@ def _cmd_say(args: list[str]) -> int:
 
 
 def _cmd_hear(args: list[str]) -> int:
-    if not args:
-        print("usage: skye hear <mission-id> [--since N] [--limit N]", file=sys.stderr)
+    usage = "usage: skye hear <mission-id> [--since N] [--limit N]"
+    try:
+        positionals, opts = _parse_opts(args, {"--since", "--limit"})
+    except ValueError as error:
+        print(f"{error}\n{usage}", file=sys.stderr)
+        return 2
+    if len(positionals) != 1:
+        print(usage, file=sys.stderr)
         return 2
     from . import discuss
     from .mission import default_state_dir
-    result = discuss.read(default_state_dir(), args[0],
-                          since=int(_flag(args, "--since", "0") or 0),
-                          limit=int(_flag(args, "--limit", "100") or 100))
+    try:
+        since = int(opts.get("--since", "") or 0)
+        limit = int(opts.get("--limit", "") or 100)
+    except ValueError:
+        print(f"--since and --limit take integers\n{usage}", file=sys.stderr)
+        return 2
+    result = discuss.read(default_state_dir(), positionals[0], since=since, limit=limit)
     print(json.dumps(result, indent=2))
     return 0
 
 
 def _cmd_ack(args: list[str]) -> int:
-    if len(args) < 2 or "--as" not in args:
-        print("usage: skye ack <mission-id> <message-id> --as <role> [--note N]", file=sys.stderr)
+    usage = "usage: skye ack <mission-id> <message-id> --as <role> [--note N]"
+    try:
+        positionals, opts = _parse_opts(args, {"--as", "--note"})
+    except ValueError as error:
+        print(f"{error}\n{usage}", file=sys.stderr)
+        return 2
+    if len(positionals) != 2 or "--as" not in opts:
+        print(usage, file=sys.stderr)
         return 2
     from . import discuss, events
     from .mission import default_state_dir
     try:
-        entry = discuss.ack(default_state_dir(), args[0], args[1],
-                            author=_flag(args, "--as"), note=_flag(args, "--note"),
+        entry = discuss.ack(default_state_dir(), positionals[0], positionals[1],
+                            author=opts["--as"], note=opts.get("--note", ""),
                             bridge=events.from_env())
     except discuss.DiscussionError as error:
         print(f"cannot ack: {error}", file=sys.stderr)
