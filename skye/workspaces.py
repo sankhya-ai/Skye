@@ -80,8 +80,11 @@ def repo_map(mission: dict[str, Any]) -> dict[str, str]:
         for name, path in repos.items():
             out[str(name)] = str(path)
     default = str(mission.get("repo") or "").strip()
-    if default and default not in out.values():
-        out["default"] = default
+    if default:
+        import os
+        real = {os.path.realpath(v) for v in out.values()}
+        if os.path.realpath(default) not in real:
+            out["default"] = default
     return out
 
 

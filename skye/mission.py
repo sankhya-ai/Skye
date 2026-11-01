@@ -133,6 +133,35 @@ def load_mission(path: str | Path) -> dict[str, Any]:
         if (not isinstance(repos, dict) or not repos
                 or any(not str(n).strip() or not str(p).strip() for n, p in repos.items())):
             raise MissionError("repos must be a non-empty object of name -> path")
+        import re as _re
+        for name, path_value in repos.items():
+            if not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(name)):
+                raise MissionError(
+                    f"repo name {name!r} is not a plain label (letters, digits, . _ -); "
+                    "names never contain path separators or traversal")
+        # Two spellings of one repository would get two worktrees with the same branch -
+        # detect by realpath, and by git toplevel so subdirectories of one repo are
+        # declared once as a monorepo and scoped with claims instead.
+        seen_real: dict[str, str] = {}
+        seen_top: dict[str, str] = {}
+        import subprocess as _sp
+        for name, path_value in repos.items():
+            real = os.path.realpath(str(path_value))
+            if real in seen_real:
+                raise MissionError(
+                    f"repos '{seen_real[real]}' and '{name}' are the same path "
+                    f"({real}); declare it once")
+            seen_real[real] = name
+            top = _sp.run(["git", "-C", real, "rev-parse", "--show-toplevel"],
+                          capture_output=True, text=True)
+            if top.returncode == 0:
+                toplevel = os.path.realpath(top.stdout.strip())
+                if toplevel != real and toplevel in seen_top:
+                    raise MissionError(
+                        f"repos '{seen_top[toplevel]}' and '{name}' are subdirectories of "
+                        f"the same git repository ({toplevel}); declare it once and scope "
+                        "steps with claims")
+                seen_top.setdefault(toplevel, name)
     mission = {"id": mission_id, "goal": str(raw.get("goal") or "").strip(),
                "repo": str(raw.get("repo") or "").strip(), "steps": steps,
                "project": str(raw.get("project") or "").strip(),
@@ -273,9 +302,18 @@ def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[
     needs = step.get("needs") or []
     if not isinstance(needs, list) or any(n not in known_ids for n in needs):
         return f"proposed step '{step_id}' needs unknown step(s): {needs}"
+    repo_field = str(step.get("repo") or "").strip()
+    has_scope = bool(mission.get("repo") or mission.get("repos"))
+    if repo_field and has_scope and ("/" in repo_field or "\\" in repo_field):
+        # A worker proposal is DATA: it may name one of the owner-declared repos, but it may
+        # not introduce a new literal path - approval fingerprints bind the resolved contract,
+        # yet a broad unattended rule must not become authority to write outside the owner's
+        # declared repository scope.
+        return (f"proposed step '{step_id}' names a literal repo path; proposals may only "
+                "target the mission's declared repos (by name) or the default")
     try:
-        validate({**step, "repo": step.get("repo") or mission.get("repo", "")})
-    except ContractError as error:
+        validate({**step, "repo": _resolve_repo(mission, repo_field)})
+    except (ContractError, MissionError) as error:
         return f"proposed step '{step_id}': {error}"
     return ""
 
@@ -543,25 +581,27 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         # prevented by serialization, not merely logged after the fact.
         held_reasons: list[str] = []
         if ready:
-            from .contract import claims_conflict
             from .registry import Registry
             live_claims: list[tuple[list[str], str]] = []
             try:
                 for record in Registry(state_dir).others():
                     if record.get("claims"):
                         live_claims.append((list(record["claims"]),
+                                            str(record.get("repo") or ""),
                                             f"{record.get('role', '?')} "
                                             f"({record.get('goal', '')[:60]})"))
             except OSError:
                 pass  # no registry dir yet: no live claims exist
             selected: list[dict[str, Any]] = []
-            selected_claims: list[tuple[list[str], str]] = []
+            selected_claims: list[tuple[list[str], str, str]] = []
             for step in ready:
                 claims = _step_claims(step)
+                step_repo = _resolve_repo(mission, step.get("repo") or mission.get("repo", ""))
                 conflict = None
                 if claims:
-                    for other_claims, who in selected_claims + live_claims:
-                        hit = claims_conflict(claims, other_claims)
+                    from .contract import claims_conflict_scoped
+                    for other_claims, other_repo, who in selected_claims + live_claims:
+                        hit = claims_conflict_scoped(claims, step_repo, other_claims, other_repo)
                         if hit:
                             conflict = f"claims '{hit[0]}' intersects '{hit[1]}' held by {who}"
                             break
@@ -575,7 +615,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 else:
                     selected.append(step)
                     if claims:
-                        selected_claims.append((claims, f"step {step['id']}"))
+                        selected_claims.append((claims, step_repo, f"step {step['id']}"))
             ready = selected
         # Skips settled above remove steps from consideration; drop them from pending now.
         for step_id in list(pending):

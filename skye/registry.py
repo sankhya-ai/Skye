@@ -54,7 +54,11 @@ class Registry:
             # Write claims ride the slot record, so the mission scheduler can hold a step whose
             # declared write-paths intersect a RUNNING dispatch - including one from another
             # process or mission sharing this state dir.
-            "claims": list(contract.get("claims") or [])}) + "\n", "utf-8")
+            "claims": list(contract.get("claims") or []),
+            # The repository these claims are relative to: two dispatches writing the same
+            # relative path in DIFFERENT repos do not collide. Older slot records without
+            # it are treated as potentially-any-repo (conservative).
+            "repo": str(contract.get("repo") or "")}) + "\n", "utf-8")
 
     def acquire_and_count(self, contract: dict[str, Any], fingerprint: str) -> int:
         """Register this dispatch and count the OTHER live dispatches, atomically under an flock:
@@ -83,10 +87,14 @@ class Registry:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:
                 claims = list(contract.get("claims") or [])
+                repo = str(contract.get("repo") or "")
                 others = self.others()
                 if claims:
+                    from .contract import claims_conflict_scoped
                     for record in others:
-                        hit = claims_conflict(claims, list(record.get("claims") or []))
+                        hit = claims_conflict_scoped(
+                            claims, repo, list(record.get("claims") or []),
+                            str(record.get("repo") or ""))
                         if hit:
                             return (len(others),
                                     (hit[0], hit[1],
