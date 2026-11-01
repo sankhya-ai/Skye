@@ -460,7 +460,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                            output=outcome.worker_output[-4000:], gates=outcome.gates,
                            worker_job=outcome.worker_job, role=step["role"])
             outcomes[step_id] = {"status": outcome.status, "reason": outcome.reason,
-                                 "role": step["role"], "output": outcome.worker_output[-4000:]}
+                                 "role": step["role"], "output": outcome.worker_output[-4000:],
+                                 "gates": outcome.gates}
             if outcome.status != "done":
                 if wave_failed is None:
                     wave_failed = (step_id, outcome)
@@ -531,7 +532,16 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                   reason=f"step '{step_id}': {outcome.reason}", steps=outcomes)
     emit(events.make_event("mission", {}, status="done", **context))
     from . import backlog
-    backlog.mark_delivered(mission["id"])  # an approved feature's done mission delivers it
+    # Delivery needs journey evidence: scan the journaled gates for a passed user-journey
+    # replay. Without one the feature waits as awaiting-verification - 'done' is not
+    # 'delivered'.
+    journey_ok, journey_evidence = False, ""
+    for step_id, record in outcomes.items():
+        for gate in record.get("gates") or []:
+            if gate.get("gate") == "journey" and gate.get("ok"):
+                journey_ok = True
+                journey_evidence = str(gate.get("evidence") or gate.get("detail") or "")
+    backlog.mark_delivered(mission["id"], journey_ok=journey_ok, evidence=journey_evidence)
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 
 

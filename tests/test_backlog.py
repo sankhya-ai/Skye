@@ -63,15 +63,23 @@ def test_mark_started_and_delivered_round_trip(tmp_path):
     stored = backlog.list_features(path)[0]
     assert stored["mission_id"] == "mission-9"
     assert stored["status"] == "approved"
-    backlog.mark_delivered("mission-9", path=path)
+    # work done without journey evidence -> awaiting verification, NOT delivered
+    backlog.mark_delivered("mission-9", journey_ok=False, path=path)
+    stored = backlog.list_features(path)[0]
+    assert stored["status"] == "awaiting-verification"
+    # a journey replay pass delivers it; a failure would leave it waiting
+    backlog.record_verification(feature["id"], False, evidence="still broken", path=path)
+    assert backlog.list_features(path)[0]["status"] == "awaiting-verification"
+    backlog.record_verification(feature["id"], True, evidence="journey clean", path=path)
     stored = backlog.list_features(path)[0]
     assert stored["status"] == "delivered"
     assert stored["mission_id"] == "mission-9"
+    assert stored["verification"]["journey_passed"] is True
 
 
 def test_pending_feature_is_not_deliverable(tmp_path):
     path = tmp_path / "skye.backlog.json"
     feature = backlog.propose([{"title": "F1", "brief": "b1"}], path=path)[0]
     backlog.mark_started(feature["id"], "mission-1", path=path)
-    backlog.mark_delivered("mission-1", path=path)
+    backlog.mark_delivered("mission-1", journey_ok=True, path=path)
     assert backlog.list_features(path)[0]["status"] == "pending"

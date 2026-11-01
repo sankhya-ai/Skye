@@ -128,6 +128,7 @@ export type FeatureRow = {
   decided_at: number | null;
   decision_note: string;
   mission_id: string;
+  verification?: { journey_passed: boolean; evidence: string; verified_at: number };
 };
 
 export const getBacklog = () => api<{ features: FeatureRow[] }>("/api/backlog");
@@ -136,6 +137,11 @@ export const decideFeature = (feature: string, decision: "approved" | "rejected"
     method: "POST",
     body: JSON.stringify({ feature, decision, note }),
   });
+export const verifyFeature = (feature: string) =>
+  api<{ verified: boolean; feature: FeatureRow; command: string; evidence: string }>(
+    "/api/backlog/verify",
+    { method: "POST", body: JSON.stringify({ feature }) },
+  );
 export const startFeature = (feature: string, run = true) =>
   api<{ id: string; running: boolean }>("/api/backlog/start", {
     method: "POST",

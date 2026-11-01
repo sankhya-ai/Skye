@@ -41,3 +41,21 @@ def test_validation(tmp_path, monkeypatch):
             raise AssertionError("expected IssueError")
         except issues.IssueError:
             pass
+
+
+def test_intake_is_bounded_untrusted_data(tmp_path, monkeypatch):
+    """Signal content is untrusted: oversized detail is truncated, unknown kinds rejected,
+    and a report can never create anything but a PENDING proposal (no approvals, no tools)."""
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "skye.issues.json"))
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    issue, created = issues.report("production-log", "boom", detail="x" * 9000,
+                                   source="feed")
+    assert created
+    assert len(issue["detail"]) == 4000
+    # the filed proposal is pending with no mission attached - nothing can start from intake
+    feature = backlog.list_features()[0]
+    assert feature["status"] == "pending"
+    assert feature["mission_id"] == ""
+    # approvals registry untouched by intake
+    from skye import approvals
+    assert approvals.pending(tmp_path / "skye.approvals.json") == []

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_PATH = "skye.backlog.json"
-STATUSES = ("pending", "approved", "rejected", "delivered")
+STATUSES = ("pending", "approved", "awaiting-verification", "delivered", "rejected")
 
 
 class BacklogError(ValueError):
@@ -116,14 +116,43 @@ def mark_started(feature_id: str, mission_id: str, path: str | Path | None = Non
             return
 
 
-def mark_delivered(mission_id: str, path: str | Path | None = None) -> None:
-    """A settled-done mission delivers its feature - called from the mission path on done."""
+def mark_delivered(mission_id: str, *, journey_ok: bool = False,
+                   evidence: str = "", path: str | Path | None = None) -> None:
+    """A settled-done mission ends its feature's work - called from the mission path on done.
+
+    'Done' is NOT 'delivered': the user-facing delivered state requires the affected user
+    journey to have been replayed and passed. With journey evidence the feature lands
+    DELIVERED; without it the feature waits as AWAITING-VERIFICATION until a journey replay
+    passes (verify() below)."""
     target = Path(path or default_path())
     data = _read(target)
     changed = False
     for feature in data["features"]:
         if feature.get("mission_id") == mission_id and feature.get("status") == "approved":
-            feature["status"] = "delivered"
+            feature["status"] = "delivered" if journey_ok else "awaiting-verification"
+            feature["verification"] = {"journey_passed": bool(journey_ok),
+                                       "evidence": evidence[-2000:], "verified_at": time.time()}
             changed = True
     if changed:
         _write(target, data)
+
+
+def record_verification(feature_id: str, passed: bool, *, evidence: str = "",
+                        path: str | Path | None = None) -> dict[str, Any]:
+    """The outcome of replaying the user journey for a feature. Only a PASS moves a feature
+    (from approved or awaiting-verification) to delivered; a failure records the evidence
+    and leaves the feature awaiting verification. Verification never skips the owner
+    approval that started the work - it gates DELIVERY, not authorization."""
+    target = Path(path or default_path())
+    data = _read(target)
+    for feature in data["features"]:
+        if feature.get("id") == feature_id:
+            if feature.get("status") not in ("approved", "awaiting-verification", "delivered"):
+                raise BacklogError(
+                    f"feature {feature_id} is {feature.get('status')}; only started work can be verified")
+            feature["verification"] = {"journey_passed": bool(passed),
+                                       "evidence": evidence[-2000:], "verified_at": time.time()}
+            feature["status"] = "delivered" if passed else "awaiting-verification"
+            _write(target, data)
+            return feature
+    raise BacklogError(f"unknown feature {feature_id!r}")

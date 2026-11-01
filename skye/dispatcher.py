@@ -158,6 +158,22 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
 def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, bridge=None,
               approvals_path: str | Path | None = None,
               event_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    if gate == "journey":
+        # The delivery bar the owner set: replay the affected USER JOURNEY, not just tests.
+        # The command is owner-configured (policy.journey_command); its output tail is the
+        # recorded evidence. No command configured means the journey CANNOT be verified -
+        # fail honestly, never wave it through.
+        if not policy.journey_command:
+            return {"gate": "journey", "ok": False,
+                    "detail": "the team policy names no journey command; the user journey cannot be replayed"}
+        proc = subprocess.run(policy.journey_command, cwd=spec["repo"], shell=True,
+                              capture_output=True, text=True, timeout=1800)
+        evidence = (proc.stdout + proc.stderr)[-2000:]
+        return {"gate": "journey", "ok": proc.returncode == 0,
+                "detail": ("user journey replayed clean"
+                           if proc.returncode == 0
+                           else f"user journey replay failed ({proc.returncode})"),
+                "command": policy.journey_command, "evidence": evidence}
     if gate == "tests":
         if not policy.test_command:
             return {"gate": "tests", "ok": False,

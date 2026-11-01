@@ -521,4 +521,49 @@ def test_done_mission_delivers_its_approved_feature(tmp_path, monkeypatch):
     outcome = run_mission(mission, _policy(), runner=runner,
                           bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
     assert outcome.status == "done", outcome.reason
-    assert backlog.list_features()[0]["status"] == "delivered"
+    # no journey gate ran, so done work waits for verification instead of claiming delivery
+    assert backlog.list_features()[0]["status"] == "awaiting-verification"
+
+
+def test_done_mission_with_a_passed_journey_gate_delivers(tmp_path, monkeypatch):
+    """The delivery bar: a passed user-journey replay gate in the workflow delivers the
+    feature with the replay evidence recorded."""
+    from skye import backlog
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    feature = backlog.propose([{"title": "Cart", "brief": "shopping cart"}],
+                              project="shop", mission="seed")[0]
+    backlog.decide(feature["id"], "approved")
+    backlog.mark_started(feature["id"], "m1")
+    steps = [{"id": "dev", "role": "developer", "adapter": "claude-code",
+              "goal": "build it", "gates": ["journey"]}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+
+    def runner(spec):
+        return Result(ok=True, output="ok", command=["fake"])
+
+    policy = _policy()
+    policy.journey_command = "echo 'journey: add to cart -> checkout OK'"
+    outcome = run_mission(mission, policy, runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done", outcome.reason
+    stored = backlog.list_features()[0]
+    assert stored["status"] == "delivered"
+    assert stored["verification"]["journey_passed"] is True
+    assert "checkout OK" in stored["verification"]["evidence"]
+
+
+def test_a_failed_journey_gate_blocks_the_step(tmp_path, monkeypatch):
+    """A journey replay failure fails the step honestly - no silent pass."""
+    steps = [{"id": "dev", "role": "developer", "adapter": "claude-code",
+              "goal": "build it", "gates": ["journey"]}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+
+    def runner(spec):
+        return Result(ok=True, output="ok", command=["fake"])
+
+    policy = _policy()
+    policy.journey_command = "echo 'checkout 500' >&2; exit 1"
+    outcome = run_mission(mission, policy, runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "gate-failed"
+    assert "journey replay failed" in outcome.reason

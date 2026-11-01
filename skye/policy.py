@@ -20,6 +20,7 @@ class Policy:
         data = data or {}
         self.allow_unattended: list[dict[str, Any]] = list(data.get("allow_unattended") or [])
         self.test_command: str = str(data.get("test_command") or "")
+        self.journey_command: str = str(data.get("journey_command") or "")
         self.max_concurrent: int = int(data.get("max_concurrent") or 1)
         self.review_role: str = str(data.get("review_role") or "reviewer")
 

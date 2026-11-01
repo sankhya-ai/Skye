@@ -381,6 +381,35 @@ class UiHandler(BaseHTTPRequestHandler):
                 except backlog.BacklogError as error:
                     return self._json({"error": str(error)}, 400)
                 return self._json({"decided": True, "feature": feature})
+            if url.path == "/api/backlog/verify":
+                # Replay the user journey for a feature: the owner-configured journey command
+                # runs in the feature's project repo; only a pass delivers. The evidence
+                # (output tail) is recorded either way. This gates DELIVERY - the owner
+                # approval that started the work is untouched.
+                feature_id = str(body.get("feature") or "")
+                features = {f["id"]: f for f in backlog.list_features()}
+                feature = features.get(feature_id)
+                if feature is None:
+                    return self._json({"error": "unknown feature"}, 404)
+                repo = ""
+                if feature.get("project"):
+                    try:
+                        repo = projects.get(feature["project"]).get("repo", "")
+                    except Exception:
+                        repo = ""
+                policy = Policy.load(policy_path_default())
+                if not policy.journey_command:
+                    return self._json(
+                        {"error": "the team policy names no journey command; "
+                                  "set journey_command in Settings first"}, 400)
+                import subprocess as _sp
+                proc = _sp.run(policy.journey_command, cwd=repo or None, shell=True,
+                               capture_output=True, text=True, timeout=1800)
+                evidence = (proc.stdout + proc.stderr)[-2000:]
+                updated = backlog.record_verification(
+                    feature_id, proc.returncode == 0, evidence=evidence)
+                return self._json({"verified": proc.returncode == 0, "feature": updated,
+                                   "command": policy.journey_command, "evidence": evidence})
             if url.path == "/api/backlog/start":
                 feature_id = str(body.get("feature") or "")
                 features = {f["id"]: f for f in backlog.list_features()}

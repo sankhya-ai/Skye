@@ -13,7 +13,7 @@ from typing import Any
 
 ROLES = ("developer", "reviewer", "designer", "pm", "tester", "explorer", "devops")
 ADAPTERS = ("root", "claude-code", "codex")
-GATES = ("tests", "review")
+GATES = ("tests", "review", "journey")
 
 
 class ContractError(ValueError):

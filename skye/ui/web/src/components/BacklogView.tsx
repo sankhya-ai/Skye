@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   decideFeature,
+  verifyFeature,
   getBacklog,
   getIssues,
   getProjects,
@@ -17,6 +18,7 @@ import {
 const BADGE: Record<string, string> = {
   pending: "bg-warning/25 text-foreground",
   approved: "bg-success/20 text-foreground",
+  "awaiting-verification": "bg-info/15 text-foreground",
   rejected: "bg-muted text-muted-foreground",
   delivered: "bg-info/20 text-foreground",
 };
@@ -81,7 +83,7 @@ export function BacklogView() {
   };
 
   const order = (f: FeatureRow) =>
-    ({ pending: 0, approved: 1, delivered: 2, rejected: 3 }[f.status] ?? 4);
+    ({ pending: 0, approved: 1, "awaiting-verification": 2, delivered: 3, rejected: 4 }[f.status] ?? 5);
   const sorted = [...features].sort((a, b) => order(a) - order(b) || b.proposed_at - a.proposed_at);
   const activeIssues = issues.filter((i) => {
     const feature = features.find((f) => f.id === i.feature_id);
@@ -123,6 +125,9 @@ export function BacklogView() {
                   <p className="mt-1.5 text-xs text-muted-foreground/70">
                     {projectName(f.project)} · {provenance(f)}
                     {f.mission_id && f.status !== "delivered" ? " · work started" : ""}
+                    {f.status === "delivered" && f.verification?.journey_passed
+                      ? " · user journey replayed clean"
+                      : ""}
                     {f.decision_note ? ` · “${f.decision_note}”` : ""}
                   </p>
                 </div>
@@ -146,6 +151,16 @@ export function BacklogView() {
                         Reject
                       </button>
                     </>
+                  ) : null}
+                  {f.status === "awaiting-verification" ? (
+                    <button
+                      type="button"
+                      disabled={busy === f.id}
+                      onClick={() => void act(f.id, () => verifyFeature(f.id))}
+                      className="h-8 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
+                    >
+                      Replay journey
+                    </button>
                   ) : null}
                   {f.status === "approved" && !f.mission_id ? (
                     <button

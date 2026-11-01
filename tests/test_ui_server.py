@@ -396,3 +396,49 @@ def test_issue_intake_files_a_backlog_proposal(ui_server, tmp_path, monkeypatch)
     status, payload = _req(url, "/api/issues", method="POST",
                            body={"kind": "bogus", "summary": "x"})
     assert status == 400
+
+
+def test_verify_endpoint_replays_the_journey_and_delivers(ui_server, tmp_path, monkeypatch):
+    """Owner started work, mission done, no journey yet -> awaiting-verification. The verify
+    endpoint replays the owner-configured journey in the project repo; only a pass delivers,
+    and the evidence is recorded either way."""
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "skye.projects.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "skye.issues.json"))
+    url, _ = ui_server
+    from skye import backlog
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "shop", "repo": str(tmp_path)}})
+    project_id = payload["project"]["id"]
+    feature = backlog.propose([{"title": "Fix checkout", "brief": "repair the 500"}],
+                              project=project_id, mission="seed")[0]
+    backlog.decide(feature["id"], "approved")
+    backlog.mark_started(feature["id"], "m1")
+    backlog.mark_delivered("m1", journey_ok=False)
+    # no journey command configured -> honest 400, nothing delivered
+    status, payload = _req(url, "/api/backlog/verify", method="POST", body={"feature": feature["id"]})
+    assert status == 400, payload
+    assert backlog.list_features()[0]["status"] == "awaiting-verification"
+    # owner configures the journey (policy file in the server's cwd state)
+    import json as _json
+    from skye.ui.server import policy_path_default
+    policy_path_default().write_text(_json.dumps(
+        {"journey_command": "echo 'checkout journey OK'"}))
+    status, payload = _req(url, "/api/backlog/verify", method="POST", body={"feature": feature["id"]})
+    assert status == 200, payload
+    assert payload["verified"] is True
+    assert payload["feature"]["status"] == "delivered"
+    assert "checkout journey OK" in payload["feature"]["verification"]["evidence"]
+    policy_path_default().write_text(_json.dumps(
+        {"journey_command": "echo 'still 500' >&2; exit 1"}))
+    feature2 = backlog.propose([{"title": "Fix search", "brief": "repair"}],
+                               project=project_id, mission="seed")[0]
+    backlog.decide(feature2["id"], "approved")
+    backlog.mark_started(feature2["id"], "m2")
+    backlog.mark_delivered("m2", journey_ok=False)
+    status, payload = _req(url, "/api/backlog/verify", method="POST", body={"feature": feature2["id"]})
+    assert payload["verified"] is False
+    stored = [f for f in backlog.list_features() if f["id"] == feature2["id"]][0]
+    assert stored["status"] == "awaiting-verification"
+    assert "still 500" in stored["verification"]["evidence"]
+    policy_path_default().unlink()
