@@ -45,13 +45,14 @@ def test_contract_requires_goal_repo_adapter_and_known_role():
 
 def test_default_policy_blocks_everything_unattended():
     reason = Policy().unattended_ok(_contract())
-    assert "no policy rule" in reason
+    assert "not on the team's unattended list" in reason and "approval" in reason
+    assert "codex/developer" in reason  # the decision truth: which pair is blocked
 
 
 def test_policy_rule_allows_named_pair_only():
     policy = Policy({"allow_unattended": [{"adapter": "codex", "role": "developer"}]})
     assert policy.unattended_ok(_contract(adapter="codex")) == ""
-    assert "no policy rule" in policy.unattended_ok(_contract(adapter="codex", role="reviewer"))
+    assert "not on the team's unattended list" in policy.unattended_ok(_contract(adapter="codex", role="reviewer"))
     assert "cap" in policy.unattended_ok(_contract(adapter="codex"), running=5)
 
 
@@ -91,7 +92,7 @@ def test_missing_worker_tool_fails_loudly(tmp_path):
 
 def test_dispatch_blocks_unattended_without_a_rule():
     outcome = dispatch(_contract(), Policy())
-    assert outcome.status == "needs-owner" and "no policy rule" in outcome.reason
+    assert outcome.status == "needs-owner" and "needs your approval" in outcome.reason
 
 
 def test_dispatch_runs_worker_and_test_gate(tmp_path):
