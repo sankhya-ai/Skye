@@ -26,7 +26,7 @@ from skye import journey
 
 @dataclass
 class Outcome:
-    status: str  # "done" | "needs-owner" | "failed" | "gate-failed" | "claim-held"
+    status: str  # "done" | "needs-owner" | "failed" | "gate-failed" | "claim-held" | "cancelled"
     contract: dict[str, Any]
     reason: str = ""
     worker_output: str = ""
@@ -34,13 +34,22 @@ class Outcome:
     fingerprint: str = ""
     worker_job: str = ""  # the worker's own job id (Root), for audit and crash recovery
     budget_notes: list[str] = field(default_factory=list)
+    # Session-protocol adapters (claude-code/codex): the vendor's session/thread id, how
+    # this run relates to it (fresh | resumed), and honest stop causes. session_id is what
+    # a later follow-up, rework round or operator redispatch resumes.
+    session_id: str = ""
+    continuity: str = ""
+    cancelled: bool = False
+    resume_rejected: bool = False
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
 def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: int | None = None,
              runner=None, catalogues_dir: str = "catalogues", bridge=None,
              state_dir: str | Path | None = None, approvals_path: str | Path | None = None,
              resume_job_id: str | None = None, job_observer=None,
-             event_context: dict[str, Any] | None = None) -> Outcome:
+             event_context: dict[str, Any] | None = None,
+             cancel_event=None, on_progress=None) -> Outcome:
     """Run one contract through policy, worker and gates. ``runner`` replaces the adapter call in
     tests; production code never passes it. ``bridge`` (default: events.from_env()) receives the
     lifecycle events this dispatch emits - the Chamber line when configured, else the local log.
@@ -129,6 +138,20 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
             run = runner
         elif resume_job_id:
             run = lambda s: adapter.run(s, timeout=timeout, resume_job_id=resume_job_id)
+        elif getattr(adapter, "SUPPORTS_SESSIONS", False):
+            # Session protocol: streamed events, vendor session capture/resume, operator
+            # cancel. run_key registers the live process so the UI cancel endpoint can
+            # signal exactly this run. The contract's resume_session_id (set by the
+            # mission for rework/follow-up/redispatch continuity) re-enters the recorded
+            # session - a rejected resume fails CLOSED below, never a silent fresh run.
+            run_key = (f"{context.get('mission', '')}:{context.get('step', '')}"
+                       if context.get("mission") and context.get("step") else None)
+
+            def run(s, _adapter=adapter, _key=run_key):
+                return _adapter.run_session(
+                    s, timeout=timeout,
+                    resume_session_id=str(s.get("resume_session_id") or "") or None,
+                    run_key=_key, on_event=on_progress, cancel_event=cancel_event)
         else:
             run = lambda s: adapter.run(s, timeout=timeout)
         try:
@@ -138,8 +161,30 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
             return Outcome(status="failed", contract=spec, reason=str(error), fingerprint=fp,
                            budget_notes=notes)
         worker_job = getattr(result, "job_id", "") or ""
+        session_fields = {}
+        if hasattr(result, "session_id"):
+            session_fields = {"session_id": result.session_id,
+                              "continuity": result.continuity,
+                              "cancelled": result.cancelled,
+                              "resume_rejected": result.resume_rejected,
+                              "usage": result.usage}
+        if getattr(result, "cancelled", False):
+            reason = "cancelled by the operator"
+            emit("cancelled", spec, status="cancelled", reason=reason, fingerprint=fp)
+            return Outcome(status="cancelled", contract=spec, reason=reason,
+                           worker_output=result.output, fingerprint=fp, **session_fields)
+        if getattr(result, "resume_rejected", False):
+            reason = (f"the {spec['adapter']} CLI rejected resuming the recorded session "
+                      f"'{result.session_id or spec.get('resume_session_id')}' (exit "
+                      f"{result.returncode}); Skye did NOT start a fresh session - the "
+                      "session's context would be lost silently. Restore the session or "
+                      "redispatch the step fresh (an explicit owner choice).")
+            emit("failed", spec, status="failed", reason=reason, fingerprint=fp)
+            return Outcome(status="failed", contract=spec, reason=reason,
+                           worker_output=result.output, fingerprint=fp, **session_fields)
         outcome = Outcome(status="done", contract=spec, worker_output=result.output,
-                          fingerprint=fp, worker_job=worker_job, budget_notes=notes)
+                          fingerprint=fp, worker_job=worker_job, budget_notes=notes,
+                          **session_fields)
         if not result.ok:
             outcome.status = "failed"
             outcome.reason = f"worker exited {result.returncode}"

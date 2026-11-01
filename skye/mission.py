@@ -26,7 +26,9 @@ BEFORE it is relied on, so a crash mid-mission is recoverable:
   left partial external effects (half-edited files, side effects) that blindly repeating would
   compound - so resume STOPS there with status "interrupted" and waits for an explicit operator
   decision: `skye mission redispatch <file> --step <id>` (re-run that step, journaled as an
-  operator-chosen redispatch) or `skye mission reset` (start clean);
+  operator-chosen redispatch) or `skye mission reset` (start clean). When the interrupted run
+  recorded a vendor session id, the redispatch RESUMES that session - the worker sees its own
+  earlier turns instead of starting blind; `--fresh` abandons the session explicitly;
 - a mission stops at needs-owner exactly like a single dispatch, writing the pending step contract
   for `skye approve`; `skye mission run` again resumes after the approval.
 
@@ -212,7 +214,7 @@ class Journal:
             if not step:
                 continue
             if kind in ("dispatched", "settled", "needs-owner", "redispatch", "reattached",
-                        "skipped", "review-round"):
+                        "skipped", "review-round", "cancelled", "resume-rejected"):
                 if kind == "dispatched" or states.get(step, {}).get("event") not in (
                         "settled", "skipped", "review-round"):
                     states[step] = dict(entry)
@@ -402,11 +404,52 @@ def _step_contract(mission: dict[str, Any], step: dict[str, Any],
     return validate(contract)
 
 
+def _progress_journaler(journal: "Journal", emit, context: dict[str, Any],
+                        step_id: str, contract: dict[str, Any]):
+    """The streaming seam: adapter stream events land in the journal (bounded text) and on
+    the live event bridge as they arrive - the UI's progress view reads both."""
+    def on_progress(event: dict[str, Any]) -> None:
+        fields = {"kind": event["kind"]}
+        if event["kind"] in ("message", "error"):
+            fields["text"] = str(event.get("text", ""))[:300]
+        elif event["kind"] == "tool":
+            fields["text"] = str(event.get("name", ""))[:120]
+        else:
+            return  # session/result bookkeeping rides worker-session, not progress
+        journal.append(step_id, "worker-progress", **fields)
+        emit(events.make_event("worker-progress", contract, stream_kind=fields["kind"],
+                               text=fields.get("text", ""),
+                               **dict(context, step=step_id)))
+    return on_progress
+
+
+def _refresh_end_manifests(mission: dict[str, Any], artifacts_path: Path) -> None:
+    """Refresh the delivery snapshot's end state after work that follows the first done
+    (an operator follow-up). The start baseline is immutable - only the end moves."""
+    if not ((mission.get("repo") or mission.get("repos_resolved")) and artifacts_path.exists()):
+        return
+    from .journey import repo_manifest
+    record = json.loads(artifacts_path.read_text("utf-8"))
+    if mission.get("repo"):
+        end_manifest, end_truncated = repo_manifest(mission["repo"])
+        record["end"] = end_manifest
+        record["end_truncated"] = end_truncated
+    resolved = mission.get("repos_resolved") or {}
+    if resolved and record.get("repos"):
+        for name, path in resolved.items():
+            if not path or name not in record["repos"]:
+                continue
+            manifest, truncated = repo_manifest(path)
+            record["repos"][name]["end"] = manifest
+            record["repos"][name]["end_truncated"] = truncated
+    artifacts_path.write_text(json.dumps(record) + "\n", "utf-8")
+
+
 def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner=None,
                 bridge=None, state_dir: str | Path | None = None,
                 approvals_path: str | Path | None = None,
                 catalogues_dir: str = "catalogues",
-                redispatch: str | None = None) -> MissionOutcome:
+                redispatch: str | None = None, redispatch_fresh: bool = False) -> MissionOutcome:
     """``redispatch`` names an interrupted step the OPERATOR explicitly chose to re-run
     (skye mission redispatch <file> --step <id>). Without it, an interrupted step that cannot
     reattach pauses the mission instead of blindly repeating work with unknown partial effects."""
@@ -430,6 +473,17 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     if not snapshot.exists() or snapshot.read_text("utf-8") != rendered:
         snapshot.write_text(rendered, "utf-8")
     journal = Journal(mission_dir / "journal.jsonl")
+    # Vendor session continuity: the last worker-session event per step carries the CLI's own
+    # session/thread id. Rework rounds, follow-ups and operator redispatches RESUME it - the
+    # worker sees its own earlier turns instead of starting blind. Only an explicit fresh
+    # redispatch abandons a recorded session; a REJECTED resume never falls back silently.
+    sessions: dict[str, dict[str, Any]] = {}
+    for entry in journal.entries():
+        if entry.get("event") == "worker-session" and entry.get("session_id"):
+            sessions[str(entry.get("step") or "")] = entry
+    # A cancel marker from a previous run was consumed by that run's stop; it must not
+    # cancel THIS run. Cancels for this run land after this point and are honored.
+    (mission_dir / "cancel-requested").unlink(missing_ok=True)
     if (workspace_record.get("uncommitted_lost")
             and not workspace_record.get("recovery_acknowledged")):
         # Lost-tree recovery is ambiguous: the branch carries the committed work, but the
@@ -523,11 +577,101 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             continue
         pending[step_id] = step
 
+    # Operator follow-ups: continue a SETTLED step in its recorded vendor session. Each one
+    # re-dispatches the step's contract (same gates, same policy path) with the follow-up
+    # text appended to the brief and the recorded session resumed - same-session continuity,
+    # never a blind fresh run. A follow-up on a step with no recorded session, or a running
+    # step, is rejected with a reason, not guessed at.
+    followups_path = mission_dir / "followups.jsonl"
+    consumed_path = mission_dir / "followups.consumed"
+    try:
+        consumed = int(consumed_path.read_text("utf-8").strip())
+    except (OSError, ValueError):
+        consumed = 0
+    try:
+        followup_lines = followups_path.read_text("utf-8").splitlines()
+    except OSError:
+        followup_lines = []
+    if len(followup_lines) > consumed:
+        consumed_path.write_text(str(len(followup_lines)), "utf-8")
+        for raw in followup_lines[consumed:]:
+            try:
+                follow = json.loads(raw)
+            except ValueError:
+                journal.append("", "follow-up-rejected", reason="malformed follow-up entry")
+                continue
+            target = str(follow.get("step") or "")
+            text = str(follow.get("text") or "").strip()
+            step = next((s for s in worklist if s["id"] == target), None)
+            if step is None or target not in outcomes or not text:
+                journal.append(target, "follow-up-rejected",
+                               reason="a follow-up needs a settled step and non-empty text")
+                continue
+            journal.append(target, "follow-up", text=text[:500])
+            contract = _step_contract(mission, step, outcomes)
+            contract["brief"] = ((contract.get("brief") or contract["goal"])
+                                 + "\n\n## Operator follow-up - continue the SAME work\n"
+                                 + text)
+            recorded = sessions.get(target)
+            if recorded:
+                contract["resume_session_id"] = recorded["session_id"]
+            journal.append(target, "dispatched", fingerprint=fingerprint(contract))
+            outcome = dispatch(contract, policy, runner=runner, bridge=bridge,
+                               state_dir=state_dir, approvals_path=approvals_path,
+                               catalogues_dir=catalogues_dir,
+                               event_context=dict(context, step=target),
+                               on_progress=_progress_journaler(journal, emit, context,
+                                                               target, contract))
+            if outcome.session_id:
+                journal.append(target, "worker-session", adapter=step["adapter"],
+                               session_id=outcome.session_id,
+                               continuity=outcome.continuity or "fresh",
+                               cancelled=outcome.cancelled,
+                               resume_rejected=outcome.resume_rejected)
+                sessions[target] = {"session_id": outcome.session_id,
+                                    "adapter": step["adapter"]}
+            if outcome.status == "cancelled" or outcome.resume_rejected:
+                event = "cancelled" if outcome.status == "cancelled" else "resume-rejected"
+                journal.append(target, event, reason=outcome.reason, role=step["role"])
+                reason = (f"follow-up on step '{target}': {outcome.reason}")
+                emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
+                                       **context))
+                return MissionOutcome(status="needs-owner", mission_id=mission["id"],
+                                      reason=reason, steps=outcomes)
+            journal.append(target, "settled", status=outcome.status, reason=outcome.reason,
+                           output=outcome.worker_output[-4000:], gates=outcome.gates,
+                           worker_job=outcome.worker_job, role=step["role"])
+            outcomes[target] = {"status": outcome.status, "reason": outcome.reason,
+                                "role": step["role"], "output": outcome.worker_output[-4000:],
+                                "gates": outcome.gates}
+            if outcome.status != "done":
+                reason = f"follow-up on step '{target}': {outcome.reason}"
+                emit(events.make_event("mission", {}, status=outcome.status, reason=reason,
+                                       **context))
+                return MissionOutcome(status=outcome.status, mission_id=mission["id"],
+                                      reason=reason, steps=outcomes)
+        if not pending:
+            # Follow-up-only run on a settled mission: refresh the delivery snapshot with the
+            # follow-up's changes and report - the full done-tail (backlog fold, journey scan)
+            # already ran when the mission first settled.
+            _refresh_end_manifests(mission, artifacts_path)
+            emit(events.make_event("mission", {}, status="done", **context))
+            return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
+
     # Wave scheduler: independent steps (needs all terminal) dispatch CONCURRENTLY, capped at
     # MAX_PARALLEL_STEPS; dependency order, skip cascades, the policy gate and the journal keep
     # their exact sequential semantics. Settlement is processed in worklist order on the main
     # thread, so the journal's settled/skip/proposal sequence is deterministic.
     while pending:
+        if (mission_dir / "cancel-requested").exists():
+            # Operator cancel between waves: no new dispatches. In-flight steps were already
+            # signalled through the live-run registry (or settle cancelled below).
+            (mission_dir / "cancel-requested").unlink(missing_ok=True)
+            reason = ("cancelled by the operator before the remaining steps were "
+                      "dispatched; resume the mission to continue.")
+            emit(events.make_event("mission", {}, status="cancelled", reason=reason, **context))
+            return MissionOutcome(status="needs-owner", mission_id=mission["id"], reason=reason,
+                                  steps=outcomes)
         ready: list[dict[str, Any]] = []
         resume_jobs: dict[str, str] = {}
         interrupted_reason = ""
@@ -553,7 +697,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 skip_progress = True
                 continue
             kind = states.get(step_id, {}).get("event", "")
-            if kind in ("dispatched", "reattached", "redispatch"):
+            if kind in ("dispatched", "reattached", "redispatch", "cancelled",
+                        "resume-rejected"):
                 prior_job = states.get(step_id, {}).get("worker_job", "")
                 if redispatch == step_id:
                     # The operator's explicit choice beats reattach, even with a prior job id
@@ -598,6 +743,20 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                             resume_jobs[step_id] = prior_job  # reattach: poll the existing Root job, never duplicate it
                             journal.append(step_id, "reattached", worker_job=prior_job)
                             ready.append(step)
+                elif kind == "cancelled":
+                    if not interrupted_reason:
+                        interrupted_reason = (
+                            f"step '{step_id}' was cancelled by the operator. Its recorded "
+                            "session is kept on the journal: "
+                            f"`skye mission redispatch <file> --step {step_id}` resumes that "
+                            "session; add --fresh to abandon it and start the step over.")
+                elif kind == "resume-rejected":
+                    if not interrupted_reason:
+                        interrupted_reason = (
+                            f"step '{step_id}': {states.get(step_id, {}).get('reason', '')} "
+                            "No fresh run was started behind your back. "
+                            f"`skye mission redispatch <file> --step {step_id} --fresh` abandons "
+                            "the lost session and starts the step over (your explicit choice).")
                 elif not interrupted_reason:
                     # No reattach possible and no operator decision: STOP. The interrupted attempt
                     # may have left partial external effects; silently repeating the step could
@@ -714,11 +873,20 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         def _run_one(step: dict[str, Any]) -> Outcome:
             step_id = step["id"]
             job_observer = lambda job_id, _s=step_id: journal.append(_s, "worker-job", worker_job=job_id)
+            recorded = sessions.get(step_id)
+            if recorded and not (redispatch == step_id and redispatch_fresh):
+                # Continuity: a rework round or operator redispatch RESUMES the recorded
+                # vendor session - the worker sees its own earlier turns. A rejected resume
+                # fails closed in the dispatcher; only --fresh abandons it.
+                contracts[step_id]["resume_session_id"] = recorded["session_id"]
+
             return dispatch(
                 contracts[step_id], policy, runner=runner, bridge=bridge, state_dir=state_dir,
                 approvals_path=approvals_path, catalogues_dir=catalogues_dir,
                 resume_job_id=resume_jobs.get(step_id) or None, job_observer=job_observer,
-                event_context=dict(context, step=step_id))
+                event_context=dict(context, step=step_id),
+                on_progress=_progress_journaler(journal, emit, context, step_id,
+                                                contracts[step_id]))
 
         # Wave width is bounded by BOTH the conservative module cap and the owner's policy:
         # policy.max_concurrent (default 1) is the team-wide concurrency the owner actually
@@ -735,10 +903,36 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         # needs-owner/failure in dependency order is the one the mission reports.
         wave_needs_owner: tuple[str, Outcome] | None = None
         wave_failed: tuple[str, Outcome] | None = None
+        wave_cancelled: tuple[str, Outcome] | None = None
+        wave_resume_rejected: tuple[str, Outcome] | None = None
         for step in ready:
             step_id = step["id"]
             context["step"] = step_id
             outcome = results[step_id]
+            if outcome.session_id:
+                # The vendor session record: later rework/follow-ups/redispatches resume it.
+                journal.append(step_id, "worker-session", adapter=step["adapter"],
+                               session_id=outcome.session_id,
+                               continuity=outcome.continuity or "fresh",
+                               cancelled=outcome.cancelled,
+                               resume_rejected=outcome.resume_rejected)
+                sessions[step_id] = {"session_id": outcome.session_id,
+                                     "adapter": step["adapter"]}
+            if outcome.status == "cancelled":
+                # Operator stop: NOT settled - the step stays pending and resumable.
+                journal.append(step_id, "cancelled", reason=outcome.reason, role=step["role"])
+                pending[step_id] = step
+                if wave_cancelled is None:
+                    wave_cancelled = (step_id, outcome)
+                continue
+            if outcome.resume_rejected:
+                # Fail-closed: never settled, never retried fresh on its own.
+                journal.append(step_id, "resume-rejected", reason=outcome.reason,
+                               session_id=outcome.session_id, role=step["role"])
+                pending[step_id] = step
+                if wave_resume_rejected is None:
+                    wave_resume_rejected = (step_id, outcome)
+                continue
             if outcome.status == "claim-held":
                 # Another process claimed overlapping write-paths first (atomic registry check
                 # at dispatch). Hold the step: no settled entry, retried on the next wave or
@@ -881,6 +1075,23 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 journal.append("", "work-deferred", goal=goal_text[:200],
                                reason=reason_text[:400], from_step=step_id,
                                feature_id=features[0]["id"] if features else "")
+        if wave_cancelled is not None:
+            step_id, _outcome = wave_cancelled
+            session_note = (f" Its recorded session "
+                            f"({sessions.get(step_id, {}).get('session_id', '?')}) is kept:"
+                            if sessions.get(step_id) else "")
+            reason = (f"step '{step_id}' was cancelled by the operator.{session_note} "
+                      "Redispatch the step to resume that session, or redispatch --fresh to "
+                      "abandon it and start over.")
+            emit(events.make_event("mission", {}, status="cancelled", reason=reason, **context))
+            return MissionOutcome(status="needs-owner", mission_id=mission["id"], reason=reason,
+                                  steps=outcomes)
+        if wave_resume_rejected is not None:
+            step_id, outcome = wave_resume_rejected
+            reason = f"step '{step_id}': {outcome.reason}"
+            emit(events.make_event("mission", {}, status="needs-owner", reason=reason, **context))
+            return MissionOutcome(status="needs-owner", mission_id=mission["id"], reason=reason,
+                                  steps=outcomes)
         if wave_needs_owner is not None:
             step_id, outcome = wave_needs_owner
             pending_path = mission_dir / f"pending-{step_id}.json"
@@ -915,22 +1126,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             if gate.get("gate") == "journey" and gate.get("ok"):
                 journey_ok = True
                 journey_evidence = str(gate.get("evidence") or gate.get("detail") or "")
-    if (mission.get("repo") or mission.get("repos_resolved")) and artifacts_path.exists():
-        from .journey import repo_manifest
-        record = json.loads(artifacts_path.read_text("utf-8"))
-        if mission.get("repo"):
-            end_manifest, end_truncated = repo_manifest(mission["repo"])
-            record["end"] = end_manifest
-            record["end_truncated"] = end_truncated
-        resolved = mission.get("repos_resolved") or {}
-        if resolved and record.get("repos"):
-            for name, path in resolved.items():
-                if not path or name not in record["repos"]:
-                    continue
-                manifest, truncated = repo_manifest(path)
-                record["repos"][name]["end"] = manifest
-                record["repos"][name]["end_truncated"] = truncated
-        artifacts_path.write_text(json.dumps(record) + "\n", "utf-8")
+    _refresh_end_manifests(mission, artifacts_path)
     backlog.mark_delivered(mission["id"], journey_ok=journey_ok, evidence=journey_evidence)
     # The ticket is the permanent home: the mission's team-line discussion folds into its
     # thread so a later repair reads the working conversation, not just the outcomes.
@@ -965,11 +1161,31 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
     # Dynamic steps count toward the mission's state exactly like authored ones: "done" while a
     # worker-proposed step is still running would be a lie.
     all_steps = list(mission["steps"]) + journal.accepted_steps()
-    steps = [{"id": step["id"], "role": step["role"], "adapter": step["adapter"],
-              "state": states.get(step["id"], {}).get("event", "pending"),
-              "status": states.get(step["id"], {}).get("status", ""),
-              "reason": states.get(step["id"], {}).get("reason", "")}
-             for step in all_steps]
+    # Session vocabulary for the UI: per-step continuity (how the last run related to the
+    # vendor session: fresh/resumed/reattached), whether a session exists to follow up on,
+    # and the latest streamed progress line. Reattached stays Root's live-job word; the CLI
+    # adapters' continuity is fresh/resumed.
+    sessions: dict[str, dict[str, Any]] = {}
+    progress: dict[str, str] = {}
+    for entry in journal.entries():
+        if entry.get("event") == "worker-session" and entry.get("session_id"):
+            sessions[str(entry.get("step") or "")] = entry
+        elif entry.get("event") == "worker-progress" and entry.get("text"):
+            progress[str(entry.get("step") or "")] = str(entry["text"])
+    steps = []
+    for step in all_steps:
+        state = states.get(step["id"], {})
+        session = sessions.get(step["id"], {})
+        settled = state.get("event") == "settled"
+        steps.append({"id": step["id"], "role": step["role"], "adapter": step["adapter"],
+                      "state": state.get("event", "pending"),
+                      "status": state.get("status", ""),
+                      "reason": state.get("reason", ""),
+                      "continuity": (session.get("continuity") or ("fresh" if session else "")),
+                      "has_session": bool(session.get("session_id")),
+                      "followupable": bool(settled and session.get("session_id")),
+                      "progress": progress.get(step["id"], "")})
+    
     if not states:
         overall = "not-started"
     else:
@@ -981,6 +1197,8 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
             overall = "needs-owner"
         elif any(k in ("dispatched", "reattached", "redispatch") for k in kinds):
             overall = "interrupted"  # in-flight at crash; the UI overlays "running" when live
+        elif any(k in ("cancelled", "resume-rejected") for k in kinds):
+            overall = "needs-owner"  # an explicit operator decision is the way out
         elif settled_not_done:
             overall = settled_not_done[0]["status"] or "failed"
         elif all(s["state"] == "settled" and s["status"] == "done" for s in steps):

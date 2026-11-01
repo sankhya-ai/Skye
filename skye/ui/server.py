@@ -183,7 +183,8 @@ def mission_graph(state_dir: Path, mission_id: str) -> dict:
         return str(resolved or "")
 
     states = journal.step_states()
-    nodes = []
+    status_steps = mission_status(mission, state_dir=state_dir)["steps"]
+    nodes = []  # status_steps and the status dict below come from the same read
     for origin, steps in (("authored", mission.get("steps") or []),
                           ("proposed", journal.accepted_steps())):
         for step in steps:
@@ -202,6 +203,11 @@ def mission_graph(state_dir: Path, mission_id: str) -> dict:
                     "reason": redact.redact_text(str(state.get("reason", ""))[:300])}
             if state.get("worker_job"):
                 node["worker_job"] = state["worker_job"]
+            step_status = next((s for s in status_steps if s["id"] == step["id"]), None)
+            if step_status:
+                # fresh/resumed/reattached + whether a session exists to follow up on
+                node["continuity"] = step_status["continuity"]
+                node["has_session"] = step_status["has_session"]
             if origin == "proposed":
                 node["proposed_by"] = next(
                     (e.get("step") for e in journal.entries()
@@ -649,9 +655,11 @@ _live_lock = threading.Lock()
 RUNNER = None
 
 
-def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = None) -> None:
+def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = None,
+                     redispatch_fresh: bool = False) -> None:
     """Resume a mission in-process from its snapshot; the UI polls the journal for progress.
-    ``redispatch`` is the operator's explicit choice to re-run one interrupted step."""
+    ``redispatch`` is the operator's explicit choice to re-run one interrupted step; it
+    RESUMES the step's recorded vendor session unless ``redispatch_fresh`` abandons it."""
     mission_dir = state_dir / "missions" / mission_id
     with _live_lock:
         if _live_missions.get(mission_id, {}).get("running"):
@@ -666,7 +674,8 @@ def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = 
             # have, silently ignoring the policy the Settings screen edits.
             run_mission(mission, policy=Policy.load(policy_path_default()),
                         state_dir=state_dir, approvals_path=approvals_path_for(state_dir),
-                        redispatch=redispatch, runner=RUNNER)
+                        redispatch=redispatch, redispatch_fresh=redispatch_fresh,
+                        runner=RUNNER)
         except Exception as exc:  # surfaced via GET /api/missions/<id> -> live.error
             with _live_lock:
                 _live_missions[mission_id]["error"] = str(exc)
@@ -1096,8 +1105,64 @@ class UiHandler(BaseHTTPRequestHandler):
                     step = body.get("step")
                     if not step:
                         return self._json({"error": "step is required"}, 400)
-                    resume_in_thread(self.state_dir, mission_id, redispatch=step)
-                    return self._json({"redispatched": step, "resumed": True})
+                    fresh = bool(body.get("fresh"))
+                    resume_in_thread(self.state_dir, mission_id, redispatch=step,
+                                     redispatch_fresh=fresh)
+                    return self._json({"redispatched": step, "resumed": True,
+                                       "continuity": "fresh" if fresh else "resumed"})
+                if action == "follow-up":
+                    # Continue a SETTLED step in its recorded vendor session. The engine
+                    # consumes the queued follow-up on the next run: validation here is
+                    # fail-fast, the journal remains the record of what actually ran.
+                    step = str(body.get("step") or "")
+                    text = str(body.get("text") or "").strip()
+                    if not step or not text:
+                        return self._json(
+                            {"error": "follow-up needs a step and non-empty text"}, 400)
+                    from ..mission import mission_status as _status
+                    step_status = next(
+                        (s for s in _status(load_mission(mission_file),
+                                            state_dir=self.state_dir)["steps"]
+                         if s["id"] == step), None)
+                    if step_status is None:
+                        return self._json({"error": f"unknown step '{step}'"}, 404)
+                    if not step_status["followupable"]:
+                        return self._json(
+                            {"error": f"step '{step}' has no settled vendor session to "
+                                      "continue (state: "
+                                      f"{step_status['state'] or 'pending'}); follow-ups "
+                                      "need a settled step with a recorded session"}, 409)
+                    with _live_lock:
+                        running = _live_missions.get(mission_id, {}).get("running")
+                    if running:
+                        return self._json(
+                            {"error": "mission is running; follow-ups queue for settled "
+                                      "steps between runs"}, 409)
+                    with (mission_dir / "followups.jsonl").open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({"step": step, "text": text,
+                                             "at": time.time()}) + "\n")
+                    resume_in_thread(self.state_dir, mission_id)
+                    return self._json({"accepted": True, "step": step,
+                                       "continuity": "resumed"})
+                if action == "cancel":
+                    # Operator stop: signal every live run of this mission (SIGTERM ->
+                    # SIGKILL grace in the adapter) and mark the run so no new steps
+                    # dispatch. The engine journals the cancel; steps stay unsettled and
+                    # resumable - never silently retried.
+                    from ..adapters import base as _adapter_base
+                    prefix = f"{mission_id}:"
+                    with _adapter_base._LIVE_LOCK:
+                        keys = [k for k in _adapter_base._LIVE if k.startswith(prefix)]
+                    signalled = [_adapter_base.cancel_live(k) for k in keys]
+                    with _live_lock:
+                        running = _live_missions.get(mission_id, {}).get("running")
+                    if not keys and not running:
+                        return self._json({"error": "mission is not running"}, 409)
+                    (mission_dir / "cancel-requested").write_text(
+                        json.dumps({"at": time.time(), "by": "skye ui"}) + "\n", "utf-8")
+                    return self._json({"cancel": "signalled" if keys else "marked",
+                                       "steps": [k[len(prefix):] for k in keys],
+                                       "outcomes": signalled})
                 if action == "ack-recovery":
                     from .. import workspaces as workspaces_module
                     record = workspaces_module.acknowledge_recovery(

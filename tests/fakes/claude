@@ -24,8 +24,31 @@ sleep = float(os.environ.get("FAKE_SLEEP", "0"))
 if sleep:
     time.sleep(sleep)   # cancel/timeout must interrupt this
 
+# Review verdicts for rework tests: a review brief gets the next verdict from
+# FAKE_VERDICT_SEQUENCE (a counter file in FAKE_COUNTER tracks the round), so one test can
+# script request-changes then pass. Anything else gets the plain worker reply.
+prompt = argv[argv.index("-p") + 1] if "-p" in argv else ""
+text = "I worked on the task."
+if "You are reviewing another worker's changes" in prompt:
+    sequence = [v.strip() for v in os.environ.get("FAKE_VERDICT_SEQUENCE", "pass").split(",")
+                if v.strip()]
+    counter_path = os.environ.get("FAKE_COUNTER")
+    index = 0
+    if counter_path and os.path.exists(counter_path):
+        index = int(open(counter_path).read().strip() or "0")
+    if counter_path:
+        open(counter_path, "w").write(str(index + 1))
+    verdict = sequence[min(index, len(sequence) - 1)]
+    if verdict == "request-changes":
+        text = ('Reviewed the diff. {"verdict": "request-changes", '
+                '"feedback": ["tighten the parser"]}')
+    elif verdict == "block":
+        text = 'Reviewed the diff. {"verdict": "block", "reasons": ["off brief"]}'
+    else:
+        text = 'Reviewed the diff. {"verdict": "pass"}'
+
 print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
-    {"type": "text", "text": "I worked on the task."},
+    {"type": "text", "text": text},
     {"type": "tool_use", "name": "Read", "input": {"file_path": "a.py"}}]}}), flush=True)
 print(json.dumps({"type": "result", "subtype": "success", "session_id": session_id,
                   "total_cost_usd": 0.01, "num_turns": 1, "duration_ms": 5}), flush=True)

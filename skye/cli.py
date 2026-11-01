@@ -5,7 +5,8 @@
   skye approve <job.json>        one-time approval of exactly this contract (single-use)
   skye approvals                 list outstanding one-time approvals
   skye mission run <file>        run or resume a mission (a chain of contracts with handoffs)
-  skye mission redispatch <file> --step <id>   re-run an interrupted step (explicit choice)
+  skye mission redispatch <file> --step <id> [--fresh]   re-run an interrupted step
+      (resumes its vendor session; --fresh abandons the session and starts over)
   skye mission status <file>     per-step state from the mission journal
   skye mission check <file>      validate a mission file
   skye mission reset <file>      archive the journal so the mission starts clean
@@ -138,13 +139,16 @@ def _cmd_mission(args: list[str]) -> int:
                           "base_rev": record.get("base_rev", "")}, indent=2))
         return 0
     redispatch = None
+    redispatch_fresh = False
     if sub == "redispatch":
         if "--step" not in args[2:]:
-            print("usage: skye mission redispatch <mission.json> --step <id>", file=sys.stderr)
+            print("usage: skye mission redispatch <mission.json> --step <id> [--fresh]",
+                  file=sys.stderr)
             return 2
         redispatch = args[args.index("--step") + 1]
+        redispatch_fresh = "--fresh" in args  # --fresh abandons the recorded vendor session
     outcome = run_mission(mission, Policy.load(), approvals_path=approvals.default_path(),
-                          redispatch=redispatch)
+                          redispatch=redispatch, redispatch_fresh=redispatch_fresh)
     print(json.dumps({"status": outcome.status, "mission": outcome.mission_id,
                       "reason": outcome.reason, "pending_contract": outcome.pending_contract,
                       "steps": {k: {"status": v.get("status"), "reason": v.get("reason", "")}
