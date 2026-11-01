@@ -36,9 +36,11 @@ resell tokens or download an agent for you.
 ## How it works
 
 ```
- goal -> contract -> owner policy -> worker (Root / Claude Code / Codex) -> gates -> delivery
-                         |                                                    |
-                    needs-owner? approve once                  review verdict, test and journey checks
+goal -> contract -> policy check -> worker -> gates -> delivery
+
+policy check: outside the policy? needs-owner, approve once
+worker:       Root, Claude Code or Codex
+gates:        output contract, tests, reviewer verdict, journey check
 ```
 
 1. You write a **contract**: goal, repo, role, adapter, gates and a small brief.
@@ -65,13 +67,13 @@ journal, approvals and the UI.
 Requires Python 3.10+. The `skye` package has no third-party Python dependencies.
 
 ```sh
-pip install -e .            # installs the `skye` command
-skye check job.json         # validate a contract
-skye run job.json           # policy check -> worker -> gates (or needs-owner)
-skye approve job.json       # one-time approval of exactly that contract
-skye mission run flow.json  # run or resume a persisted workflow
-skye mission status flow.json
-skye ui                     # local screens on 127.0.0.1
+pip install -e .               # installs the skye command
+skye check job.json            # validate a contract
+skye run job.json              # policy check -> worker -> gates (or needs-owner)
+skye approve job.json          # one-time approval of exactly that contract
+skye mission run flow.json     # run or resume a persisted workflow
+skye mission status flow.json  # show mission progress
+skye ui                        # local screens on 127.0.0.1
 ```
 
 A contract:
