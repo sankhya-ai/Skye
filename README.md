@@ -56,6 +56,13 @@ The supported working slice, all covered by tests in `tests/` (64 tests):
   `skye mission reset` archives the journal to start clean. `tests/test_mission.py` and
   `tests/test_integration_mission.py` cover the chain, the proposals, the skips, and a real
   kill-Skye recovery against the vendored Root with zero duplicate jobs.
+- **The workflow UI.** `skye ui` serves local screens (127.0.0.1 only, per-run session token,
+  no cookies, cross-origin POSTs rejected) for everything the journal knows: a missions overview,
+  a per-step run trace with live status, the journal itself, and functional one-time approvals -
+  approve a needs-owner step in the browser, resume the mission, redispatch an interrupted step.
+  The screens adapt Apache-2.0 components from block/buzz and block/berd (attribution in
+  `skye/ui/NOTICE`). `scripts/ui_scenario.py` drives the whole loop in a real browser against
+  the vendored Root with a scripted model - no provider, no cost.
 - **One-time owner approvals.** `skye approve <job.json>` approves exactly one contract, once:
   the approval binds to the contract's fingerprint (sha256 of its normalized form), is consumed
   when the worker starts, and is invalidated by any edit. It never overrides the concurrency cap.

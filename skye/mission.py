@@ -255,6 +255,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     policy = policy or Policy.load()
     state_dir = Path(state_dir or default_state_dir())
     mission_dir = state_dir / "missions" / mission["id"]
+    mission_dir.mkdir(parents=True, exist_ok=True)
+    # Snapshot the mission source next to the journal: the UI and later resumes read the exact
+    # definition this run used, not whatever the file says after later edits.
+    snapshot = mission_dir / "mission.json"
+    rendered = json.dumps(mission, indent=2, sort_keys=True) + "\n"
+    if not snapshot.exists() or snapshot.read_text("utf-8") != rendered:
+        snapshot.write_text(rendered, "utf-8")
     journal = Journal(mission_dir / "journal.jsonl")
     bridge = bridge if bridge is not None else events.from_env(log_path=mission_dir / "events.jsonl")
     emit = bridge.publish

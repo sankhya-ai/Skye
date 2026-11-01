@@ -9,6 +9,7 @@
   skye mission status <file>     per-step state from the mission journal
   skye mission check <file>      validate a mission file
   skye mission reset <file>      archive the journal so the mission starts clean
+  skye ui [--port 8787]          local screens for missions, journals and approvals
 """
 
 from __future__ import annotations
@@ -139,6 +140,18 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_approve(rest)
     if command == "approvals":
         return _cmd_approvals()
+    if command == "ui":
+        from .ui.server import serve
+        port = 8787
+        state_dir = None
+        if "--port" in rest:
+            i = rest.index("--port")
+            port = int(rest[i + 1])
+        if "--state-dir" in rest:
+            i = rest.index("--state-dir")
+            state_dir = rest[i + 1]
+        serve(state_dir=state_dir, port=port)
+        return 0
     if command == "mission":
         return _cmd_mission(rest)
     print(USAGE, file=sys.stderr)
