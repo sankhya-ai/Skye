@@ -37,7 +37,10 @@ resell tokens or download an agent for you.
   with confirmed-stop and uncertain states kept separate.
 - **Tickets that remember.** Backlog items are tickets with labels and a permanent thread. A bug
   found on delivered work reopens the same ticket with its evidence.
-- **A local UI.** `skye ui` serves missions, run traces, the journal and approvals on 127.0.0.1.
+- **A local UI.** `skye run` opens missions, run traces, the journal and approvals in your
+  browser (served on 127.0.0.1 only). It also shows your Claude Code plan and usage limits.
+- **A model per agent.** Pick Opus, Sonnet or Haiku for each role on the Agents screen. For
+  example: planner and reviewer on Opus, developers on Sonnet.
 - **No LLM in the coordination path.** Dispatch, policy, approvals and gates are plain code. Tokens
   are spent only inside the workers, on your own subscriptions or keys.
 
@@ -72,7 +75,7 @@ journal, approvals and the UI.
 
 ## Screens
 
-The local UI (`skye ui`), pictured on a scripted demo mission - no model calls, no cost.
+The local UI (`skye run`), pictured on a scripted demo mission - no model calls, no cost.
 
 **Watch a mission run.** Steps report live, and you can follow up on the running step or stop it.
 
@@ -100,30 +103,69 @@ The local UI (`skye ui`), pictured on a scripted demo mission - no model calls, 
 
 ## Quick start
 
-Requires Python 3.10+. The `skye` package has no third-party Python dependencies.
-
-From a checkout of this repository:
+You need Python 3.10+, git and [Claude Code](https://claude.com/claude-code), logged in (run
+`claude` once). You don't need Node: the UI ships prebuilt.
 
 ```sh
-pip install -e .                        # installs the skye command
-skye check examples/job.json            # validate a contract
-skye run examples/job.json              # policy check -> worker -> gates (or needs-owner)
-skye approve examples/job.json          # one-time approval of exactly that contract
-skye mission run examples/flow.json     # run or resume a persisted workflow
-skye mission status examples/flow.json  # show mission progress
-skye ui                                 # local screens on 127.0.0.1
+git clone https://github.com/sankhya-ai/Skye.git && cd Skye
+./install        # one time: sets up .venv/ and puts `skye` on your PATH
+skye run         # every time, from any folder: starts Skye and opens it in your browser
+skye stop        # when you're done
 ```
 
-`examples/job.json` is a contract; set `repo` to a real path first. `examples/flow.json` is a two-step workflow (PM scopes, developer builds). A contract looks like this:
+In the browser:
+
+1. **Choose your project folder** (a native folder picker). If the folder isn't a git
+   repository yet, Skye offers to make it one.
+2. **Describe the goal** and pick how to staff it:
+   - **Team**: a one-turn planning session sizes the team. Usually that's a single developer.
+     Larger goals get a few parallel specialists.
+   - **Solo**: one developer session with no planning. This uses the fewest tokens.
+3. **Watch it run**, send follow-ups to a running step, then press **Bring into my project**.
+
+**Your files stay safe.** Each mission works in its own git worktree on branch
+`skye/<mission-id>`. "Bring into my project" is a plain `git merge` into your current branch.
+Git won't overwrite your own uncommitted edits, a conflict is aborted and explained, and caches
+such as `__pycache__` and `node_modules` are never brought in.
+
+**Models per agent.** On the **Agents** screen every role has a model picker. The defaults are:
+- planner (`pm`) and reviewer: Opus
+- developers, tester, designer, devops: Sonnet
+- explorer: Haiku
+
+Each step on a mission page shows which model it ran on.
+
+**Claude usage is in the sidebar.** The card shows your plan, the 5-hour and weekly limits (how
+much is left and when they reset) and what Skye itself used. The data comes from `claude auth
+status` and from the rate-limit reports Claude Code sends during runs, so checking it costs no
+tokens. The numbers are as of the last run.
+
+**What the first run sets up** (in `.skye/policy.json`, editable in Settings):
+- Claude Code steps run without a per-step approval click. Starting a mission is your go-ahead.
+- Missions get worktrees, and up to 2 steps run in parallel.
+- No test command is set. Add one (e.g. `pytest -q`) and every step must pass it. Without one,
+  the default tests gate is recorded as *skipped*.
+- Workers get exactly their role's tools (`--allowedTools` plus `--permission-mode dontAsk`)
+  and no MCP tools.
+
+### Command line (advanced)
+
+```sh
+skye check examples/job.json            # validate a contract
+skye run examples/job.json              # one contract: policy check -> worker -> gates
+skye approve examples/job.json          # one-time approval of exactly that contract
+skye mission run examples/flow.json     # run or resume a workflow you wrote yourself
+skye mission status examples/flow.json  # show mission progress
+```
+
+`examples/job.json` is a contract (set `repo` to a real path first). `examples/flow.json` is a
+two-step workflow you author yourself (PM scopes, developer builds). A contract looks like this:
 
 ```json
 {"goal": "add the health endpoint", "repo": "/path/to/repo", "role": "developer",
  "adapter": "claude-code", "gates": ["tests", "review"],
  "brief": "Small self-contained brief for the worker."}
 ```
-
-Write a `skye.policy.json` before expecting unattended runs. Without one, every contract comes back
-`needs-owner`. Start from `skye.policy.example.json`, and see `examples/` for roles.
 
 For the `root` adapter, start the vendored Root server locally. Skye finds it with `SKYE_ROOT_URL`
 (default `http://127.0.0.1:8788`) and authenticates with `SKYE_ROOT_TOKEN` or Root's local token
@@ -135,9 +177,11 @@ Skye is a working local core, not a finished product.
 
 - **Verified:** the Skye test suite (363 passed, 1 skipped at the last full run), real end-to-end
   jobs against the vendored Root using its scripted model, and browser checks of the UI.
-- **Not yet verified:** real signed-in Claude Code and Codex runs. Those adapters were checked
-  against simulated provider processes and the vendors' CLI documentation, not a live model run.
-  Design and planning quality with real models against real apps is also unproven.
+- **Verified with real Claude Code:** a Solo mission and a Team mission (planner, then one
+  developer) on a small Python project. Both edited files, passed the test gate and were merged
+  back with "Bring into my project". Each took 10-20 seconds and a few cents at API prices.
+- **Not yet verified:** real Codex runs, large multi-step missions with real models, and design
+  or planning quality on real apps.
 - **Not a sandbox:** tool catalogues and write claims are cooperative guards, not OS security
   boundaries. A role whose catalogue includes Bash can do anything Bash can.
 - **Not built:** the hosted edition and multi-machine teams. See `docs/editions.md`.
