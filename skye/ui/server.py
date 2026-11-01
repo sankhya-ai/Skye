@@ -664,6 +664,9 @@ def create_mission(state_dir: Path, spec: dict) -> str:
 
 _live_missions: dict[str, dict] = {}
 _live_lock = threading.Lock()
+# Serializes the live-steer critical section (check -> intent -> submit)
+# within this process; the O_EXCL marker file covers other server processes.
+_steer_serial_lock = threading.Lock()
 
 # Test/demo hook: the worker runner the in-process resume passes to run_mission. None means the
 # real dispatcher path (the default, and what `skye ui` uses).
@@ -1187,6 +1190,63 @@ class UiHandler(BaseHTTPRequestHandler):
                         # provider receipt. Text-echo correlation cannot distinguish two
                         # identical in-flight texts, so an ambiguous repeat is REJECTED
                         # here rather than given a false exact-consumption guarantee.
+                        marker = mission_dir / f"steer-pending-{step}"
+                        with _steer_serial_lock:
+                            # Cross-process first: a live marker names the pending
+                            # follow_id; it clears only when the journal shows that
+                            # follow-up's receipt or a terminal resolution.
+                            if marker.exists():
+                                try:
+                                    pending_fid = json.loads(
+                                        marker.read_text("utf-8")).get("follow_id", "")
+                                except (OSError, ValueError):
+                                    pending_fid = ""
+                                entries_all = journal.entries()
+                                intent_pos = next(
+                                    (k for k, e in enumerate(entries_all)
+                                     if e.get("event") == "follow-up"
+                                     and e.get("follow_id") == pending_fid), None)
+                                if intent_pos is None:
+                                    # No journaled intent for the marked follow-up:
+                                    # either the owner process died between claim and
+                                    # journal (abandoned), or it is microseconds from
+                                    # journaling (in-flight). Age tells them apart.
+                                    try:
+                                        import time as _time
+                                        abandoned = (_time.time()
+                                                     - marker.stat().st_mtime > 30)
+                                    except OSError:
+                                        abandoned = False
+                                    if abandoned:
+                                        marker.unlink(missing_ok=True)
+                                    else:
+                                        return self._json(
+                                            {"error": f"step '{step}' has a follow-up "
+                                                      "submission in flight - retry in "
+                                                      "a moment",
+                                             "preserved_text": text}, 409)
+                            if marker.exists():
+                                resolved = intent_pos is not None and any(
+                                    (e.get("event") in (
+                                        "cancelled", "resume-rejected", "redispatch",
+                                        "follow-up-undelivered"))
+                                    or (e.get("event") == "worker-progress"
+                                        and e.get("kind") in (
+                                            "steer-ack", "steer-rejected",
+                                            "steer-unapplied"))
+                                    for e in entries_all[intent_pos:])
+                                if resolved:
+                                    marker.unlink(missing_ok=True)
+                                else:
+                                    return self._json(
+                                        {"error": f"step '{step}' already has a "
+                                                  "follow-up awaiting its provider "
+                                                  "receipt - live steers are "
+                                                  "serialized per session so "
+                                                  "consumption is never "
+                                                  "misattributed; retry once it "
+                                                  "acknowledges",
+                                         "preserved_text": text}, 409)
                         prior = [e for e in journal.entries()
                                  if e.get("step") == step]
                         for idx, e in enumerate(prior):
@@ -1217,8 +1277,21 @@ class UiHandler(BaseHTTPRequestHandler):
                                               "awaiting its provider receipt - live "
                                               "steers are serialized per session so "
                                               "consumption is never misattributed; "
-                                              "retry once it acknowledges"}, 409)
+                                              "retry once it acknowledges",
+                                     "preserved_text": text}, 409)
                         follow_id = _uuid.uuid4().hex[:12]
+                        try:
+                            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                            with os.fdopen(fd, "w") as handle:
+                                handle.write(json.dumps({"follow_id": follow_id}))
+                        except FileExistsError:
+                            # another server process won the race between check and claim
+                            return self._json(
+                                {"error": f"step '{step}' already has a follow-up "
+                                          "awaiting its provider receipt - live steers "
+                                          "are serialized per session; retry once it "
+                                          "acknowledges",
+                                 "preserved_text": text}, 409)
                         journal.append(step, "follow-up", follow_id=follow_id,
                                        text=text[:500], delivery="steered-live",
                                        state="intent")
@@ -1230,6 +1303,7 @@ class UiHandler(BaseHTTPRequestHandler):
                                                "delivery": "submitted",
                                                "receipt": "pending provider event",
                                                "continuity": "same-live-session"})
+                        marker.unlink(missing_ok=True)
                         journal.append(step, "follow-up-undelivered",
                                        follow_id=follow_id, reason=steered)
                         if steered == "unsupported":

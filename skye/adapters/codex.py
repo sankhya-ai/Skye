@@ -367,7 +367,12 @@ class CodexAdapter(SessionAdapter):
             if method is not None and "id" in msg:
                 # A SERVER->CLIENT request. Skye never approves escalations: known
                 # approval methods get an explicit DECLINE (grounded: v2/item.rs
-                # CommandExecutionApprovalDecision/FileChangeApprovalDecision "decline");
+                # CommandExecutionApprovalDecision/FileChangeApprovalDecision "decline").
+                # The sandbox field is the CLI-CONFIGURED execution scope per upstream
+                # policy semantics (read-only denies writes per the CLI's config); its
+                # enforcement strength on any real platform is the CLI's claim, not one
+                # Skye has verified - Skye's own guarantee is only that no escalation
+                # past the configured scope is ever approved here.
                 # requests for interactive input or dynamic tools cannot be served and
                 # unknown methods fail closed - all with a JSON-RPC error, all journaled.
                 # (approvalPolicy params on thread/turn start are experimental-gated, so
