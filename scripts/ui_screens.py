@@ -259,11 +259,37 @@ with sync_playwright() as pw:
             page.goto(ui_url + f"#/mission/{approval_mission}")
             page.wait_for_timeout(3000)
             page.screenshot(path=str(out_dir / "ui-approval-pending.png"), full_page=True)
-            approve = page.locator("button", has_text="Approve this step once")
+            card = page.locator("[data-testid='approval-card']")
+            approve = card.locator("button", has_text="Approve this step once")
             if approve.count():
-                approve.click()
+                # keyboard-only flow: summary toggles, Tab reaches approve, ring visible, Enter activates
+                summary = card.locator("summary", has_text="Contract details")
+                summary.focus()
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(200)
+                opened = card.locator("details").evaluate("el => el.open")
+                print("APPROVAL details keyboard toggle:", "PASS" if opened else "FAIL")
+                # Tab walks the card's real order (scrollable brief region is a legitimate stop)
+                # until the approve button holds focus.
+                reached = False
+                for _ in range(4):
+                    page.keyboard.press("Tab")
+                    page.wait_for_timeout(150)
+                    focused = page.evaluate(
+                        "document.activeElement && document.activeElement.textContent || ''")
+                    if "Approve" in focused:
+                        reached = True
+                        break
+                print("APPROVAL tab reaches approve:", "PASS" if reached else "FAIL")
+                ring = page.evaluate(
+                    "document.activeElement ? getComputedStyle(document.activeElement).boxShadow : ''")
+                print("APPROVAL focus ring:", "PASS" if reached and ring and ring != "none"
+                      else f"FAIL boxShadow={ring!r}")
+                page.keyboard.press("Enter")
                 page.wait_for_timeout(1500)
                 page.screenshot(path=str(out_dir / "ui-approval-approved.png"), full_page=True)
+                settled = card.count() == 0
+                print("APPROVAL keyboard activation:", "PASS" if settled else "FAIL card still present")
                 print("APPROVAL card flow: captured pending + approved")
             else:
                 print("APPROVAL card flow: NO approve button found - check seed")
