@@ -215,7 +215,7 @@ export type RoleRow = {
   catalogue: { tools: string[]; writable: boolean };
 };
 
-export type ModelChoice = { value: string; label: string };
+export type ModelChoice = { value: string; label: string; hint?: string };
 
 export const setRoleModel = (role: string, model: string) =>
   api<{ saved: boolean; role: string; model: string }>("/api/policy/models", {

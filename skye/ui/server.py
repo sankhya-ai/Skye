@@ -428,10 +428,10 @@ def roles_payload(state_dir: Path) -> dict:
 #: What the Agents screen offers per role. The aliases always mean the latest model of that
 #: family in Claude Code; "" = the worker CLI's own default (whatever the owner set there).
 MODEL_CHOICES = [
-    {"value": "", "label": "Claude Code default"},
-    {"value": "opus", "label": "Opus - strongest, uses limits fastest"},
-    {"value": "sonnet", "label": "Sonnet - balanced"},
-    {"value": "haiku", "label": "Haiku - fastest, lightest"},
+    {"value": "", "label": "Claude Code default", "hint": "Whatever model you set in Claude Code"},
+    {"value": "opus", "label": "Opus", "hint": "Strongest - uses your limits fastest"},
+    {"value": "sonnet", "label": "Sonnet", "hint": "Balanced quality and usage"},
+    {"value": "haiku", "label": "Haiku", "hint": "Fastest and lightest"},
 ]
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]]{0,63}$")
 

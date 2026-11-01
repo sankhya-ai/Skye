@@ -14,6 +14,7 @@ import {
 } from "../api";
 import { humanError } from "../lib";
 import { Badge } from "./ui/Badge";
+import { Select } from "./ui/Select";
 
 // What each role does in a mission, so the owner can judge where a stronger model pays off.
 const ROLE_HINT: Record<string, string> = {
@@ -41,12 +42,16 @@ function ModelPicker({
     <div className="mt-3">
       <label className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="shrink-0">Model</span>
-        <select
+        <Select
           value={value}
           disabled={saving}
-          aria-label={`Model for ${role}`}
-          onChange={(e) => {
-            const next = e.target.value;
+          ariaLabel={`Model for ${role}`}
+          className="flex-1"
+          options={[
+            ...(!known ? [{ value, label: value, hint: "Set in the policy file" }] : []),
+            ...choices.map((c) => ({ value: c.value, label: c.label, hint: c.hint })),
+          ]}
+          onChange={(next) => {
             setSaving(true);
             setError(null);
             setRoleModel(role, next)
@@ -54,13 +59,7 @@ function ModelPicker({
               .catch((err) => setError(humanError(err, "role")))
               .finally(() => setSaving(false));
           }}
-          className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-xs text-foreground outline-none disabled:opacity-60"
-        >
-          {!known ? <option value={value}>{value}</option> : null}
-          {choices.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
-          ))}
-        </select>
+        />
       </label>
       {error ? <p className="mt-1 text-xs text-destructive">{error}</p> : null}
     </div>

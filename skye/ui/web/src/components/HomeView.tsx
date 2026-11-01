@@ -4,6 +4,7 @@
 import { ArrowUp } from "lucide-react";
 import { humanError } from "../lib";
 import { Spinner } from "./ui/Spinner";
+import { Select } from "./ui/Select";
 import { useEffect, useState } from "react";
 import {
   createMission,
@@ -285,19 +286,17 @@ export function HomeView({
           <div className="flex items-center justify-between pt-2">
             <div className="flex items-center gap-1.5">
               {projects.length > 0 ? (
-                <select
+                <Select
                   value={project}
-                  onChange={(e) => (e.target.value === "__add" ? void addProjectFolder() : setProject(e.target.value))}
-                  className="h-8 max-w-[11rem] rounded-full border border-border bg-card px-3 text-xs text-muted-foreground outline-none"
-                  aria-label="Project"
-                >
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                  <option value="__add">+ Add project folder…</option>
-                </select>
+                  ariaLabel="Project"
+                  className="max-w-[12rem]"
+                  menuMinWidth={260}
+                  onChange={(v) => (v === "__add" ? void addProjectFolder() : setProject(v))}
+                  options={[
+                    ...projects.map((p) => ({ value: p.id, label: p.name, hint: p.repo })),
+                    { value: "__add", label: "+ Add project folder…", action: true },
+                  ]}
+                />
               ) : (
                 <button
                   type="button"
@@ -437,20 +436,15 @@ export function HomeView({
             {repoRows.length > 0 ? (
               <div className="flex items-center gap-2">
                 <label className="text-muted-foreground">Planning runs in</label>
-                <select
+                <Select
                   value={defaultRepo}
-                  onChange={(e) => setDefaultRepo(e.target.value)}
-                  className="h-7 rounded-md border border-border bg-card px-2 text-xs text-muted-foreground outline-none"
-                >
-                  <option value="">Choose...</option>
-                  {repoRows
+                  size="xs"
+                  ariaLabel="Planning runs in"
+                  onChange={setDefaultRepo}
+                  options={repoRows
                     .filter((r) => REPO_NAME.test(r.name.trim()) && r.path.trim())
-                    .map((r) => (
-                      <option key={r.name} value={r.path.trim()}>
-                        {r.name.trim()}
-                      </option>
-                    ))}
-                </select>
+                    .map((r) => ({ value: r.path.trim(), label: r.name.trim(), hint: r.path.trim() }))}
+                />
               </div>
             ) : null}
             <p className="text-[11px] text-muted-foreground/70">

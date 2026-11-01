@@ -4,6 +4,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
+import { Select } from "./ui/Select";
 import {
   ApiError,
   getPolicy,
@@ -182,26 +183,25 @@ export function SettingsView() {
         <div className="mt-3 space-y-2">
           {rules.map((rule, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
-              <select
+              <Select
                 value={rule.adapter}
-                onChange={(e) =>
-                  setRules(rules.map((r, j) => (j === i ? { ...r, adapter: e.target.value } : r)))
+                mono
+                ariaLabel={`Worker for rule ${i + 1}`}
+                className="w-44"
+                onChange={(v) =>
+                  setRules(rules.map((r, j) => (j === i ? { ...r, adapter: v } : r)))
                 }
-                className="max-w-full min-w-0 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs outline-none"
-              >
-                {ADAPTERS.map((a) => {
+                options={ADAPTERS.map((a) => {
                   const detail = adapters?.find((d) => d.name === a);
-                  return (
-                    <option key={a}>
-                      {a}{detail && !detail.available
-                        ? detail.probe === "local-server"
-                          ? " (not reachable)"
-                          : " (not installed)"
-                        : ""}
-                    </option>
-                  );
+                  return {
+                    value: a,
+                    label: a,
+                    hint: detail && !detail.available
+                      ? detail.probe === "local-server" ? "Not reachable" : "Not installed"
+                      : detail ? "Installed" : undefined,
+                  };
                 })}
-              </select>
+              />
               <input
                 value={rule.role}
                 onChange={(e) =>
