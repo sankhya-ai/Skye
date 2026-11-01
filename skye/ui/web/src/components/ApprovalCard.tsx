@@ -32,8 +32,7 @@ export function ApprovalCard({
         Adapter: {String(contract.adapter ?? "?")} · Role: {String(contract.role ?? "?")}
       </p>
       <p className="mb-2 text-xs text-muted-foreground">
-        Approving authorizes exactly this contract for one dispatch attempt. It never
-        widens the standing policy; a further attempt needs a fresh approval.
+        Approving runs this contract once. Policy unchanged.
       </p>
       {error ? <p className="mb-2 text-xs text-destructive">{error}</p> : null}
       <button

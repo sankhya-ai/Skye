@@ -148,7 +148,7 @@ export function HomeView({
                 void submit();
               }
             }}
-            placeholder="Describe the goal - a planner agent grows the workflow at runtime..."
+            placeholder="Describe the goal..."
             rows={3}
             className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
           />

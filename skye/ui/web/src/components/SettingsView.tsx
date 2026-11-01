@@ -3,6 +3,7 @@
 // validated by the server exactly like a hand-edited policy file.
 import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "./ui/Button";
 import { getPolicy, savePolicy } from "../api";
 
 type Rule = { adapter: string; role: string };
@@ -17,6 +18,7 @@ export function SettingsView() {
   const [advanced, setAdvanced] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -78,9 +80,6 @@ export function SettingsView() {
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-medium">Policy</h2>
-        <p className="text-sm text-muted-foreground">
-          What workers may do without asking, and how the team verifies work.
-        </p>
       </div>
       {error ? (
         <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
@@ -143,7 +142,7 @@ export function SettingsView() {
       <section className="shadow-card rounded-xl border border-border bg-card p-4">
         <h3 className="text-sm font-medium">Verification</h3>
         <label className="mt-3 block text-xs text-muted-foreground">
-          Test command (the tests gate runs this; never worker-supplied)
+          Test command · owner-set; the worker cannot supply it
           <input
             value={testCommand}
             onChange={(e) => setTestCommand(e.target.value)}
@@ -152,10 +151,8 @@ export function SettingsView() {
           />
         </label>
         <label className="mt-3 block text-xs text-muted-foreground">
-          Journey replay command (the delivery gate runs this in the project repo; owner-set,
-          never worker-supplied). A plain check, e.g. a smoke test - exit 0 means the replay
-          passed. Leave empty and finished work waits as "awaiting verification" until you
-          set one and replay it from the backlog.
+          Journey replay command · owner-set; the worker cannot supply it. Empty means finished
+          work waits for verification.
           <input
             value={journeyCommand}
             onChange={(e) => setJourneyCommand(e.target.value)}
@@ -164,7 +161,7 @@ export function SettingsView() {
           />
         </label>
         <label className="mt-3 block text-xs text-muted-foreground">
-          Steps that may run at the same time (1-4)
+          Parallel steps (1-4)
           <input
             type="number"
             min={1}
@@ -176,13 +173,16 @@ export function SettingsView() {
         </label>
       </section>
 
-      <button
-        type="button"
-        onClick={() => void save()}
-        className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background"
+      <Button
+        size="sm"
+        loading={saving}
+        onClick={() => {
+          setSaving(true);
+          void save().finally(() => setSaving(false));
+        }}
       >
         Save policy
-      </button>
+      </Button>
 
       <details className="shadow-card rounded-xl border border-border bg-card p-4">
         <summary className="cursor-pointer text-xs text-muted-foreground">
@@ -195,13 +195,14 @@ export function SettingsView() {
           spellCheck={false}
           className="mt-3 w-full rounded-md border border-border bg-background p-3 font-mono text-xs outline-none"
         />
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-2"
           onClick={() => void saveAdvanced()}
-          className="mt-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium"
         >
           Save raw JSON
-        </button>
+        </Button>
       </details>
     </div>
   );

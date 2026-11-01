@@ -162,6 +162,15 @@ with sync_playwright() as pw:
                 preview.click()
                 page.wait_for_timeout(1500)
         page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
+        if name == "backlog":
+            # interaction capture: the Reject confirmation dialog
+            reject = page.locator("button", has_text="Reject").first
+            if reject.count():
+                reject.click()
+                page.wait_for_timeout(800)
+                page.screenshot(path=str(out_dir / "ui-backlog-reject-dialog.png"))
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(400)
     browser.close()
 ui_proc.terminate()
 print("mission:", mission_id, final)

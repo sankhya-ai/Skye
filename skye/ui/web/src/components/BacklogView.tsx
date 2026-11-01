@@ -15,6 +15,8 @@ import {
   type IssueRow,
   type Project,
 } from "../api";
+import { Button } from "./ui/Button";
+import { Dialog } from "./ui/Dialog";
 
 const BADGE: Record<string, string> = {
   pending: "bg-warning/25 text-foreground",
@@ -37,6 +39,7 @@ export function BacklogView() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -108,10 +111,6 @@ export function BacklogView() {
         <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">
           Backlog
         </h1>
-        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-          What the teams want to build or fix next. Approving lets the team plan and start;
-          each execution step still follows your approval policy.
-        </p>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {sorted.length === 0 ? (
@@ -153,7 +152,7 @@ export function BacklogView() {
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {f.brief}
                     {f.status === "awaiting-verification"
-                      ? " Work is done; delivery waits on a passing journey replay (set one in Settings if none is configured)."
+                      ? " Done - awaiting journey replay."
                       : ""}
                   </p>
                   <p className="mt-1.5 text-xs text-muted-foreground/70">
@@ -168,64 +167,61 @@ export function BacklogView() {
                 <div className="flex shrink-0 gap-2">
                   {f.status === "pending" ? (
                     <>
-                      <button
-                        type="button"
-                        disabled={busy === f.id}
+                      <Button
+                        size="sm"
+                        loading={busy === f.id}
                         onClick={() => void act(f.id, () => decideFeature(f.id, "approved"))}
-                        className="h-8 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
                       >
                         Approve
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy === f.id}
-                        onClick={() => void act(f.id, () => decideFeature(f.id, "rejected"))}
-                        className="h-8 rounded-full border border-border bg-card px-3 text-xs text-foreground transition hover:bg-muted disabled:opacity-30"
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        loading={busy === f.id}
+                        onClick={() => setRejecting(f.id)}
                       >
                         Reject
-                      </button>
+                      </Button>
                     </>
                   ) : null}
                   {f.status === "awaiting-verification" ? (
                     <>
-                      <button
-                        type="button"
-                        disabled={busy === f.id}
+                      <Button
+                        size="sm"
+                        loading={busy === f.id}
                         onClick={() => void act(f.id, () => verifyFeature(f.id))}
-                        className="h-8 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
                       >
                         Replay journey
-                      </button>
+                      </Button>
                       {f.verification && !f.verification.journey_passed ? (
-                        <button
-                          type="button"
-                          disabled={busy === f.id}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          loading={busy === f.id}
                           onClick={() =>
                             void act(f.id, () =>
                               reworkFeature(f.id, "journey replay failed - sent back for repair"),
                             )
                           }
-                          className="h-8 rounded-full border border-border px-3 text-xs text-muted-foreground transition hover:text-foreground disabled:opacity-30"
                         >
                           Send back
-                        </button>
+                        </Button>
                       ) : null}
                     </>
                   ) : null}
                   {f.status === "approved" && !f.mission_id ? (
-                    <button
-                      type="button"
-                      disabled={busy === f.id}
+                    <Button
+                      size="sm"
+                      loading={busy === f.id}
                       onClick={() =>
                         void act(f.id, async () => {
                           const res = await startFeature(f.id, true);
                           window.location.hash = `/mission/${encodeURIComponent(res.id)}`;
                         })
                       }
-                      className="h-8 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
                     >
                       Start work
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               </div>
@@ -237,8 +233,7 @@ export function BacklogView() {
         <section>
           <h2 className="text-sm font-medium text-foreground">Signals</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Errors the team has seen. A signal only counts as resolved once its repair is
-            verified delivered - work in progress keeps it open.
+            Resolved only after verified delivery.
           </p>
           <ul className="mt-2 space-y-1.5">
             {sortedIssues.map((i) => {
@@ -270,6 +265,33 @@ export function BacklogView() {
           </ul>
         </section>
       ) : null}
+      <Dialog
+        open={rejecting !== null}
+        onClose={() => setRejecting(null)}
+        title="Reject this proposal?"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setRejecting(null)}>
+              Keep it
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              loading={busy === rejecting}
+              onClick={() => {
+                const id = rejecting;
+                if (!id) return;
+                setRejecting(null);
+                void act(id, () => decideFeature(id, "rejected"));
+              }}
+            >
+              Reject
+            </Button>
+          </>
+        }
+      >
+        The team drops it. You can ask again any time.
+      </Dialog>
     </div>
   );
 }

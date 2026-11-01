@@ -11,3 +11,21 @@ export function formatTime(value: string | number | null | undefined): string {
     : new Date(value);
   return Number.isNaN(d.getTime()) ? "unknown time" : d.toLocaleString();
 }
+
+export function formatRelative(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "never run";
+  const asNumber = typeof value === "number" ? value : Number(value);
+  const d = Number.isFinite(asNumber) && asNumber > 1e9
+    ? new Date(asNumber * 1000)
+    : new Date(value);
+  if (Number.isNaN(d.getTime())) return "unknown time";
+  const seconds = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (seconds < 45) return "just now";
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${Math.round(minutes)} min ago`;
+  const hours = minutes / 60;
+  if (hours < 24) return `${Math.round(hours)} h ago`;
+  const days = hours / 24;
+  if (days < 7) return `${Math.round(days)} d ago`;
+  return d.toLocaleDateString();
+}

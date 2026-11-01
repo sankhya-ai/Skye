@@ -20,18 +20,14 @@ function MissionsView({ missions, projects }: { missions: MissionRow[]; projects
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-medium">{project ? project.name : "Missions"}</h2>
-        <p className="text-sm text-muted-foreground">
-          {project ? (
-            <>
-              Conversations in this workspace · <code className="text-xs">{project.repo}</code> ·{" "}
-              <a href="#/missions" className="underline">
-                all missions
-              </a>
-            </>
-          ) : (
-            "Journaled workflows with one-time approvals - local only."
-          )}
-        </p>
+        {project ? (
+          <p className="text-sm text-muted-foreground">
+            <code className="text-xs">{project.repo}</code> ·{" "}
+            <a href="#/missions" className="underline">
+              all missions
+            </a>
+          </p>
+        ) : null}
       </div>
       <MissionsOverview
         missions={rows}
@@ -88,6 +84,7 @@ export default function App() {
         onProjectsChanged={() => void refresh()}
       />
       <main className="min-w-0 pl-64">
+      <div key={route} className="view-enter">
         {isDetail && detailId ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
             <MissionDetailView id={detailId} onBack={() => (window.location.hash = "/missions")} />
@@ -115,7 +112,8 @@ export default function App() {
             onCreated={(id) => (window.location.hash = `/mission/${encodeURIComponent(id)}`)}
           />
         )}
-      </main>
+            </div>
+    </main>
     </div>
   );
 }

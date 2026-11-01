@@ -184,7 +184,7 @@ export function Sidebar({
         ) : null}
       </div>
       <p className="border-t border-border px-3 py-2 text-xs leading-4 text-muted-foreground">
-        Local only. Runs are journaled; interrupted work waits for an explicit operator decision.
+        Local only. Interrupted work waits for you.
       </p>
     </aside>
   );

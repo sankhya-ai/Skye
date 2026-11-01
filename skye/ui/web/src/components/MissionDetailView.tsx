@@ -6,6 +6,7 @@ import {
   resumeMission,
   type MissionDetail,
 } from "../api";
+import { Button } from "./ui/Button";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
 import { MissionRunTrace } from "./MissionRunTrace";
 import { Badge } from "./ui/Badge";
@@ -32,6 +33,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   const [detail, setDetail] = useState<MissionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -50,11 +52,14 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
 
   const act = async (fn: () => Promise<unknown>) => {
     setActionError(null);
+    setBusy(true);
     try {
       await fn();
       await refresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -79,21 +84,13 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         {overallBadge(detail.status.status, live, detail.approved)}
         <span className="flex-1" />
         {resumable ? (
-          <button
-            type="button"
-            className="h-8 inline-flex items-center gap-1 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
-            onClick={() => act(() => resumeMission(id))}
-          >
+          <Button size="sm" loading={busy} onClick={() => act(() => resumeMission(id))}>
             <Play className="size-3" /> Resume
-          </button>
+          </Button>
         ) : null}
-        <button
-          type="button"
-          className="h-8 inline-flex items-center gap-1 rounded-full border border-border bg-card px-3 text-xs text-foreground transition hover:bg-muted"
-          onClick={() => refresh()}
-        >
+        <Button variant="outline" size="sm" loading={busy} onClick={() => refresh()}>
           <RefreshCw className="size-3" /> Refresh
-        </button>
+        </Button>
       </div>
       {/* product-first: the goal is the headline; the mission id is a caption */}
       <div>

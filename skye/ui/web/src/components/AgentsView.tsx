@@ -2,6 +2,7 @@
 // Creating a role here writes the owner-managed registry the contract validator reads.
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "./ui/Button";
 import { createRole, getRoles, type RoleRow } from "../api";
 import { Badge } from "./ui/Badge";
 
@@ -12,6 +13,7 @@ export function AgentsView() {
   const [description, setDescription] = useState("");
   const [tools, setTools] = useState("Read, Grep, Glob");
   const [writable, setWritable] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -50,10 +52,7 @@ export function AgentsView() {
       <div>
         <h2 className="text-lg font-medium">Agents</h2>
         <p className="text-sm text-muted-foreground">
-          Every role here really dispatches. The owner defines specialists in the roles
-          registry; a new role validates in contracts immediately. Tool lists scope which
-          tools a worker is offered through its adapter's CLI configuration - they are not
-          an OS security boundary.
+          Tool lists scope a worker's tools; they are not a security boundary.
         </p>
       </div>
       {error ? (
@@ -119,14 +118,18 @@ export function AgentsView() {
           />
           Offer Write/Edit tools (otherwise read tools only)
         </label>
-        <button
-          type="button"
-          onClick={() => void add()}
+        <Button
+          size="sm"
+          className="mt-3"
           disabled={!name.trim()}
-          className="mt-3 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition disabled:opacity-30"
+          loading={adding}
+          onClick={() => {
+            setAdding(true);
+            void add().finally(() => setAdding(false));
+          }}
         >
           Add role
-        </button>
+        </Button>
       </div>
     </div>
   );

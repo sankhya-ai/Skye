@@ -115,3 +115,41 @@ body {
 .shadow-card {
   box-shadow: 0 2px 8px rgba(76, 76, 76, 0.15);
 }
+
+/* Motion + elevation tokens, berd's vocabulary (Apache-2.0, see skye/ui/NOTICE):
+   flat at rest, shadows only on interaction/overlay, fast quiet transitions. */
+:root {
+  --shadow-mini: 0 2px 8px rgba(76, 76, 76, 0.15);
+  --shadow-elevated: 0 3px 12px rgba(76, 76, 76, 0.22);
+  --shadow-popover: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.2);
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 320ms;
+}
+
+.shadow-mini { box-shadow: var(--shadow-mini); }
+.shadow-elevated { box-shadow: var(--shadow-elevated); }
+.shadow-popover { box-shadow: var(--shadow-popover); }
+.shadow-modal { box-shadow: var(--shadow-modal); }
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* Route-level view transition: quiet, fast, never theatrical. */
+.view-enter { animation: view-in var(--duration-normal) ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .view-enter, .animate-\[dialog-in_180ms_cubic-bezier\(0\.16\,1\,0\.3\,1\)\], .animate-\[overlay-in_150ms_ease-out\] {
+    animation: none;
+  }
+}

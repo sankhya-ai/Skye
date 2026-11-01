@@ -1,71 +1,50 @@
-// Adapted from block/berd src/features/automations/ui/AutomationsOverview.tsx and
-// AutomationOverviewRow.tsx (Apache-2.0): card rows with a status activity dot,
-// title, summary line and last-activity label, clicking through to detail.
+// Mission rows. NOTE: an earlier version of this list was adapted from berd's Automations
+// UI - the one surface berd's DESIGN.md explicitly excludes as design precedent. This rewrite
+// follows the canonical rules instead: quiet flat rows, state color only for state, badges
+// for status (rounded-xs tags), no raw identifiers in the primary view, relative time.
 import type { MissionRow } from "../api";
-import { cn, formatTime } from "../lib";
+import { cn, formatRelative } from "../lib";
+import { Badge } from "./ui/Badge";
 
-function activityDotClass(row: MissionRow) {
-  if (row.live) return "bg-info animate-pulse";
-  if (row.approved) return "bg-success";
-  if (row.needs_owner) return "bg-amber-400";
-  if (row.failed > 0 || row.overall === "interrupted") return "bg-destructive";
-  if (row.overall === "done") return "bg-success";
-  if (row.overall === "running" || row.overall === "pending") return "bg-info";
-  return "bg-muted-foreground";
-}
-
-function statusLabel(row: MissionRow) {
-  if (row.live) return "running now";
-  if (row.approved) return "approved - resume to continue";
-  if (row.needs_owner) return "waiting on you";
-  switch (row.overall) {
-    case "done":
-      return "done";
-    case "interrupted":
-      return "interrupted";
-    case "not-started":
-      return "not started";
-    default:
-      return row.overall;
-  }
+function statusVariant(row: MissionRow): { variant: string; label: string; live: boolean } {
+  if (row.live) return { variant: "info", label: "running now", live: true };
+  if (row.needs_owner) return { variant: "outline", label: "waiting on you", live: false };
+  if (row.approved) return { variant: "success", label: "approved - resume to continue", live: false };
+  if (row.failed > 0 || row.overall === "interrupted")
+    return { variant: "destructive", label: row.overall === "interrupted" ? "interrupted" : "failed", live: false };
+  if (row.overall === "done") return { variant: "success", label: "done", live: false };
+  if (row.overall === "running" || row.overall === "pending")
+    return { variant: "info", label: row.overall, live: true };
+  return { variant: "secondary", label: row.overall, live: false };
 }
 
 function MissionRowButton({ row, onOpen }: { row: MissionRow; onOpen: () => void }) {
+  const status = statusVariant(row);
   return (
     <button
       type="button"
-      className="group grid min-h-[86px] w-full gap-3 rounded-md bg-card px-6 py-5 text-left transition-[background-color,box-shadow,border-color] duration-200 hover:shadow-md hover:ring-1 hover:ring-inset hover:ring-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+      className="group grid min-h-[72px] w-full gap-2 rounded-md bg-card px-6 py-4 text-left transition-[background-color,box-shadow] duration-150 hover:shadow-mini focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center"
       onClick={onOpen}
-      aria-label={row.id}
+      aria-label={row.goal || row.id}
       data-testid={`mission-row-${row.id}`}
     >
       <span className="min-w-0">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-base font-normal text-foreground">
-            {row.goal || row.id}
-          </span>
+        <span className="block truncate text-sm font-medium text-foreground">
+          {row.goal || row.id}
         </span>
-        <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground/70">
-          {row.id}
-        </span>
-        <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
-            <span
-              className={cn("size-[7px] shrink-0 rounded-full", activityDotClass(row))}
-              role="img"
-              aria-label={statusLabel(row)}
-            />
-            {statusLabel(row)}
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>
-            {row.done}/{row.steps} steps done
-            {row.failed > 0 ? `, ${row.failed} failed` : ""}
-          </span>
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {row.done}/{row.steps} steps done
+          {row.failed > 0 ? `, ${row.failed} failed` : ""}
         </span>
       </span>
-      <span className="hidden max-w-56 truncate text-right text-sm text-muted-foreground md:block">
-        {row.last_activity ? formatTime(row.last_activity) : "never run"}
+      <Badge variant={status.variant as never} className="md:justify-self-end">
+        {status.live ? (
+          <span className="size-1.5 animate-pulse rounded-full bg-current" aria-hidden="true" />
+        ) : null}
+        {status.label}
+      </Badge>
+      <span className="text-xs text-muted-foreground md:justify-self-end">
+        {formatRelative(row.last_activity)}
       </span>
     </button>
   );
@@ -80,8 +59,9 @@ export function MissionsOverview({
 }) {
   if (missions.length === 0) {
     return (
-      <div className="rounded-md border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-        No missions yet. Run one with <code className="font-mono">skye mission run mission.json</code>.
+      <div className="rounded-md border border-dashed border-border bg-card/50 p-10 text-center">
+        <p className="text-sm font-medium text-foreground">No missions yet</p>
+        <p className="mt-1 text-sm text-muted-foreground">Approved work runs here.</p>
       </div>
     );
   }
