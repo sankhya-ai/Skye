@@ -100,3 +100,17 @@ def add(entry: dict[str, Any], path: str | Path | None = None) -> dict[str, Any]
     tmp.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
     tmp.replace(target)  # atomic, like the approvals store
     return record
+
+
+def instructions_for(role: str, path: str | Path | None = None) -> str:
+    """Owner-authored guidance for a role, from the same owner-managed registry file.
+
+    A registry entry may carry "instructions": taste/process guidance ("how our designer
+    works") that Skye prepends to the worker's goal at dispatch. This is the owner's voice
+    reaching the worker, never a worker editing its own behavior: the registry file is
+    owner-managed like the policy, and the mission contract + approval fingerprint are
+    untouched. May annotate a builtin role (the shipped "designer") or a registry one."""
+    for entry in _read(path)["roles"]:
+        if entry.get("name") == role:
+            return str(entry.get("instructions") or "").strip()
+    return ""

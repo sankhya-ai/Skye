@@ -122,3 +122,33 @@ def test_artifact_file_refuses_symlink_escape(tmp_path):
     import pytest
     with pytest.raises(KeyError):
         artifact_file(state, "m1", "poster.svg")
+
+
+def test_role_instructions_reach_worker_without_touching_contract(tmp_path, monkeypatch):
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    (tmp_path / "roles.json").write_text(json.dumps({"roles": [
+        {"name": "designer", "instructions": "Diverge first. No generic hooks."}]}))
+    from skye.roles import instructions_for
+    assert instructions_for("designer") == "Diverge first. No generic hooks."
+    assert instructions_for("developer") == ""
+
+    import skye.dispatcher as dispatcher
+    captured = {}
+
+    def fake_run(spec, **kwargs):
+        captured["brief"] = spec.get("brief")
+        from skye.adapters.base import Result
+        return Result(ok=True, output="done")
+
+    (tmp_path / "repo").mkdir(exist_ok=True)
+    contract = {"goal": "make a poster", "brief": "Poster for the launch.", "repo": str(tmp_path / "repo"),
+                "role": "designer", "adapter": "root", "gates": [], "budget": {}}
+    from skye.contract import validate
+    spec = validate(contract)
+    spec["id"] = "s1"
+    from skye.policy import Policy
+    policy = Policy(data={"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    outcome = dispatcher.dispatch(spec, policy=policy, runner=fake_run)
+    assert outcome.status == "done"
+    assert captured["brief"].startswith("Diverge first. No generic hooks.\n\nPoster for the launch.")
+    assert spec.get("brief") == "Poster for the launch."  # the contract itself is untouched
