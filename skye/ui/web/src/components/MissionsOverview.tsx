@@ -6,6 +6,7 @@ import { cn, formatTime } from "../lib";
 
 function activityDotClass(row: MissionRow) {
   if (row.live) return "bg-info animate-pulse";
+  if (row.approved) return "bg-success";
   if (row.needs_owner) return "bg-amber-400";
   if (row.failed > 0 || row.overall === "interrupted") return "bg-destructive";
   if (row.overall === "done") return "bg-success";
@@ -15,6 +16,7 @@ function activityDotClass(row: MissionRow) {
 
 function statusLabel(row: MissionRow) {
   if (row.live) return "running now";
+  if (row.approved) return "approved - resume to continue";
   if (row.needs_owner) return "waiting on you";
   switch (row.overall) {
     case "done":

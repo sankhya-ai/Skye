@@ -15,8 +15,9 @@ import { formatTime } from "./lib";
 
 const POLL_MS = 1500;
 
-function overallBadge(overall: string, live?: boolean) {
+function overallBadge(overall: string, live?: boolean, approved?: boolean) {
   if (live) return <Badge variant="info">running</Badge>;
+  if (overall === "needs-owner" && approved) return <Badge variant="success">approved</Badge>;
   switch (overall) {
     case "done":
       return <Badge variant="success">done</Badge>;
@@ -76,7 +77,7 @@ function MissionDetailView({ id, onBack }: { id: string; onBack: () => void }) {
           <ArrowLeft className="size-4" /> Missions
         </button>
         <h2 className="font-mono text-lg">{detail.mission.id}</h2>
-        {overallBadge(detail.status.status, live)}
+        {overallBadge(detail.status.status, live, detail.approved)}
         <span className="flex-1" />
         {resumable ? (
           <button

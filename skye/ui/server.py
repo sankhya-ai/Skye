@@ -58,8 +58,16 @@ def mission_payload(state_dir: Path, mission_id: str) -> dict:
         contract["step"] = contract_file.stem.removeprefix("pending-")
         pending.append(contract)
     dynamic = [s for s in journal.accepted_steps()]
+    # A needs-owner step whose journaled contract fingerprint is already in the approvals store
+    # is approved and waiting for a resume - a different state from still-blocked, and the UI
+    # shows it as such.
+    approved_fps = {a.get("fingerprint") for a in approvals.pending(approvals_path_for(state_dir))}
+    needs_owner_fps = {e.get("fingerprint") for e in journal.step_states().values()
+                       if e.get("event") == "needs-owner"}
+    approved = bool(needs_owner_fps & approved_fps)
     return {"mission": mission, "status": status, "journal": _read_jsonl(mission_dir / "journal.jsonl"),
-            "dynamic_steps": dynamic, "pending_contracts": pending}
+            "dynamic_steps": dynamic, "pending_contracts": pending,
+            "approved": approved and not pending}
 
 
 def missions_overview(state_dir: Path) -> list[dict]:
@@ -77,13 +85,26 @@ def missions_overview(state_dir: Path) -> list[dict]:
             journal = payload["journal"]
             last = journal[-1]["ts"] if journal else None
             status = payload["status"]
+            dynamic_ids = {str(s.get("id")) for s in payload["dynamic_steps"]}
+            authored_ids = {s["id"] for s in status["steps"]}
+            # lifecycle projection, not last-entry-per-step: proposal events are journaled under
+            # the PROPOSING step's id and must not mask its settled state.
+            states = Journal(mission_dir / "journal.jsonl").step_states()
+            all_ids = authored_ids | dynamic_ids
+
+            def _settled(sid, want_done):
+                entry = states.get(sid, {})
+                if entry.get("event") != "settled":
+                    return False
+                return (entry.get("status") == "done") == want_done
+
             rows.append({"id": mission_dir.name, "goal": payload["mission"].get("goal", ""),
                          "overall": status["status"],
-                         "needs_owner": bool(payload["pending_contracts"]) or any(
-                             s["state"] == "needs-owner" for s in status["steps"]),
-                         "steps": len(status["steps"]),
-                         "done": sum(1 for s in status["steps"] if s["state"] == "done"),
-                         "failed": sum(1 for s in status["steps"] if s["state"] == "failed"),
+                         "needs_owner": bool(payload["pending_contracts"]),
+                         "approved": payload["approved"],
+                         "steps": len(all_ids),
+                         "done": sum(1 for sid in all_ids if _settled(sid, True)),
+                         "failed": sum(1 for sid in all_ids if _settled(sid, False)),
                          "last_activity": last,
                          "live": _live_missions.get(mission_dir.name, {}).get("running", False)})
     rows.sort(key=lambda r: r["last_activity"] or "", reverse=True)

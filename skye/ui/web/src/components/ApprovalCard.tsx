@@ -32,8 +32,8 @@ export function ApprovalCard({
         Adapter: {String(contract.adapter ?? "?")} · Role: {String(contract.role ?? "?")}
       </p>
       <p className="mb-2 text-xs text-muted-foreground">
-        Approving runs exactly this contract once, then the mission resumes. It never widens the
-        standing policy and never approves a second run.
+        Approving runs exactly this contract once when you resume the mission. It never
+        widens the standing policy and never approves a second run.
       </p>
       {error ? <p className="mb-2 text-xs text-destructive">{error}</p> : null}
       <button

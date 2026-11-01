@@ -398,12 +398,16 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
 def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None) -> dict[str, Any]:
     """Read-only: per-step last state from the journal plus the overall mission state."""
     state_dir = Path(state_dir or default_state_dir())
-    states = Journal(state_dir / "missions" / mission["id"] / "journal.jsonl").step_states()
+    journal = Journal(state_dir / "missions" / mission["id"] / "journal.jsonl")
+    states = journal.step_states()
+    # Dynamic steps count toward the mission's state exactly like authored ones: "done" while a
+    # worker-proposed step is still running would be a lie.
+    all_steps = list(mission["steps"]) + journal.accepted_steps()
     steps = [{"id": step["id"], "role": step["role"], "adapter": step["adapter"],
               "state": states.get(step["id"], {}).get("event", "pending"),
               "status": states.get(step["id"], {}).get("status", ""),
               "reason": states.get(step["id"], {}).get("reason", "")}
-             for step in mission["steps"]]
+             for step in all_steps]
     if not states:
         overall = "not-started"
     elif all(s["state"] == "settled" and s["status"] == "done" for s in steps):

@@ -147,7 +147,8 @@ def main() -> int:
                 "fetch('/api/missions/ui-demo', {headers: {'X-Skye-Token': new URLSearchParams(location.search).get('token')}}).then(r => r.json())")
             if detail["status"]["status"] == "done" and not detail["live"].get("running"):
                 break
-        page.wait_for_timeout(400)
+        page.wait_for_selector('[data-testid="trace-step-docs"][data-state="done"]', timeout=30000)
+        page.wait_for_timeout(200)
         page.screenshot(path=str(out_dir / "04-mission-done.png"), full_page=True)
         final = page.evaluate(
             "fetch('/api/missions/ui-demo', {headers: {'X-Skye-Token': new URLSearchParams(location.search).get('token')}}).then(r => r.json())")

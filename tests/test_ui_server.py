@@ -174,3 +174,37 @@ def test_double_resume_is_rejected(ui_server, tmp_path, monkeypatch):
     status, body = _req(url, "/api/missions/m1/resume", method="POST", body={})
     assert status == 400 and "already running" in body["error"]
     started.set()
+
+
+def test_overview_counts_settled_steps_and_marks_approved(ui_server, tmp_path, monkeypatch):
+    """The overview must reflect journal truth: a settled-done step counts as done, dynamic steps
+    count toward the total, and an approved-but-not-resumed mission says approved, not still
+    needs-owner."""
+    url, state_dir = ui_server
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    mission_file = tmp_path / "mission.json"
+    mission_file.write_text(json.dumps({
+        "id": "m2", "goal": "two steps", "repo": str(ws),
+        "steps": [
+            {"id": "dev", "role": "developer", "adapter": "claude-code", "goal": "build",
+             "gates": []},
+            {"id": "tester", "role": "tester", "adapter": "claude-code", "goal": "verify",
+             "needs": ["dev"], "gates": []}]}))
+    mission = load_mission(mission_file)
+    policy = Policy({"allow_unattended": [{"adapter": "claude-code", "role": "developer"}],
+                     "test_command": "true"})
+    outcome = run_mission(mission, policy,
+                          runner=lambda spec: Result(ok=True, output="x", command=["f"]),
+                          state_dir=state_dir, approvals_path=ui.approvals_path_for(state_dir))
+    assert outcome.status == "needs-owner"  # dev done, tester paused
+    _, body = _req(url, "/api/missions")
+    row = next(r for r in body["missions"] if r["id"] == "m2")
+    assert (row["done"], row["steps"]) == (1, 2), row
+    assert row["needs_owner"] is True and row["approved"] is False
+    _req(url, "/api/approve", method="POST", body={"mission": "m2", "step": "tester"})
+    _, body = _req(url, "/api/missions")
+    row = next(r for r in body["missions"] if r["id"] == "m2")
+    assert row["needs_owner"] is False and row["approved"] is True
+    _, detail = _req(url, "/api/missions/m2")
+    assert detail["approved"] is True and detail["pending_contracts"] == []

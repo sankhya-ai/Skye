@@ -7,6 +7,7 @@ export type MissionRow = {
   goal: string;
   overall: string;
   needs_owner: boolean;
+  approved: boolean;
   steps: number;
   done: number;
   failed: number;
@@ -41,6 +42,7 @@ export type MissionDetail = {
   journal: JournalEntry[];
   dynamic_steps: Array<Record<string, unknown>>;
   pending_contracts: Array<Record<string, unknown> & { step: string }>;
+  approved: boolean;
   live: { running?: boolean; error?: string | null; finished?: number };
 };
 

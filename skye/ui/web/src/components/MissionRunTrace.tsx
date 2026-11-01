@@ -25,7 +25,7 @@ type StepState = {
   status?: string;
   reason?: string;
   output?: string;
-  at?: string;
+  at?: number;
 };
 
 function statesFromJournal(journal: JournalEntry[]): Map<string, StepState> {
@@ -97,7 +97,10 @@ function StepIcon({ state }: { state: string }) {
   }
 }
 
-function stateBadge(state: string) {
+function stateBadge(state: string, approved?: boolean) {
+  if (state === "needs-owner" && approved) {
+    return <Badge variant="success">approved</Badge>;
+  }
   switch (state) {
     case "done":
       return <Badge variant="success">done</Badge>;
@@ -168,12 +171,21 @@ export function MissionRunTrace({
                   <span className="text-xs text-muted-foreground">
                     {step.role} · {step.adapter}
                   </span>
-                  {stateBadge(st.state)}
+                  {stateBadge(st.state, detail.approved)}
                   {st.at ? (
                     <span className="text-xs text-muted-foreground">{formatTime(st.at)}</span>
                   ) : null}
                 </div>
-                {st.reason ? (
+                {st.state === "needs-owner" && detail.approved ? (
+                  <div
+                    className="mt-2 rounded-lg border border-success/30 bg-success/5 p-3"
+                    data-testid="approved-cue"
+                  >
+                    <p className="text-xs text-success">
+                      Approved. This contract will run exactly once when you resume the mission.
+                    </p>
+                  </div>
+                ) : st.reason ? (
                   <p className="mt-2 text-xs text-muted-foreground">{st.reason}</p>
                 ) : null}
                 {st.state === "interrupted" ? (
