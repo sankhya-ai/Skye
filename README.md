@@ -17,7 +17,7 @@ workers, which you already pay for.
 
 ## What is real today (honest state)
 
-The supported working slice, all covered by tests in `tests/` (28 tests):
+The supported working slice, all covered by tests in `tests/` (63 tests):
 
 - **Contract -> policy -> gateway -> worker -> gates, for real.** With adapter `root`, Skye drives
   the vendored Root through its real owner HTTP API: the adapter authenticates with Root's local
@@ -40,6 +40,37 @@ The supported working slice, all covered by tests in `tests/` (28 tests):
   a local `events.jsonl`, never silently dropped; a dead line sink never loses an event or kills
   a dispatch. The Root owner token authenticates the adapter host-side only - it never appears in
   worker output, events, or errors (tested).
+- **Persisted dynamic workflows (missions).** `skye mission run` executes a workflow of
+  contracts with `needs` handoffs (each step's brief carries the recorded outcomes of the steps it
+  depends on), `when` conditions (a step runs only if a referenced step settled a given way;
+  unmet means skipped, and dependents of a skipped step skip in cascade), and run-time growth: a
+  settled step may end with a `{"propose_steps": [...]}` block proposing follow-up steps, which are
+  validated like authored contracts (known role/adapter, fresh ids, needs pointing at real steps),
+  capped at 32 steps, journaled as accepted/rejected, and dispatched through the same owner policy
+  as anything else. Every transition is journaled (`missions/<id>/journal.jsonl`, fsync'd before
+  reliance) so a crash is recoverable: settled steps are never re-run, dynamically accepted steps
+  are rebuilt from the journal, and an interrupted Root step REATTACHES to its journaled Root job
+  (polled, never duplicated). CLI adapters (claude-code/codex) cannot reattach - resume
+  re-dispatches the step and the journal says so; partial effects in the repo from the interrupted
+  attempt are yours to inspect. A failed step fails the mission (no silent retries);
+  `skye mission reset` archives the journal to start clean. `tests/test_mission.py` and
+  `tests/test_integration_mission.py` cover the chain, the proposals, the skips, and a real
+  kill-Skye recovery against the vendored Root with zero duplicate jobs.
+- **One-time owner approvals.** `skye approve <job.json>` approves exactly one contract, once:
+  the approval binds to the contract's fingerprint (sha256 of its normalized form), is consumed
+  when the worker starts, and is invalidated by any edit. It never overrides the concurrency cap.
+  `skye approvals` lists what is outstanding.
+- **A review gate with a verdict.** The reviewer (a second worker, never the author grading
+  itself) must end with `{"verdict": "pass"}` or `{"verdict": "block", "reasons": [...]}` - the
+  same shape Root's contract check enforces natively. Only an explicit pass opens the gate; a
+  finished-but-silent reviewer fails it. The role comes from the policy's `review_role`.
+- **Wired controls, honest limits.** `max_concurrent` is backed by a cross-process running
+  registry (pid liveness, stale-slot cleanup; a cooperative limit - a same-instant race can still
+  exceed it, documented). `budget.timeout_seconds` is wired into every adapter; fields an adapter
+  cannot enforce are reported as `budget_notes` on the outcome (claude-code/codex: max_steps and
+  max_cost_usd; Root: max_cost_usd is forwarded to Root's provider-price-dependent cost accounting,
+  not claimed as a hard bound). Lifecycle events record the worker's job id and the contract
+  fingerprint.
 - **Claude Code and Codex adapters.** Command construction is verified against the current vendor
   CLI references (Claude Code: headless `-p`, `--output-format`, tool restriction via `--tools`
   with `--disallowedTools mcp__*`; Codex: `codex exec` with its read-only-by-default sandbox).
@@ -52,17 +83,23 @@ The supported working slice, all covered by tests in `tests/` (28 tests):
 - Chamber's identity v2/v3 with its test matrix (111 tests passing in the vendored tree).
 
 Missing from the working product path: designer/PM flows with real models against real apps (the
-slice above is scripted by design), multi-contract missions with dependencies, and handoff of
-results between contracts. Long-term scope, deliberately out of this repo's first cut:
+slice above is scripted by design), real Claude Code/Codex runs (the adapters' command lines are
+doc-verified but no real model has completed a run here yet), parallel fan-out (execution is
+sequential; the workflow is dynamic in shape, not in concurrency), and the workflow UI (screens
+are being adapted from block/berd's automations feature - Apache-2.0 - in a later change; nothing
+visual exists yet). Long-term scope, deliberately out of this repo's first cut:
 multi-machine teams and the hosted edition (see `docs/editions.md`). This is a working local core,
 not a finished product.
 
 ## Quick start (local)
 
 ```sh
-pip install -e .            # the skye dispatcher package
+pip install -e .            # the skye dispatcher package (installs the `skye` command)
 skye check job.json         # validate a contract
-skye run job.json           # policy check -> worker -> gates
+skye run job.json           # policy check -> worker -> gates (or needs-owner)
+skye approve job.json       # one-time approval of exactly that contract (single-use)
+skye mission run flow.json  # run or resume a persisted dynamic workflow
+skye mission status flow.json
 ```
 
 For adapter `root`, start the vendored Root server locally; Skye finds it via `SKYE_ROOT_URL`

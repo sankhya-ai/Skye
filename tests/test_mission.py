@@ -214,3 +214,109 @@ def test_reattach_resumes_the_existing_root_job_instead_of_duplicating(tmp_path)
     assert outcome.status == "done", outcome.reason
     assert stub.requests == []  # NO new POST: the existing job was polled, not duplicated
     assert "reattached" in [e["event"] for e in journal.entries()]
+
+
+# ----- dynamic workflows: conditions, proposals, resume of dynamic steps -----
+
+def _dynamic_steps():
+    return [{"id": "pm", "role": "pm", "adapter": "claude-code", "goal": "scope the work",
+             "gates": []},
+            {"id": "fix", "role": "developer", "adapter": "claude-code", "goal": "fix it",
+             "needs": ["pm"], "when": {"step": "pm", "status": "done"}, "gates": []}]
+
+
+def test_a_worker_can_propose_steps_that_join_the_workflow(tmp_path):
+    path = _mission_file(tmp_path, _dynamic_steps())
+    mission = load_mission(path)
+    seen = []
+
+    def runner(spec):
+        seen.append(spec["role"])
+        if spec["role"] == "pm":
+            return Result(ok=True, output=(
+                'Scoped. {"propose_steps": [{"id": "docs", "role": "developer", '
+                '"adapter": "claude-code", "goal": "write docs", "needs": ["fix"], "gates": []}]}'))
+        return Result(ok=True, output=f"{spec['role']} done")
+
+    outcome = run_mission(mission, _policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done"
+    assert seen == ["pm", "developer", "developer"]  # fix, then the proposed docs step
+    journal = Journal(tmp_path / "st" / "missions" / "m1" / "journal.jsonl")
+    accepted = journal.accepted_steps()
+    assert [s["id"] for s in accepted] == ["docs"]
+    assert outcome.steps["docs"]["status"] == "done"
+
+
+def test_proposals_are_validated_not_executed(tmp_path):
+    path = _mission_file(tmp_path, _dynamic_steps())
+    mission = load_mission(path)
+
+    def runner(spec):
+        if spec["role"] == "pm":
+            return Result(ok=True, output=(
+                '{"propose_steps": ['
+                '{"id": "pm", "role": "pm", "adapter": "codex", "goal": "dupe"}, '
+                '{"id": "evil", "role": "wizard", "adapter": "codex", "goal": "bad role"}, '
+                '{"id": "orphan", "role": "pm", "adapter": "codex", "goal": "x", '
+                ' "needs": ["nope"]}]}'))
+        return Result(ok=True, output="ok")
+
+    outcome = run_mission(mission, _policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done"
+    journal = Journal(tmp_path / "st" / "missions" / "m1" / "journal.jsonl")
+    rejected = [e for e in journal.entries() if e["event"] == "proposal-rejected"]
+    assert len(rejected) == 3 and journal.accepted_steps() == []
+
+
+def test_conditional_steps_skip_and_cascade(tmp_path):
+    steps = [{"id": "pm", "role": "pm", "adapter": "claude-code", "goal": "scope", "gates": []},
+             {"id": "fix", "role": "developer", "adapter": "claude-code", "goal": "fix",
+              "needs": ["pm"], "when": {"step": "pm", "status": "failed"}, "gates": []},
+             {"id": "verify", "role": "tester", "adapter": "claude-code", "goal": "verify",
+              "needs": ["fix"], "gates": []}]
+    path = _mission_file(tmp_path, steps)
+    mission = load_mission(path)
+    seen = []
+
+    def runner(spec):
+        seen.append(spec["role"])
+        return Result(ok=True, output="ok")  # pm settles done, so the failed-only fix skips
+
+    outcome = run_mission(mission, _policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done"
+    assert seen == ["pm"]  # fix skipped (condition unmet); verify skipped (needs a skipped step)
+    assert outcome.steps["fix"]["status"] == "skipped"
+    assert outcome.steps["verify"]["status"] == "skipped"
+
+
+def test_resume_rebuilds_dynamic_steps_from_the_journal(tmp_path):
+    path = _mission_file(tmp_path, _dynamic_steps())
+    mission = load_mission(path)
+    state = tmp_path / "st"
+    journal = Journal(state / "missions" / "m1" / "journal.jsonl")
+    # Crash story: pm settled having proposed docs; docs was accepted; then the process died.
+    journal.append("pm", "dispatched", fingerprint="x")
+    journal.append("pm", "settled", status="done", reason="", output="scoped", role="pm", gates=[])
+    journal.append("pm", "step-accepted",
+                   spec={"id": "docs", "role": "developer", "adapter": "claude-code",
+                         "goal": "write docs", "needs": ["fix"], "gates": []})
+    seen = []
+
+    def runner(spec):
+        seen.append(spec["goal"])
+        return Result(ok=True, output="ok")
+
+    outcome = run_mission(mission, _policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=state)
+    assert outcome.status == "done"
+    assert seen == ["fix it", "write docs"]  # pm not re-run; the dynamic step survived the crash
+
+
+def test_mission_validation_rejects_a_bad_when(tmp_path):
+    steps = [{"id": "a", "role": "pm", "adapter": "codex", "goal": "x",
+              "when": {"step": "ghost", "status": "done"}, "gates": []}]
+    with pytest.raises(MissionError, match="when"):
+        load_mission(_mission_file(tmp_path, steps))

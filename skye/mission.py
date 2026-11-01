@@ -1,19 +1,30 @@
-"""Missions: the smallest multi-contract workflow - the first moment "team" is true.
+"""Missions: persisted DYNAMIC workflows - the first moment "team" is true.
 
-A mission is a JSON file naming an ordered chain of steps, each step a job contract with its own
-role and adapter. Steps after the first declare `needs`: the outcomes of those earlier steps are
-folded into the next step's brief, so the developer sees the PM's scoping and the tester sees the
-developer's result. Execution is sequential (one step at a time); there is deliberately no
-scheduler or parallel fan-out yet.
+A mission is a JSON file naming steps, each step a job contract with its own role and adapter.
+The workflow is dynamic, not a fixed chain:
+
+- `needs`: a step runs only after the steps it names, and their recorded outcomes are folded into
+  its brief - the developer sees the PM's scoping, the tester sees the developer's result.
+- `when`: a step can be conditional on a referenced step's settled status ({"when": {"step":
+  "review", "status": "done"}}); an unmet condition SKIPS the step (journaled), and steps needing
+  a skipped step skip in cascade.
+- proposals: a step whose output ends with a JSON block {"propose_steps": [...]} EXTENDS the
+  workflow at run time - this is how a PM's scoping becomes concrete dev/test steps without an
+  LLM anywhere in the coordination path. Proposals are validated like any contract (known
+  role/adapter, fresh ids, needs pointing at existing steps), capped (MAX_STEPS), journaled as
+  accepted/rejected, and dispatched through the same policy gate as authored steps: an owner who
+  did not pre-approve the adapter/role gets a needs-owner pause, never a surprise run.
 
 Durability is the point: every transition is journaled to <state_dir>/missions/<id>/journal.jsonl
 BEFORE it is relied on, so a crash mid-mission is recoverable:
 
-- a step that settled is never re-run - its recorded outcome feeds later briefs;
+- a step that settled (done or skipped) is never re-run - its recorded outcome feeds later briefs;
+- dynamically accepted steps are rebuilt from the journal on resume, in acceptance order;
 - a step dispatched but never settled was interrupted. For the Root adapter the journal holds the
   Root job id, and resume REATTACHES to that job (polls it) instead of starting a duplicate. For
-  the CLI adapters (claude-code/codex) no reattach exists - resume re-dispatches the step and the
-  journal says so, honestly;
+  the CLI adapters (claude-code/codex) no reattach exists - resume re-dispatches the step, the
+  journal says so honestly, and partial effects in the repo from the interrupted attempt are the
+  operator's to inspect (the step's worker may repeat work; nothing hides that);
 - a mission stops at needs-owner exactly like a single dispatch, writing the pending step contract
   for `skye approve`; `skye mission run` again resumes after the approval.
 
@@ -37,6 +48,7 @@ from .dispatcher import Outcome, dispatch
 from .policy import Policy
 
 OUTPUT_TAIL = 1500
+MAX_STEPS = 32  # hard cap on authored + dynamically proposed steps: a runaway proposer stops here
 
 
 class MissionError(ValueError):
@@ -76,6 +88,12 @@ def load_mission(path: str | Path) -> dict[str, Any]:
         unknown = [n for n in needs if n not in seen]
         if unknown:
             raise MissionError(f"step '{step_id}' needs unknown or later step(s): {', '.join(unknown)}")
+        when = step.get("when")
+        if when is not None:
+            if (not isinstance(when, dict) or when.get("step") not in seen
+                    or when.get("status") not in ("done", "failed", "gate-failed", "skipped")):
+                raise MissionError(
+                    f"step '{step_id}': when must name an earlier step and a settled status")
         candidate = {**step, "repo": step.get("repo") or raw.get("repo", "")}
         try:
             validate(candidate)
@@ -122,15 +140,23 @@ class Journal:
             step, kind = entry.get("step"), entry.get("event")
             if not step:
                 continue
-            if kind in ("dispatched", "settled", "needs-owner", "redispatch", "reattached"):
-                if kind == "dispatched" or states.get(step, {}).get("event") != "settled":
+            if kind in ("dispatched", "settled", "needs-owner", "redispatch", "reattached",
+                        "skipped"):
+                if kind == "dispatched" or states.get(step, {}).get("event") not in (
+                        "settled", "skipped"):
                     states[step] = dict(entry)
-                elif kind == "settled":
+                elif kind in ("settled", "skipped"):
                     states[step] = dict(entry)
             elif kind == "worker-job" and step in states and states[step].get("event") in (
                     "dispatched", "reattached", "redispatch"):
                 states[step]["worker_job"] = entry.get("worker_job", "")
         return states
+
+    def accepted_steps(self) -> list[dict[str, Any]]:
+        """Dynamically proposed-and-accepted steps, in acceptance order (resume rebuilds the
+        worklist from these; the journal, not memory, carries them across a crash)."""
+        return [entry["spec"] for entry in self.entries()
+                if entry.get("event") == "step-accepted" and isinstance(entry.get("spec"), dict)]
 
 
 @dataclass
@@ -140,6 +166,52 @@ class MissionOutcome:
     reason: str = ""
     steps: dict[str, dict[str, Any]] = field(default_factory=dict)
     pending_contract: str = ""  # written for `skye approve` when status is needs-owner
+
+
+def extract_proposals(output: str) -> list[dict[str, Any]]:
+    """A worker's proposed follow-up steps: the last JSON object in its output carrying a
+    "propose_steps" list. Handles the Root adapter's JSON envelope (the model's reply is a string
+    field inside the result JSON) as well as raw stdout. Proposals are DATA - each is validated
+    like an authored contract step before it may join the workflow; nothing in them executes."""
+    texts = [output or ""]
+    try:
+        data = json.loads(output or "")
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("reply"), str):
+        texts.insert(0, data["reply"])
+    decoder = json.JSONDecoder()
+    for text in texts:
+        found = None
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                parsed, _end = decoder.raw_decode(text, index)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict) and isinstance(parsed.get("propose_steps"), list):
+                found = parsed  # the last such block wins
+        if found is not None:
+            return [item for item in found["propose_steps"] if isinstance(item, dict)]
+    return []
+
+
+def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[str, Any]) -> str:
+    """Why a proposed step cannot join the workflow, or '' when it can."""
+    step_id = str(step.get("id") or "").strip()
+    if not step_id:
+        return "a proposed step needs an id"
+    if step_id in known_ids:
+        return f"proposed step id '{step_id}' already exists"
+    needs = step.get("needs") or []
+    if not isinstance(needs, list) or any(n not in known_ids for n in needs):
+        return f"proposed step '{step_id}' needs unknown step(s): {needs}"
+    try:
+        validate({**step, "repo": step.get("repo") or mission.get("repo", "")})
+    except ContractError as error:
+        return f"proposed step '{step_id}': {error}"
+    return ""
 
 
 def _handoff_brief(step: dict[str, Any], outcomes: dict[str, dict[str, Any]]) -> str:
@@ -183,20 +255,44 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     context = {"mission": mission["id"]}
     states = journal.step_states()
     outcomes: dict[str, dict[str, Any]] = {}
-    for step in mission["steps"]:
+    worklist = list(mission["steps"]) + journal.accepted_steps()  # authored, then dynamic (journaled)
+    index = 0
+    while index < len(worklist):
+        step = worklist[index]
+        index += 1
         step_id = step["id"]
         context["step"] = step_id
         state = states.get(step_id, {})
         kind = state.get("event", "")
-        if kind == "settled":
+        if kind in ("settled", "skipped"):
             if state.get("status") == "done":
                 outcomes[step_id] = state  # never re-run: the recorded outcome feeds later briefs
+                continue
+            if kind == "skipped":
+                outcomes[step_id] = {"status": "skipped", "role": step["role"],
+                                     "reason": state.get("reason", ""), "output": ""}
                 continue
             reason = (f"step '{step_id}' previously settled as {state.get('status')}: "
                       f"{state.get('reason', '')}. Fix the cause, then `skye mission reset` and run again.")
             emit(events.make_event("mission", {}, status="failed", reason=reason, **context))
             return MissionOutcome(status=state.get("status", "failed"), mission_id=mission["id"],
                                   reason=reason, steps=outcomes)
+        # Conditional step: an unmet when skips it; needing a skipped step skips in cascade.
+        when = step.get("when")
+        skipped_needs = [n for n in (step.get("needs") or [])
+                         if outcomes.get(n, {}).get("status") == "skipped"]
+        if skipped_needs or (when and outcomes.get(when["step"], {}).get("status") != when["status"]):
+            reason = (f"needs skipped step(s): {', '.join(skipped_needs)}" if skipped_needs else
+                      f"when: step '{when['step']}' settled as "
+                      f"'{outcomes.get(when['step'], {}).get('status', 'pending')}', "
+                      f"not '{when['status']}'")
+            journal.append(step_id, "skipped", status="skipped", reason=reason, role=step["role"])
+            emit(events.make_event("mission-step", {"goal": step["goal"], "role": step["role"],
+                                                    "adapter": step["adapter"]},
+                                   status="skipped", reason=reason, **context))
+            outcomes[step_id] = {"status": "skipped", "role": step["role"], "reason": reason,
+                                 "output": ""}
+            continue
         contract = _step_contract(mission, step, outcomes)
         resume_job_id = ""
         if kind == "dispatched":
@@ -236,6 +332,30 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    reason=f"step '{step_id}': {outcome.reason}", **context))
             return MissionOutcome(status=outcome.status, mission_id=mission["id"],
                                   reason=f"step '{step_id}': {outcome.reason}", steps=outcomes)
+        # Dynamic growth: a settled step may propose follow-up steps. Validated, capped, journaled
+        # BEFORE they join the worklist - and dispatched later through the same policy gate.
+        for proposal in extract_proposals(outcome.worker_output):
+            known = {s["id"] for s in worklist} | {
+                str(p.get("id")) for p in journal.accepted_steps()}
+            problem = _validate_proposal(proposal, known, mission)
+            proposal_id = str(proposal.get("id") or "?")
+            if problem:
+                journal.append(step_id, "proposal-rejected", reason=problem,
+                               proposal_id=proposal_id)
+                emit(events.make_event("mission-step", {}, status="proposal-rejected",
+                                       reason=problem, **context))
+                continue
+            if len(worklist) >= MAX_STEPS:
+                journal.append(step_id, "proposal-rejected", proposal_id=proposal_id,
+                               reason=f"the mission already has {MAX_STEPS} steps (the cap)")
+                continue
+            spec = {k: proposal[k] for k in ("id", "role", "adapter", "goal")}
+            for optional in ("brief", "needs", "gates", "budget", "when", "repo", "contract_keys"):
+                if optional in proposal:
+                    spec[optional] = proposal[optional]
+            journal.append(step_id, "step-accepted", spec=spec)
+            emit(events.make_event("mission-step", spec, status="step-accepted", **context))
+            worklist.append(spec)
     emit(events.make_event("mission", {}, status="done", **context))
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 
