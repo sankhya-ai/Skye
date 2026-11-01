@@ -667,6 +667,14 @@ _live_lock = threading.Lock()
 # Serializes the live-steer critical section (check -> intent -> submit)
 # within this process; the O_EXCL marker file covers other server processes.
 _steer_serial_lock = threading.Lock()
+def _marker_owned(marker, follow_id: str) -> bool:
+    """Re-verify a claimed steer marker is STILL ours before any side effect: an
+    abandoned-marker cleanup may have released it and another request may have
+    reclaimed it - a stale request must never journal or submit under a stolen claim."""
+    try:
+        return json.loads(marker.read_text("utf-8")).get("follow_id") == follow_id
+    except (OSError, ValueError):
+        return False
 
 # Test/demo hook: the worker runner the in-process resume passes to run_mission. None means the
 # real dispatcher path (the default, and what `skye ui` uses).
@@ -1191,53 +1199,108 @@ class UiHandler(BaseHTTPRequestHandler):
                         # identical in-flight texts, so an ambiguous repeat is REJECTED
                         # here rather than given a false exact-consumption guarantee.
                         marker = mission_dir / f"steer-pending-{step}"
+                        run_key = f"{mission_id}:{step}"
+                        # The lock spans the WHOLE critical section (check -> claim ->
+                        # verify -> journal -> submit -> outcome) for THIS process; the
+                        # O_EXCL marker is the cross-process guard. The marker names its
+                        # follow_id AND its owner (pid + run key): takeover is only ever
+                        # by proof (receipt/terminal in the journal, or a DEAD owner),
+                        # never by age - a paused-but-alive handler must not lose its
+                        # claim and later append/send under someone else's.
                         with _steer_serial_lock:
-                            # Cross-process first: a live marker names the pending
-                            # follow_id; it clears only when the journal shows that
-                            # follow-up's receipt or a terminal resolution.
                             if marker.exists():
                                 try:
-                                    pending_fid = json.loads(
-                                        marker.read_text("utf-8")).get("follow_id", "")
-                                except (OSError, ValueError):
-                                    pending_fid = ""
+                                    claim = json.loads(marker.read_text("utf-8"))
+                                    pending_fid = str(claim.get("follow_id") or "")
+                                    owner_pid = int(claim.get("owner_pid") or 0)
+                                except (OSError, ValueError, TypeError):
+                                    return self._json(
+                                        {"error": f"step '{step}' has an unreadable "
+                                                  "steer claim - refusing to guess; "
+                                                  "inspect the mission state dir",
+                                         "preserved_text": text}, 409)
                                 entries_all = journal.entries()
                                 intent_pos = next(
                                     (k for k, e in enumerate(entries_all)
                                      if e.get("event") == "follow-up"
+                                     and e.get("step") == step
                                      and e.get("follow_id") == pending_fid), None)
                                 if intent_pos is None:
-                                    # No journaled intent for the marked follow-up:
-                                    # either the owner process died between claim and
-                                    # journal (abandoned), or it is microseconds from
-                                    # journaling (in-flight). Age tells them apart.
+                                    # No journaled intent for the claimed follow-up.
+                                    # Safe takeover requires a DEAD owner (a dead
+                                    # process cannot journal or send later); a live
+                                    # owner - however old the claim - keeps it.
                                     try:
-                                        import time as _time
-                                        abandoned = (_time.time()
-                                                     - marker.stat().st_mtime > 30)
-                                    except OSError:
-                                        abandoned = False
-                                    if abandoned:
-                                        marker.unlink(missing_ok=True)
-                                    else:
+                                        os.kill(owner_pid, 0)
+                                        owner_alive = owner_pid > 0
+                                    except ProcessLookupError:
+                                        owner_alive = False
+                                    except (PermissionError, OSError):
+                                        owner_alive = True  # unverifiable: fail closed
+                                    if owner_alive or owner_pid <= 0:
                                         return self._json(
                                             {"error": f"step '{step}' has a follow-up "
                                                       "submission in flight - retry in "
                                                       "a moment",
                                              "preserved_text": text}, 409)
-                            if marker.exists():
-                                resolved = intent_pos is not None and any(
-                                    (e.get("event") in (
-                                        "cancelled", "resume-rejected", "redispatch",
-                                        "follow-up-undelivered"))
-                                    or (e.get("event") == "worker-progress"
-                                        and e.get("kind") in (
-                                            "steer-ack", "steer-rejected",
-                                            "steer-unapplied"))
-                                    for e in entries_all[intent_pos:])
-                                if resolved:
                                     marker.unlink(missing_ok=True)
                                 else:
+                                    intent_text = str(
+                                        entries_all[intent_pos].get("text") or "")[:300]
+                                    # follow_id + step scoped: only entries AFTER this
+                                    # intent, on THIS step, resolve it - and receipts
+                                    # must carry ITS text. An old terminal or another
+                                    # follow-up's ack never releases a later claim.
+                                    resolved = any(
+                                        (e.get("event") in (
+                                            "cancelled", "resume-rejected",
+                                            "redispatch", "follow-up-undelivered"))
+                                        or (e.get("event") == "worker-progress"
+                                            and e.get("kind") in (
+                                                "steer-ack", "steer-rejected",
+                                                "steer-unapplied")
+                                            and str(e.get("text") or "")[:300]
+                                            == intent_text)
+                                        for e in entries_all[intent_pos:]
+                                        if e.get("step") == step)
+                                    if resolved:
+                                        marker.unlink(missing_ok=True)
+                                    else:
+                                        return self._json(
+                                            {"error": f"step '{step}' already has a "
+                                                      "follow-up awaiting its provider "
+                                                      "receipt - live steers are "
+                                                      "serialized per session so "
+                                                      "consumption is never "
+                                                      "misattributed; retry once it "
+                                                      "acknowledges",
+                                             "preserved_text": text}, 409)
+                            prior = [e for e in journal.entries()
+                                     if e.get("step") == step]
+                            for idx, e in enumerate(prior):
+                                if not (e.get("event") == "follow-up"
+                                        and e.get("delivery") == "steered-live"
+                                        and e.get("state") == "intent"
+                                        and e.get("follow_id")):
+                                    continue
+                                after = prior[idx + 1:]
+                                fid0 = e["follow_id"]
+                                if any(a.get("event") in (
+                                        "cancelled", "resume-rejected", "redispatch",
+                                        "follow-up-undelivered") for a in after):
+                                    continue
+                                if not any(a.get("event") == "follow-up-submitted"
+                                           and a.get("follow_id") == fid0
+                                           for a in after):
+                                    continue  # never submitted - the run scan owns that
+                                text0 = str(e.get("text") or "")[:300]
+                                receipt = any(
+                                    a.get("event") == "worker-progress"
+                                    and a.get("kind") in ("steer-ack", "steer-rejected",
+                                                          "steer-unapplied")
+                                    and str(a.get("text") or "")[:300] == text0
+                                    for a in after)
+                                if not receipt:
                                     return self._json(
                                         {"error": f"step '{step}' already has a "
                                                   "follow-up awaiting its provider "
@@ -1247,65 +1310,67 @@ class UiHandler(BaseHTTPRequestHandler):
                                                   "misattributed; retry once it "
                                                   "acknowledges",
                                          "preserved_text": text}, 409)
-                        prior = [e for e in journal.entries()
-                                 if e.get("step") == step]
-                        for idx, e in enumerate(prior):
-                            if not (e.get("event") == "follow-up"
-                                    and e.get("delivery") == "steered-live"
-                                    and e.get("state") == "intent"
-                                    and e.get("follow_id")):
-                                continue
-                            after = prior[idx + 1:]
-                            fid0 = e["follow_id"]
-                            if any(a.get("event") in (
-                                    "cancelled", "resume-rejected", "redispatch",
-                                    "follow-up-undelivered") for a in after):
-                                continue
-                            if not any(a.get("event") == "follow-up-submitted"
-                                       and a.get("follow_id") == fid0 for a in after):
-                                continue  # never submitted - the run scan owns that
-                            text0 = str(e.get("text") or "")[:300]
-                            receipt = any(
-                                a.get("event") == "worker-progress"
-                                and a.get("kind") in ("steer-ack", "steer-rejected",
-                                                      "steer-unapplied")
-                                and str(a.get("text") or "")[:300] == text0
-                                for a in after)
-                            if not receipt:
+                            follow_id = _uuid.uuid4().hex[:12]
+                            try:
+                                fd = os.open(marker,
+                                             os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                                with os.fdopen(fd, "w") as handle:
+                                    handle.write(json.dumps(
+                                        {"follow_id": follow_id,
+                                         "owner_pid": os.getpid(),
+                                         "run_key": run_key,
+                                         "created": time.time()}))
+                            except FileExistsError:
+                                # another process won the race between check and claim
                                 return self._json(
                                     {"error": f"step '{step}' already has a follow-up "
                                               "awaiting its provider receipt - live "
-                                              "steers are serialized per session so "
-                                              "consumption is never misattributed; "
+                                              "steers are serialized per session; "
                                               "retry once it acknowledges",
                                      "preserved_text": text}, 409)
-                        follow_id = _uuid.uuid4().hex[:12]
-                        try:
-                            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                            with os.fdopen(fd, "w") as handle:
-                                handle.write(json.dumps({"follow_id": follow_id}))
-                        except FileExistsError:
-                            # another server process won the race between check and claim
-                            return self._json(
-                                {"error": f"step '{step}' already has a follow-up "
-                                          "awaiting its provider receipt - live steers "
-                                          "are serialized per session; retry once it "
-                                          "acknowledges",
-                                 "preserved_text": text}, 409)
-                        journal.append(step, "follow-up", follow_id=follow_id,
-                                       text=text[:500], delivery="steered-live",
-                                       state="intent")
-                        steered = _adapter_base.steer_live(f"{mission_id}:{step}", text)
-                        if steered == "steered":
-                            journal.append(step, "follow-up-submitted",
-                                           follow_id=follow_id)
-                            return self._json({"accepted": True, "step": step,
-                                               "delivery": "submitted",
-                                               "receipt": "pending provider event",
-                                               "continuity": "same-live-session"})
-                        marker.unlink(missing_ok=True)
-                        journal.append(step, "follow-up-undelivered",
-                                       follow_id=follow_id, reason=steered)
+                            try:
+                                if not _marker_owned(marker, follow_id):
+                                    return self._json(
+                                        {"error": "the steer claim was superseded "
+                                                  "before the intent could be "
+                                                  "journaled - nothing was sent; retry",
+                                         "preserved_text": text}, 409)
+                                journal.append(step, "follow-up", follow_id=follow_id,
+                                               text=text[:500],
+                                               delivery="steered-live", state="intent")
+                                if not _marker_owned(marker, follow_id):
+                                    # Stolen after the intent landed: do NOT submit.
+                                    # The dangling intent fails closed on the next
+                                    # run's scan.
+                                    return self._json(
+                                        {"error": "the steer claim was superseded "
+                                                  "before submission - the follow-up "
+                                                  "was NOT sent (journaled as an "
+                                                  "unresolved intent); inspect the "
+                                                  "step, then retry",
+                                         "preserved_text": text}, 409)
+                                steered = _adapter_base.steer_live(run_key, text)
+                                if steered == "steered":
+                                    journal.append(step, "follow-up-submitted",
+                                                   follow_id=follow_id)
+                                    return self._json(
+                                        {"accepted": True, "step": step,
+                                         "delivery": "submitted",
+                                         "receipt": "pending provider event",
+                                         "continuity": "same-live-session"})
+                                # Conditional delete ONLY: a reclaimed marker belongs
+                                # to its new owner - a stale handler must not remove it.
+                                if _marker_owned(marker, follow_id):
+                                    marker.unlink(missing_ok=True)
+                                journal.append(step, "follow-up-undelivered",
+                                               follow_id=follow_id, reason=steered)
+                            except Exception:
+                                # Our own failure between claim and outcome: release OUR
+                                # claim (conditionally) so this process cannot wedge the
+                                # step; the journaled intent (if any) fails closed.
+                                if _marker_owned(marker, follow_id):
+                                    marker.unlink(missing_ok=True)
+                                raise
                         if steered == "unsupported":
                             return self._json(
                                 {"error": f"the {step_status['adapter']} exec protocol is "
