@@ -53,10 +53,12 @@ function MissionRowButton({ row, onOpen }: { row: MissionRow; onOpen: () => void
 export function MissionsOverview({
   missions,
   loading,
+  unavailable,
   onOpen,
 }: {
   missions: MissionRow[];
   loading?: boolean;
+  unavailable?: boolean;
   onOpen: (id: string) => void;
 }) {
   if (loading && missions.length === 0) {
@@ -68,6 +70,18 @@ export function MissionsOverview({
     );
   }
   if (missions.length === 0) {
+    // Unknown is not empty: without one successful load, say so instead of
+    // claiming there is no work.
+    if (unavailable) {
+      return (
+        <div className="rounded-md border border-dashed border-border bg-card/50 p-10 text-center">
+          <p className="text-sm font-medium text-foreground">Missions unavailable</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Can't load missions right now - retrying in the background.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="rounded-md border border-dashed border-border bg-card/50 p-10 text-center">
         <p className="text-sm font-medium text-foreground">No missions yet</p>

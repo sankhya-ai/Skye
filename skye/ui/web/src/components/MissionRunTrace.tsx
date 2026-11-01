@@ -199,7 +199,8 @@ export function MissionRunTrace({
                 </div>
                 {staleDispatch ? (
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Dispatched but never settled - the mission stopped first.
+                    This step was running when the mission stopped. Its changes may be
+                    partially applied.
                   </p>
                 ) : null}
                 {st.state === "needs-owner" && detail.approved ? (

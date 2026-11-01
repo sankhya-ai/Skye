@@ -43,12 +43,27 @@ POSTER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630
   <rect x="430" y="490" width="120" height="44" rx="22" fill="#7dd3a8"/>
   <text x="490" y="520" font-family="Inter, sans-serif" font-size="22" font-weight="600" fill="#0b0d10" text-anchor="middle">Shop</text>
 </svg>"""
+CART_NOTES_MD = """# Cart launch notes
+
+The **cart widget** keeps its own receipts: line items, totals and a badge count.
+
+## What changed
+
+- added `CartBadge` to the header
+- totals computed in `cart.py`
+- poster asset under `assets/`
+
+See [the shop README](https://example.invalid/docs) for context.
+"""
 (demo / "script.json").write_text(json.dumps([
     "tool_call: " + json.dumps({"id": "r", "name": "ReadFile",
                                 "arguments": json.dumps({"path": "app.py"})}),
     "tool_call: " + json.dumps({"id": "w", "name": "WriteFile",
                                 "arguments": json.dumps({"path": "assets/cart-launch.svg",
                                                          "content": POSTER_SVG})}),
+    "tool_call: " + json.dumps({"id": "w2", "name": "WriteFile",
+                                "arguments": json.dumps({"path": "docs/cart-launch.md",
+                                                         "content": CART_NOTES_MD})}),
     "text: Here is the plan. " + json.dumps(plan)]))
 os.environ["TURA_CODE_SCRIPTED_ECHO"] = str(demo / "script.json")
 
@@ -186,13 +201,24 @@ with sync_playwright() as pw:
         page.goto(ui_url + route)
         page.wait_for_timeout(2200)
         if name == "mission-detail":
-            # open the real artifact preview (the SVG the scripted mission actually wrote)
+            # open the real artifact previews (files the scripted mission actually wrote)
             preview = page.locator("text=Preview").first
             if preview.count():
                 preview.click()
                 page.wait_for_timeout(1500)
         page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
         if name == "mission-detail":
+            # markdown artifact: rendered preview with the link shown as text, never navigation
+            md_row = page.locator("div", has=page.locator("span.font-mono", has_text="docs/cart-launch.md")).last
+            md_preview = md_row.locator("button", has_text="Preview")
+            if md_preview.count():
+                md_preview.click()
+                page.wait_for_timeout(1200)
+                rendered = page.locator("text=Cart launch notes").count()
+                link_nav = page.locator('a[href="https://example.invalid/docs"]').count()
+                print("MARKDOWN preview rendered:", "PASS" if rendered else "FAIL",
+                      "| link not navigable:", "PASS" if not link_nav else "FAIL")
+                page.screenshot(path=str(out_dir / "ui-artifact-markdown.png"), full_page=True)
             # approval states: the codex-adapter mission paused at the policy gate
             page.goto(ui_url + f"#/mission/{approval_mission}")
             page.wait_for_timeout(3000)
@@ -332,10 +358,15 @@ with sync_playwright() as pw:
     page.wait_for_timeout(6000)  # one failed refresh cycle + render
     banner = page.locator("text=Can't reach the local server").count()
     skeleton = page.locator('[aria-label="loading missions"]').count()
-    empty = page.locator("text=No missions yet").count()
+    unavail = page.locator("text=Missions unavailable").count()
+    false_empty = page.locator("text=No missions yet").count()
+    side_unavail = page.locator("text=unavailable - retrying").count()
+    false_side = page.locator("text=No workspaces yet").count() + page.locator("text=No conversations yet").count()
     print("FIRST-LOAD failure: banner", "PASS" if banner else "FAIL",
           "| skeleton gone", "PASS" if not skeleton else "FAIL",
-          "| empty state", "PASS" if empty else "FAIL")
+          "| unavailable state", "PASS" if unavail else "FAIL",
+          "| no false empty", "PASS" if not false_empty and not false_side else "FAIL",
+          "| sidebar unavailable", "PASS" if side_unavail == 2 else "FAIL")
     page.screenshot(path=str(out_dir / "ui-server-down-first-load.png"), full_page=True)
     page.unroute("**/api/**")
 

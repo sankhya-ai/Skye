@@ -11,7 +11,7 @@ import { MissionsOverview } from "./components/MissionsOverview";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 
-function MissionsView({ missions, projects, loading }: { missions: MissionRow[]; projects: Project[]; loading?: boolean }) {
+function MissionsView({ missions, projects, loading, unavailable }: { missions: MissionRow[]; projects: Project[]; loading?: boolean; unavailable?: boolean }) {
   const query = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
   const projectFilter = query.get("project");
   const project = projects.find((p) => p.id === projectFilter);
@@ -32,6 +32,7 @@ function MissionsView({ missions, projects, loading }: { missions: MissionRow[];
       <MissionsOverview
         missions={rows}
         loading={loading}
+        unavailable={unavailable}
         onOpen={(id) => (window.location.hash = `/mission/${encodeURIComponent(id)}`)}
       />
     </div>
@@ -42,6 +43,8 @@ export default function App() {
   const [route, setRoute] = useState<string>(() => window.location.hash.slice(1) || "/");
   const [missions, setMissions] = useState<MissionRow[]>([]);
   const [missionsLoaded, setMissionsLoaded] = useState(false);
+  const [missionsOk, setMissionsOk] = useState(false);
+  const [projectsOk, setProjectsOk] = useState(false);
   const [unreachable, setUnreachable] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
 
@@ -62,6 +65,8 @@ export default function App() {
         })),
       );
       setMissionsLoaded(true);
+      setMissionsOk(true);
+      setProjectsOk(true);
       setProjects(projectData.projects);
       setUnreachable(false);
     } catch {
@@ -89,6 +94,9 @@ export default function App() {
         activePath={isDetail ? route : activeNav === "/missions" ? route : activeNav}
         projects={projects}
         missions={missions}
+        unavailable={unreachable}
+        projectsOk={projectsOk}
+        missionsOk={missionsOk}
         onProjectsChanged={() => void refresh()}
       />
       <main className="min-w-0 pl-64">
@@ -104,7 +112,12 @@ export default function App() {
           </div>
         ) : path === "/missions" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
-            <MissionsView missions={missions} projects={projects} loading={!missionsLoaded} />
+            <MissionsView
+              missions={missions}
+              projects={projects}
+              loading={!missionsLoaded}
+              unavailable={unreachable && !missionsOk}
+            />
           </div>
         ) : path === "/backlog" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">

@@ -1,24 +1,33 @@
 import { Eye, EyeOff, FileDiff, FileMinus2, FilePlus2, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getArtifactFileUrl, type MissionArtifacts as Artifacts } from "../api";
+import { getArtifactFileUrl, getArtifactText, type MissionArtifacts as Artifacts } from "../api";
 import { Badge } from "./ui/Badge";
+import { MarkdownView } from "./MarkdownView";
 
 // Files a mission actually changed, diffed from the start/end repo manifests the engine
 // records (never parsed from worker output). Image artifacts preview inline, loaded from
 // the confined artifact endpoint (only recorded changed paths are served).
 
 const PREVIEWABLE = new Set([".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const TEXT_PREVIEWABLE = new Set([".md", ".markdown", ".txt"]);
 
-function previewable(path: string): boolean {
+function previewKind(path: string): "image" | "text" | null {
   const dot = path.lastIndexOf(".");
-  return dot > 0 && PREVIEWABLE.has(path.slice(dot).toLowerCase());
+  if (dot <= 0) return null;
+  const ext = path.slice(dot).toLowerCase();
+  if (PREVIEWABLE.has(ext)) return "image";
+  if (TEXT_PREVIEWABLE.has(ext)) return "text";
+  return null;
 }
 
 function Row({ missionId, path, icon }: { missionId: string; path: string; icon: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const canPreview = previewable(path);
+  const [error, setError] = useState<string | null>(null);
+  const kind = previewKind(path);
+  const canPreview = kind !== null;
 
   useEffect(() => {
     return () => {
@@ -37,12 +46,20 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
         URL.revokeObjectURL(url);
         setUrl(null);
       }
+      setText(null);
       return;
     }
     setLoading(true);
+    setError(null);
     try {
-      if (!url) setUrl(await getArtifactFileUrl(missionId, path));
+      if (kind === "image") {
+        if (!url) setUrl(await getArtifactFileUrl(missionId, path));
+      } else if (text === null) {
+        setText(await getArtifactText(missionId, path));
+      }
       setOpen(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -70,6 +87,9 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
           </button>
         ) : null}
       </div>
+      {error ? (
+        <p className="mb-2 ml-5 text-xs text-destructive">{error}</p>
+      ) : null}
       {open && url ? (
         <div className="mb-2 ml-5 rounded-md border border-border bg-background p-2">
           {// <img> rendering never executes SVG scripts (verified distinction in
@@ -78,6 +98,15 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
           // fixed-height iframe cropped anything wider than the panel.
           }
           <img src={url} alt={path} className="h-auto max-h-96 w-full rounded-sm object-contain object-left" />
+        </div>
+      ) : null}
+      {open && kind === "text" && text !== null ? (
+        <div className="mb-2 ml-5 max-h-96 overflow-y-auto rounded-md border border-border bg-background p-3">
+          {path.toLowerCase().endsWith(".txt") ? (
+            <pre className="whitespace-pre-wrap font-mono text-xs text-foreground/90">{text}</pre>
+          ) : (
+            <MarkdownView source={text} />
+          )}
         </div>
       ) : null}
     </div>

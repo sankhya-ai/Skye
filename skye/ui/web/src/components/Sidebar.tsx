@@ -69,10 +69,13 @@ function chatStatus(mission: MissionRow): string {
       return "done";
     case "interrupted":
       return "interrupted";
-    case "failed":
-      return "failed";
+    case "not-started":
+      return "not started";
+    case "running":
+      return "in progress";
     default:
-      return mission.overall;
+      // failed, gate-failed, anything else terminal-but-not-done
+      return "failed";
   }
 }
 
@@ -88,11 +91,17 @@ export function Sidebar({
   activePath,
   projects,
   missions,
+  unavailable = false,
+  projectsOk = true,
+  missionsOk = true,
   onProjectsChanged,
 }: {
   activePath: string;
   projects: Project[];
   missions: MissionRow[];
+  unavailable?: boolean;
+  projectsOk?: boolean;
+  missionsOk?: boolean;
   onProjectsChanged: () => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -184,7 +193,9 @@ export function Sidebar({
           />
         ))}
         {projects.length === 0 && !adding ? (
-          <p className="px-3 text-xs text-muted-foreground">No workspaces yet.</p>
+          <p className="px-3 text-xs text-muted-foreground">
+            {unavailable && !projectsOk ? "Workspaces unavailable - retrying." : "No workspaces yet."}
+          </p>
         ) : null}
       </div>
 
@@ -210,7 +221,9 @@ export function Sidebar({
         ))}
         {chats.length === 0 ? (
           <p className="px-3 text-xs text-muted-foreground">
-            No conversations yet - start one from Home.
+            {unavailable && !missionsOk
+              ? "Conversations unavailable - retrying."
+              : "No conversations yet - start one from Home."}
           </p>
         ) : null}
       </div>

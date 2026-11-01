@@ -210,3 +210,12 @@ export async function getArtifactFileUrl(mission: string, path: string): Promise
   if (!res.ok) throw new Error(`artifact preview failed (${res.status})`);
   return URL.createObjectURL(await res.blob());
 }
+
+export async function getArtifactText(mission: string, path: string): Promise<string> {
+  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+  const res = await fetch(`/api/mission-artifact/${mission}?path=${encodeURIComponent(path)}`, {
+    headers: { "X-Skye-Token": token },
+  });
+  if (!res.ok) throw new Error(`artifact preview failed (${res.status})`);
+  return res.text();
+}
