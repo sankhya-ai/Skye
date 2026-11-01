@@ -219,6 +219,7 @@ export function MissionRunTrace({
                   ) : null}
                   <span className="text-xs text-muted-foreground">
                     {step.role} · {step.adapter}
+                    {session?.model ? ` · ${session.model}` : ""}
                   </span>
                   {session?.continuity === "resumed" ? (
                     <Badge variant="info" title="continued the vendor session recorded by this step's earlier run">

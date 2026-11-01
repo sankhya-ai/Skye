@@ -49,6 +49,9 @@ def test_approve_then_run_roundtrip(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("SKYE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("SKYE_APPROVALS", str(store))
     monkeypatch.chdir(tmp_path)
+    # Hide any real `claude` on this machine: the test proves the not-installed path and
+    # must never start a real (billable) session.
+    monkeypatch.setenv("PATH", str(tmp_path / "no-bin"))
     job = _job(tmp_path)
     assert main(["approve", str(job)]) == 0
     approved = json.loads(capsys.readouterr().out)

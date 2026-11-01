@@ -72,8 +72,20 @@ def test_gateway_resolves_builtin_and_team_catalogue(tmp_path):
 def test_claude_adapter_carries_the_tool_catalogue():
     command = adapters.ClaudeCodeAdapter().build_command(_contract(tools=["Read", "Grep"], brief="do it"))
     assert command[:3] == ["claude", "-p", "do it"]
-    assert "--tools" in command and "--allowedTools" not in command
+    # Headless mode has nobody to answer a permission prompt: the catalogue is both the
+    # available set (--tools) and the pre-approved set (--allowedTools), and dontAsk denies
+    # everything else instead of prompting.
+    assert command[command.index("--tools") + 1] == "Read,Grep"
+    assert command[command.index("--allowedTools") + 1] == "Read,Grep"
+    assert command[command.index("--permission-mode") + 1] == "dontAsk"
     assert "--disallowedTools" in command and "mcp__*" in command
+
+
+def test_claude_adapter_drops_tools_claude_code_does_not_have():
+    command = adapters.ClaudeCodeAdapter().build_command(
+        _contract(tools=["Read", "inspect_page"], brief="look", model="sonnet"))
+    assert command[command.index("--tools") + 1] == "Read"
+    assert command[command.index("--model") + 1] == "sonnet"
 
 
 def test_codex_adapter_sandbox_follows_writable():

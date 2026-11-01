@@ -33,12 +33,36 @@ class ClaudeCodeAdapter(SessionAdapter):
             prompt = "Project references:\n" + refs + "\n\n" + prompt
         return prompt
 
+    #: Tools that exist in Claude Code itself. A role catalogue may also name tools another
+    #: worker provides (Root's inspect_page); those are dropped for this adapter rather than
+    #: passed to --tools, where an unknown name would break the session.
+    CLAUDE_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit", "Bash", "NotebookEdit",
+                    "WebFetch", "WebSearch", "TodoWrite")
+
+    def _tool_flags(self, contract: dict) -> list[str]:
+        """Scope AND authorize the session's tools in one move.
+
+        Headless print mode has nobody to answer a permission prompt, so a tool that is
+        merely AVAILABLE (``--tools``) but not pre-approved is denied on every call: a
+        developer could read the repo but never write a file. ``--allowedTools`` pre-approves
+        exactly the role's catalogue and ``--permission-mode dontAsk`` denies everything else
+        instead of prompting - the role's tools work, nothing beyond them does. MCP tools stay
+        locked out. CLI configuration, not an OS boundary: Bash can do what Bash can do."""
+        tools = [t for t in (contract.get("tools") or []) if t in self.CLAUDE_TOOLS]
+        if not tools:
+            # A role with no Claude-capable tools still gets a read-only session.
+            tools = ["Read", "Glob", "Grep"]
+        joined = ",".join(tools)
+        flags = ["--tools", joined, "--allowedTools", joined,
+                 "--disallowedTools", "mcp__*", "--permission-mode", "dontAsk"]
+        model = str(contract.get("model") or "").strip()
+        if model:
+            flags += ["--model", model]
+        return flags
+
     def build_command(self, contract: dict) -> list[str]:
-        command = [self.binary, "-p", self._prompt(contract), "--output-format", "text"]
-        tools = (contract.get("tools") or [])
-        if tools:
-            command += ["--tools", ",".join(tools), "--disallowedTools", "mcp__*"]
-        return command
+        return [self.binary, "-p", self._prompt(contract), "--output-format", "text",
+                *self._tool_flags(contract)]
 
     # -- Session protocol (stream-json) --------------------------------------------
     # Grounded in the vendor CLI reference + Agent SDK docs: print mode with
@@ -69,11 +93,9 @@ class ClaudeCodeAdapter(SessionAdapter):
         command = [self.binary, "-p",
                    "--output-format", "stream-json", "--verbose",
                    "--input-format", "stream-json", "--replay-user-messages"]
-        tools = (contract.get("tools") or [])
-        if tools:
-            # The role's gateway catalogue still scopes the session: same flags, same
-            # MCP lockout as one-shot mode. Session continuity never widens permissions.
-            command += ["--tools", ",".join(tools), "--disallowedTools", "mcp__*"]
+        # The role's gateway catalogue still scopes the session: same flags, same
+        # MCP lockout as one-shot mode. Session continuity never widens permissions.
+        command += self._tool_flags(contract)
         budget = contract.get("budget") or {}
         if budget.get("max_steps"):
             command += ["--max-turns", str(int(budget["max_steps"]))]
@@ -99,11 +121,28 @@ class ClaudeCodeAdapter(SessionAdapter):
                 elif block.get("type") == "tool_use":
                     events.append({"kind": "tool", "name": str(block.get("name") or "")})
             return events
+        if kind == "rate_limit_event":
+            info = data.get("rate_limit_info")
+            return [{"kind": "rate-limit", "info": info}] if isinstance(info, dict) else []
         if kind == "result":
-            return [{"kind": "result", "ok": data.get("subtype") == "success",
-                     "session_id": str(data.get("session_id") or ""),
-                     "usage": {k: data[k] for k in
-                               ("total_cost_usd", "num_turns", "duration_ms") if k in data}}]
+            usage = {k: data[k] for k in ("total_cost_usd", "num_turns", "duration_ms")
+                     if k in data}
+            tokens = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            for key in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                        "cache_creation_input_tokens"):
+                if isinstance(tokens.get(key), int):
+                    usage[key] = tokens[key]
+            denials = data.get("permission_denials")
+            if isinstance(denials, list) and denials:
+                usage["permission_denials"] = len(denials)
+                usage["denied_tools"] = sorted({str(d.get("tool_name") or "?")
+                                                for d in denials if isinstance(d, dict)})
+            event = {"kind": "result", "ok": data.get("subtype") == "success"
+                     and not data.get("is_error"),
+                     "session_id": str(data.get("session_id") or ""), "usage": usage}
+            if event["ok"] is False and data.get("result"):
+                event["error"] = str(data["result"])[:500]
+            return [event]
         if kind == "user":
             # --replay-user-messages echo: the provider's own receipt that a queued
             # stdin message (a steered follow-up) was CONSUMED - distinct from our

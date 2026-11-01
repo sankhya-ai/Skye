@@ -1,5 +1,7 @@
 """skye - submit work to the team.
 
+  skye run [--port N] [--no-browser]     start Skye (in the background) and open it in the browser
+  skye stop                      stop the background Skye server
   skye run <job.json>            validate -> policy -> worker -> gates (or needs-owner)
   skye check <job.json>          validate a contract and print its normalized form
   skye approve <job.json>        one-time approval of exactly this contract (single-use)
@@ -367,14 +369,26 @@ def main(argv: list[str] | None = None) -> int:
         print(USAGE, file=sys.stderr)
         return 2
     command, rest = args[0], args[1:]
+    if command == "run" and (not rest or rest[0].startswith("--")):
+        from .start import run as start_run
+        return start_run(rest)
     if command == "run":
         return _cmd_run(rest)
+    if command == "stop":
+        from .start import stop as start_stop
+        return start_stop(rest)
+    if command == "_serve":
+        from .start import serve_cli
+        return serve_cli(rest)
     if command == "check":
         return _cmd_check(rest)
     if command == "approve":
         return _cmd_approve(rest)
     if command == "approvals":
         return _cmd_approvals()
+    if command == "start":  # older name for `skye run`
+        from .start import run as start_run
+        return start_run(rest)
     if command == "ui":
         from .ui.server import serve
         port = 8787

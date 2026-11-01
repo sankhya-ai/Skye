@@ -268,10 +268,17 @@ class CodexAdapter(SessionAdapter):
         protocol_error = ""
 
         def _send(method: str, params: dict, req_id: str) -> None:
-            proc.stdin.write(json.dumps(
-                {"jsonrpc": "2.0", "id": req_id, "method": method,
-                 "params": params}) + "\n")
-            proc.stdin.flush()
+            try:
+                proc.stdin.write(json.dumps(
+                    {"jsonrpc": "2.0", "id": req_id, "method": method,
+                     "params": params}) + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError) as error:
+                # The app-server went away. Before any effect-bearing request this is a
+                # transport failure (fall back to exec); after, it fails closed below.
+                if not effect_sent and not turn_started:
+                    raise _FallbackToExec(f"app-server closed its input ({error})") from error
+                raise
 
         _send("initialize", {"clientInfo": {"name": "skye", "title": None,
                                             "version": "1"},

@@ -238,7 +238,9 @@ def test_codex_app_server_mid_turn_steer_reaches_the_turn(fake_path, tmp_path,
         daemon=True)
     thread.start()
     assert _wait_for(lambda: "m1:dev" in base._LIVE)
-    assert base.steer_live("m1:dev", "also add logging") == "steered"
+    # Registration precedes turn/start: until the turn exists the adapter answers
+    # no-active-turn (nothing sent), so retry until the steer actually lands.
+    assert _wait_for(lambda: base.steer_live("m1:dev", "also add logging") == "steered")
     thread.join(timeout=15)
     assert not thread.is_alive()
     result = box["result"]

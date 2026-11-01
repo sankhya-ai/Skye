@@ -350,3 +350,96 @@ def _prepare_multi(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> 
               "uncommitted_lost": any(r.get("uncommitted_lost") for r in records.values())}
     _record_path(mission_dir).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
     return record
+
+
+#: Caches and build droppings a worker's test run leaves behind. Never brought into the
+#: owner's project, even when the project has no .gitignore for them.
+JUNK_PATHSPECS = [":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/*.pyc",
+                  ":(exclude,glob)**/.pytest_cache/**", ":(exclude,glob)**/.mypy_cache/**",
+                  ":(exclude,glob)**/.ruff_cache/**", ":(exclude,glob)**/node_modules/**",
+                  ":(exclude,glob)**/.DS_Store", ":(exclude,glob)**/.venv/**",
+                  ":(exclude,glob)**/.coverage"]
+
+
+def _worker_changes(worktree: Path) -> list[str]:
+    out = _git(worktree, "status", "--porcelain", "--untracked-files=all", "--", ".",
+               *JUNK_PATHSPECS).stdout
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def _records(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if record.get("repos"):
+        return {name: rec for name, rec in record["repos"].items() if isinstance(rec, dict)}
+    return {"default": record}
+
+
+def delivery_status(mission_dir: Path) -> dict[str, Any]:
+    """Per repo: does the mission's worktree hold work that is not in the owner's tree yet?
+    Read-only - nothing is committed or merged here."""
+    record = read_record(Path(mission_dir)) or {}
+    out: dict[str, Any] = {}
+    for name, rec in _records(record).items():
+        worktree, repo, branch = rec.get("worktree"), rec.get("repo"), rec.get("branch")
+        if not (worktree and repo and branch) or not Path(worktree).exists():
+            continue
+        dirty = _worker_changes(Path(worktree))
+        ahead = _git(Path(repo), "rev-list", "--count", f"HEAD..{branch}").stdout.strip()
+        out[name] = {"branch": branch, "repo": repo, "uncommitted_files": len(dirty),
+                     "commits_ahead": int(ahead or 0)}
+    merged = Path(mission_dir) / "delivered-to-project.json"
+    result = {"repos": out}
+    if merged.exists():
+        try:
+            result["last_merge"] = json.loads(merged.read_text("utf-8"))
+        except ValueError:
+            pass
+    return result
+
+
+def deliver_to_project(mission_dir: Path, *, message: str) -> dict[str, Any]:
+    """The owner's explicit "bring this into my project": commit the worker's changes on the
+    mission branch, then merge that branch into whatever branch the owner's checkout is on.
+    git itself refuses to overwrite the owner's uncommitted edits; a conflicting merge is
+    aborted and reported - the owner's tree is left exactly as it was."""
+    from .start import git_identity_args
+    record = read_record(Path(mission_dir)) or {}
+    results: dict[str, Any] = {}
+    for name, rec in _records(record).items():
+        worktree, repo, branch = rec.get("worktree"), rec.get("repo"), rec.get("branch")
+        if not (worktree and repo and branch) or not Path(worktree).exists():
+            results[name] = {"ok": False, "detail": "this mission has no worktree to bring in"}
+            continue
+        ident = git_identity_args(repo)
+        wt = Path(worktree)
+        if _worker_changes(wt):
+            _git(wt, "add", "-A", "--", ".", *JUNK_PATHSPECS)
+            commit = subprocess.run(["git", "-C", str(wt), *ident, "commit", "-q", "-m",
+                                     message[:200]], capture_output=True, text=True)
+            if commit.returncode != 0:
+                results[name] = {"ok": False, "detail": "could not commit the worker's changes: "
+                                 + (commit.stderr or commit.stdout).strip()[-300:]}
+                continue
+        ahead = int(_git(Path(repo), "rev-list", "--count", f"HEAD..{branch}").stdout.strip() or 0)
+        if ahead == 0:
+            results[name] = {"ok": True, "merged": False,
+                             "detail": "nothing new - your project already has this work"}
+            continue
+        target = _git(Path(repo), "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        merge = subprocess.run(["git", "-C", str(repo), *ident, "merge", "--no-ff", "--no-edit",
+                                "-m", f"Skye: {message[:180]}", branch],
+                               capture_output=True, text=True)
+        if merge.returncode != 0:
+            _git(Path(repo), "merge", "--abort")
+            results[name] = {"ok": False, "merged": False, "branch": branch, "into": target,
+                             "detail": "git could not merge cleanly - your project is unchanged. "
+                                       "Commit or stash your own edits, or merge branch "
+                                       f"{branch} yourself. git said: "
+                                       + (merge.stderr or merge.stdout).strip()[-300:]}
+            continue
+        results[name] = {"ok": True, "merged": True, "branch": branch, "into": target,
+                         "commits": ahead, "detail": f"merged {ahead} commit(s) into {target}"}
+    summary = {"at": time.time(), "repos": results,
+               "ok": bool(results) and all(r.get("ok") for r in results.values())}
+    (Path(mission_dir) / "delivered-to-project.json").write_text(
+        json.dumps(summary, indent=2) + "\n", "utf-8")
+    return summary

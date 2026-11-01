@@ -247,7 +247,8 @@ def test_create_mission_with_plan_builds_a_planner_step(ui_server, tmp_path):
     worker proposes the real steps at runtime via propose_steps."""
     url, state_dir = ui_server
     status, payload = _req(url, "/api/missions", method="POST",
-                           body={"goal": "ship a landing page", "plan": True})
+                           body={"goal": "ship a landing page", "plan": True,
+                                 "repo": str(tmp_path)})
     assert status == 200, payload
     snapshot = json.loads(
         (state_dir / "missions" / payload["id"] / "mission.json").read_text())
@@ -681,9 +682,12 @@ def test_auto_pickup_through_the_live_server_pauses_for_contract_approval(
     url, state_dir = ui_server
     monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
     monkeypatch.setenv("SKYE_POLICY", str(tmp_path / "policy.json"))
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "projects.json"))
+    (tmp_path / "projects.json").write_text(json.dumps({"projects": [
+        {"id": "p-1", "name": "shop", "repo": str(tmp_path)}]}))
     (tmp_path / "backlog.json").write_text(json.dumps({"features": [
         {"id": "f-1", "title": "cart api", "brief": "add the endpoint",
-         "status": "approved", "project": "", "decided_at": 1, "thread": []}]}))
+         "status": "approved", "project": "p-1", "decided_at": 1, "thread": []}]}))
     (tmp_path / "policy.json").write_text(json.dumps({"auto_pickup": {"enabled": True}}))
     monkeypatch.setattr(ui, "RUNNER",
                         lambda spec: Result(ok=True, output="built", command=["fake"]))

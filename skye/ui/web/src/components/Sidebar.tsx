@@ -5,7 +5,8 @@
 // projects are workspaces, chats are missions (their journal is the conversation record).
 import { ChevronDown, Folder, Home, ListTodo, MessageSquare, Plus, Settings, Users, Workflow } from "lucide-react";
 import { useState } from "react";
-import { createProject, type MissionRow, type Project } from "../api";
+import { createProject, pickFolder, type MissionRow, type Project } from "../api";
+import { ClaudeUsageCard } from "./ClaudeUsageCard";
 import { formatRelative, humanError } from "../lib";
 import { Button } from "./ui/Button";
 
@@ -200,23 +201,41 @@ export function Sidebar({
       </div>
       {adding ? (
         <div className="mx-1.5 mt-1 space-y-1 rounded-sm border border-border bg-card p-2">
+          <div className="flex gap-1">
+            <input
+              value={repo}
+              onChange={(e) => setRepo(e.target.value)}
+              placeholder="/path/to/your/project"
+              className="min-w-0 flex-1 rounded-sm border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
+            />
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() =>
+                void pickFolder().then((r) => {
+                  if (r.path) {
+                    setRepo(r.path);
+                    if (!name.trim()) setName(r.path.split("/").filter(Boolean).pop() ?? "");
+                  } else if (!r.supported) {
+                    setError("Folder picker isn't available here - paste the folder path");
+                  }
+                })
+              }
+            >
+              Choose…
+            </Button>
+          </div>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="project name"
+            placeholder="name (optional)"
             className="w-full rounded-sm border border-border bg-background px-2 py-1 text-xs outline-none"
-          />
-          <input
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            placeholder="repo path (must exist)"
-            className="w-full rounded-sm border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
           />
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
           <Button
             size="xs"
             loading={saving}
-            disabled={!name.trim() || !repo.trim()}
+            disabled={!repo.trim()}
             onClick={() => void addProject()}
           >
             Add project
@@ -269,6 +288,7 @@ export function Sidebar({
           </p>
         ) : null}
       </div>
+      <ClaudeUsageCard />
       <p className="border-t border-border px-3 py-2 text-xs leading-4 text-muted-foreground">
         Local only. Interrupted work waits for you.
       </p>

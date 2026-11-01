@@ -16,8 +16,10 @@ Security posture:
 from __future__ import annotations
 
 import json
+import re
 import os
 import secrets
+import subprocess
 import threading
 import time
 import uuid
@@ -410,14 +412,28 @@ def roles_payload(state_dir: Path) -> dict:
                         usage[role]["done"] += 1
                     else:
                         usage[role]["failed"] += 1
+    models = Policy.load(policy_path_default()).models
     rows = []
     for row in described:
         catalogue = roles.catalogue_for(row["name"]) if row["source"] != "builtin" else None
         rows.append({**row, **usage[row["name"]],
+                     "model": models.get(row["name"], ""),
                      "catalogue": catalogue or {k: gateway.BUILTIN[row["name"]][k]
                                                 for k in ("tools", "writable")}})
     return {"roles": rows, "adapters": list(ADAPTERS),
-            "adapter_details": adapter_availability()}
+            "adapter_details": adapter_availability(),
+            "model_choices": MODEL_CHOICES}
+
+
+#: What the Agents screen offers per role. The aliases always mean the latest model of that
+#: family in Claude Code; "" = the worker CLI's own default (whatever the owner set there).
+MODEL_CHOICES = [
+    {"value": "", "label": "Claude Code default"},
+    {"value": "opus", "label": "Opus - strongest, uses limits fastest"},
+    {"value": "sonnet", "label": "Sonnet - balanced"},
+    {"value": "haiku", "label": "Haiku - fastest, lightest"},
+]
+_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]]{0,63}$")
 
 
 def adapter_availability() -> list[dict]:
@@ -477,16 +493,81 @@ PLANNER_BRIEF = """You are the planner for this goal:
 
 {goal}
 
-Break it into concrete specialist steps and reply with JSON exactly of the form
-{{"propose_steps": [{{"id": "...", "role": "...", "adapter": "...", "goal": "...",
+Decide the SMALLEST team that does this well, then reply with JSON exactly of the form
+{{"propose_steps": [{{"id": "...", "role": "...", "adapter": "{adapter}", "goal": "...",
 "brief": "...", "needs": ["..."]}}]}}.
-Name roles from the team's role registry (builtins plus owner-defined specialists),
-keep every step small and self-contained, and use needs for steps that depend on an
-earlier step's outcome. Do not do the work yourself - your reply becomes the workflow.
-If you see follow-up product work beyond this goal, also propose it for the owner's
-backlog in the same reply: "propose_features": [{"title": "...", "brief": "..."}] -
-proposals wait for the owner's approval before any work starts.
+
+Every step is a separate coding-agent session that costs the owner real usage, so:
+- If one developer can do it (most bug fixes, small features, refactors in one area),
+  propose exactly ONE step. That is the expected answer for most goals.
+- Add a step only when it needs a genuinely different skill or a separate area of the code
+  that can proceed in parallel (e.g. backend API + frontend screen). Rarely more than 3.
+- Do not add review, test or "verify" steps: the team's gates already run tests and
+  review where the owner configured them.
+- Use "adapter": "{adapter}" for every step. Roles: {roles}.
+- Each brief must be self-contained: what to change, where, and how to know it is done.
+  Use needs only when a step truly depends on another step's result.
+Look at the repository only as much as you need to plan - do not do the work yourself;
+your reply becomes the workflow. Keep it brief.
+If you see clearly separate follow-up work beyond this goal, you may list it for the
+owner's backlog: "propose_features": [{{"title": "...", "brief": "..."}}] - proposals wait
+for the owner's approval and cost nothing until approved.
 """
+
+
+def _pick_folder() -> dict:
+    import platform
+    import shutil
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            proc = subprocess.run(
+                ["osascript", "-e", 'POSIX path of (choose folder with prompt '
+                 '"Choose the project folder Skye should work on")'],
+                capture_output=True, text=True, timeout=300)
+        elif shutil.which("zenity"):
+            proc = subprocess.run(["zenity", "--file-selection", "--directory"],
+                                  capture_output=True, text=True, timeout=300)
+        else:
+            return {"supported": False, "path": ""}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"supported": True, "path": ""}
+    path = (proc.stdout or "").strip()
+    if path not in ("/",):
+        path = path.rstrip("/")
+    return {"supported": True, "path": path if proc.returncode == 0 else ""}
+
+
+def _init_git(folder: str) -> dict:
+    """Make a plain folder usable by Skye: git init plus a first commit of what is there,
+    so missions can work on their own branch and hand the result back."""
+    from ..start import git_identity_args
+    path = Path(folder)
+    if not path.is_dir():
+        return {"ok": False, "detail": f"{folder} is not a folder"}
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(path), *git_identity_args(path), *args],
+                              capture_output=True, text=True)
+    if git("rev-parse", "--show-toplevel").returncode != 0:
+        if git("init", "-q").returncode != 0:
+            return {"ok": False, "detail": "git init failed"}
+    if git("rev-parse", "--verify", "HEAD").returncode != 0:
+        git("add", "-A")
+        commit = git("commit", "-q", "--allow-empty", "-m", "Initial commit (made by Skye)")
+        if commit.returncode != 0:
+            return {"ok": False, "detail": (commit.stderr or commit.stdout).strip()[-300:]}
+        return {"ok": True, "detail": "the folder is now a git repository with a first commit"}
+    return {"ok": True, "detail": "already a git repository"}
+
+
+def preferred_adapter() -> str:
+    """The worker the owner most likely has: their own Claude Code, then Codex, then Root."""
+    import shutil
+    if shutil.which("claude"):
+        return "claude-code"
+    if shutil.which("codex"):
+        return "codex"
+    return "root"
 
 
 PLANNER_ROUTING_ADDENDUM = """
@@ -618,22 +699,39 @@ def create_mission(state_dir: Path, spec: dict) -> str:
                 f"{catalogue['source']}); the composed planner step is a nonwriting "
                 "context step - narrow that role's catalogue or choose a read-only "
                 "planner_role")
-        brief = PLANNER_BRIEF.replace("{goal}", goal)
+        adapter = str(spec.get("adapter") or preferred_adapter())
+        from .. import roles as _roles
+        role_names = [r for r in _roles.known() if r not in ("reviewer", "pm", "explorer")]
+        brief = (PLANNER_BRIEF.replace("{{", "{").replace("}}", "}").replace("{goal}", goal).replace("{adapter}", adapter)
+                 .replace("{roles}", ", ".join(role_names)))
         if isinstance(repos, dict) and repos:
             from .. import repocontext
             digests = repocontext.repo_digests(repos)
-            brief += PLANNER_ROUTING_ADDENDUM.replace(
+            brief += PLANNER_ROUTING_ADDENDUM.replace("{{", "{").replace("}}", "}").replace(
                 "{repos}", repocontext.format_for_brief(digests))
         plan_step = {"id": "plan", "role": planner_role,
-                     "adapter": str(spec.get("adapter") or "root"), "goal": goal,
+                     "adapter": adapter, "goal": goal,
                      "brief": brief, "gates": [],
-                     "budget": {"max_steps": 12}}
+                     "budget": {"max_steps": 12, "timeout_seconds": 600}}
         if isinstance(repos, dict) and repos:
             # Every step must name a declared repo - the planner included. It does no repo
             # work itself (its routing context arrives in the brief), so its session runs
             # against the first declared repo, deterministically.
             plan_step["repo"] = sorted(repos)[0]
         steps = [plan_step]
+    elif spec.get("solo") and not steps:
+        # Solo: one developer session does the whole goal - no planning session at all.
+        # The cheapest way to get work done when the owner already knows it is one job.
+        solo_step = {"id": "develop", "role": str(spec.get("role") or "developer"),
+                     "adapter": str(spec.get("adapter") or preferred_adapter()),
+                     "goal": goal, "brief": goal}
+        if isinstance(repos, dict) and repos:
+            solo_step["repo"] = sorted(repos)[0]
+        steps = [solo_step]
+    if not repo and not repos:
+        # Never fall back to the server's working directory (that is Skye's own checkout):
+        # a mission must say which project it works on.
+        raise MissionError("choose a project folder for this mission first")
     mission_id = str(spec.get("id") or "").strip() or f"mission-{secrets.token_hex(4)}"
     # With a repos map and no default repo, every step must name one of the declared repos;
     # load_mission enforces that and rejects bad names/duplicates/aliasing - the same
@@ -821,6 +919,21 @@ class UiHandler(BaseHTTPRequestHandler):
                                            project["repo"])})
                 if url.path == "/api/roles":
                     return self._json(roles_payload(self.state_dir))
+                if url.path == "/api/claude":
+                    # The owner's Claude Code login + last-seen usage windows. Free: reads
+                    # `claude auth status` and what Skye's own runs reported.
+                    from .. import claude_usage
+                    refresh = "refresh=1" in (url.query or "")
+                    payload = claude_usage.snapshot(self.state_dir, force_account=refresh)
+                    payload["default_adapter"] = preferred_adapter()
+                    return self._json(payload)
+                if url.path.startswith("/api/missions/") and url.path.endswith("/delivery"):
+                    mission_id = url.path[len("/api/missions/"):-len("/delivery")].strip("/")
+                    mission_dir = self.state_dir / "missions" / mission_id
+                    if not (mission_dir / "mission.json").exists():
+                        return self._json({"error": "unknown mission"}, 404)
+                    from .. import workspaces as _ws
+                    return self._json(_ws.delivery_status(mission_dir))
                 if url.path == "/api/mission-setup":
                     return self._json(MISSION_SETUP)
                 if url.path == "/api/policy":
@@ -1022,10 +1135,23 @@ class UiHandler(BaseHTTPRequestHandler):
                 if body.get("run"):
                     resume_in_thread(self.state_dir, mission_id)
                 return self._json({"id": mission_id, "running": bool(body.get("run"))})
+            if url.path == "/api/pick-folder":
+                # A native folder chooser on the owner's own machine (the server is
+                # localhost-only), so nobody has to type an absolute path.
+                return self._json(_pick_folder())
+            if url.path.startswith("/api/projects/") and url.path.endswith("/init-git"):
+                project_id = url.path[len("/api/projects/"):-len("/init-git")].strip("/")
+                project = projects.get(project_id)
+                if project is None:
+                    return self._json({"error": "unknown project"}, 404)
+                return self._json(_init_git(project["repo"]))
             if url.path == "/api/projects":
                 record = body.get("project")
                 if not isinstance(record, dict):
                     return self._json({"error": "project must be a JSON object"}, 400)
+                if not str(record.get("name") or "").strip() and record.get("repo"):
+                    record = {**record, "name": Path(str(record["repo"]).rstrip("/")).name[:60]
+                              or "project"}
                 try:
                     saved = projects.add(record)
                 except projects.ProjectError as error:
@@ -1066,6 +1192,37 @@ class UiHandler(BaseHTTPRequestHandler):
                     path.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
                 return self._json({"saved": True, "path": str(path.resolve()),
                                    "revision": policy_revision(path)})
+            if url.path == "/api/policy/models":
+                # Narrow mutation like the pickup toggle: only models[role] changes, under the
+                # policy lock; an unreadable policy file fails closed instead of being replaced.
+                role = str(body.get("role") or "").strip()
+                model = str(body.get("model") or "").strip()
+                if role not in roles.known():
+                    return self._json({"error": f"unknown role '{role}'"}, 400)
+                if model and not _MODEL_ID.match(model):
+                    return self._json({"error": "model must be a Claude model alias or id "
+                                                "(e.g. opus, sonnet, haiku)"}, 400)
+                path = policy_path_default()
+                with policy_lock(path):
+                    try:
+                        current = json.loads(path.read_text("utf-8")) if path.exists() else {}
+                    except ValueError:
+                        return self._json(
+                            {"error": f"current policy file {path} is not valid JSON; "
+                                      "refusing to rewrite it"}, 409)
+                    if not isinstance(current, dict):
+                        return self._json(
+                            {"error": f"current policy file {path} is not a JSON object; "
+                                      "refusing to rewrite it"}, 409)
+                    models = current.get("models") if isinstance(current.get("models"), dict) else {}
+                    if model:
+                        models[role] = model
+                    else:
+                        models.pop(role, None)
+                    current["models"] = models
+                    path.write_text(json.dumps(current, indent=2) + "\n", "utf-8")
+                return self._json({"saved": True, "role": role, "model": model,
+                                   "models": models})
             if url.path == "/api/policy/auto_pickup":
                 # The toggle's safe mutation: ONLY the auto_pickup block changes, under a
                 # lock, with strict validation, and a current file we cannot parse fails
@@ -1160,6 +1317,15 @@ class UiHandler(BaseHTTPRequestHandler):
                             "cancel); a generic resume cannot restart their worker - "
                             "choose an explicit redispatch per step")
                     return self._json(resp)
+                if action == "merge":
+                    # The owner's explicit click: bring the mission's worktree branch into
+                    # their own checkout. Never while the mission is still running.
+                    with _live_lock:
+                        if _live_missions.get(mission_id, {}).get("running"):
+                            return self._json({"error": "the mission is still running"}, 409)
+                    from .. import workspaces as _ws
+                    goal = str(load_mission(mission_file).get("goal") or mission_id)
+                    return self._json(_ws.deliver_to_project(mission_dir, message=goal))
                 if action == "redispatch":
                     step = body.get("step")
                     if not step:

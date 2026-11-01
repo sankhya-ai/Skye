@@ -106,6 +106,10 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
         catalogue = gateway.resolve(spec["role"], catalogues_dir)
         spec["tools"] = catalogue["tools"]
         spec["tools_writable"] = catalogue["writable"]
+        # Per-role model choice from the team policy (e.g. the planner on a lighter model so
+        # planning does not burn the owner's subscription limits). A contract's own model wins.
+        if not spec.get("model") and policy.models.get(spec["role"]):
+            spec["model"] = policy.models[spec["role"]]
         adapter = adapters.get(spec["adapter"])
         if job_observer is not None:
             adapter.job_observer = job_observer
@@ -203,9 +207,13 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
         outcome = Outcome(status="done", contract=spec, worker_output=result.output,
                           fingerprint=fp, worker_job=worker_job, budget_notes=notes,
                           **session_fields)
+        denied = (outcome.usage or {}).get("denied_tools") if isinstance(outcome.usage, dict) else None
+        if denied:
+            notes.append(f"the worker was refused {outcome.usage.get('permission_denials')} tool "
+                         f"call(s) outside its role's catalogue ({', '.join(denied)})")
         if not result.ok:
             outcome.status = "failed"
-            outcome.reason = f"worker exited {result.returncode}"
+            outcome.reason = _failure_reason(result)
             emit("failed", spec, status="failed", reason=outcome.reason, worker_job=worker_job,
                  fingerprint=fp)
             return outcome
@@ -224,6 +232,19 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
     finally:
         if registry is not None:
             registry.release()
+
+
+def _failure_reason(result: Any) -> str:
+    """A worker failure the owner can act on: the exit code plus the worker's own last words
+    (login expired, usage limit reached, ...) instead of a bare number."""
+    lines = [ln.strip() for ln in str(getattr(result, "output", "") or "").splitlines() if ln.strip()]
+    last = lines[-1][:240] if lines else ""
+    lowered = " ".join(lines[-6:]).lower()
+    if "not logged in" in lowered or "please run /login" in lowered or "invalid api key" in lowered:
+        return "Claude Code is not logged in - run `claude` in a terminal and log in, then retry"
+    if "usage limit" in lowered or "rate limit" in lowered or "limit reached" in lowered:
+        return f"the coding agent hit its usage limit: {last}"
+    return f"worker exited {result.returncode}" + (f": {last}" if last else "")
 
 
 def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, bridge=None,
@@ -250,6 +271,10 @@ def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, brid
                 "repo_revision": result["repo_revision"],
                 "journey_digest": result["journey_digest"]}
     if gate == "tests":
+        if not policy.test_command and spec.get("gates_defaulted"):
+            return {"gate": "tests", "ok": True, "skipped": True,
+                    "detail": "skipped: no test command is set for this team (Settings -> "
+                              "test command); the step's default tests gate did not run"}
         if not policy.test_command:
             return {"gate": "tests", "ok": False,
                     "detail": "the team policy names no test command; the tests gate cannot run"}

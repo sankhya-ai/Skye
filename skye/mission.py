@@ -356,7 +356,8 @@ def _step_claims(step: dict[str, Any]) -> list[str]:
 
 def _handoff_brief(step: dict[str, Any], outcomes: dict[str, dict[str, Any]], *,
                    mission_id: str = "", discussion_tail: str = "",
-                   unacked: list[dict[str, Any]] | None = None) -> str:
+                   unacked: list[dict[str, Any]] | None = None,
+                   teammates: bool = True) -> str:
     base = str(step.get("brief") or step["goal"]).strip()
     parts = [base]
     if step.get("review_feedback"):
@@ -380,7 +381,9 @@ def _handoff_brief(step: dict[str, Any], outcomes: dict[str, dict[str, Any]], *,
                 parts.append(tail[-OUTPUT_TAIL:])
     if discussion_tail:
         parts += ["", "## Team line (latest)", discussion_tail]
-    if mission_id:
+    # The team-line instructions only ride a brief when someone else is still working on this
+    # mission: a lone worker polling an empty channel spends turns (tokens) for nothing.
+    if mission_id and (teammates or unacked or discussion_tail):
         say_cmd = f"skye say {mission_id} --as {step['role']}"
         parts += ["", "## Talking to the team",
                   f"This mission's team line: post with `{say_cmd} 'message'` "
@@ -394,14 +397,16 @@ def _handoff_brief(step: dict[str, Any], outcomes: dict[str, dict[str, Any]], *,
 def _step_contract(mission: dict[str, Any], step: dict[str, Any],
                    outcomes: dict[str, dict[str, Any]], *,
                    discussion_tail: str = "",
-                   unacked: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   unacked: list[dict[str, Any]] | None = None,
+                   teammates: bool = True) -> dict[str, Any]:
     contract = {k: step[k] for k in ("goal", "role", "adapter") }
     contract["repo"] = _resolve_repo(mission, step.get("repo") or mission.get("repo", ""))
-    for optional in ("gates", "budget", "branch", "contract_keys", "claims"):
+    for optional in ("gates", "budget", "branch", "contract_keys", "claims", "model"):
         if optional in step:
             contract[optional] = step[optional]
     contract["brief"] = _handoff_brief(step, outcomes, mission_id=mission["id"],
-                                       discussion_tail=discussion_tail, unacked=unacked)
+                                       discussion_tail=discussion_tail, unacked=unacked,
+                                       teammates=teammates)
     return validate(contract)
 
 
@@ -802,6 +807,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                                                run_instance=run_instance))
             if outcome.session_id:
                 journal.append(target, "worker-session", adapter=step["adapter"],
+                               model=str((outcome.contract or {}).get("model") or ""),
                                session_id=outcome.session_id,
                                continuity=outcome.continuity or "fresh",
                                cancelled=outcome.cancelled,
@@ -1049,9 +1055,12 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         for step in ready:
             step_id = step["id"]
             context["step"] = step_id
+            others_active = any(s["id"] != step_id and s["id"] not in outcomes
+                                for s in worklist)
             contracts[step_id] = _step_contract(
                 mission, step, outcomes, discussion_tail=discussion_tail,
-                unacked=[c for c in unacked if step["role"] in (c.get("waiting_on") or [])])
+                unacked=[c for c in unacked if step["role"] in (c.get("waiting_on") or [])],
+                teammates=others_active)
             journal.append(step_id, "dispatched", fingerprint=fingerprint(contracts[step_id]),
                            run_instance=run_instance)
             emit(events.make_event("mission-step", contracts[step_id], status="dispatched", **context))
@@ -1099,6 +1108,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             if outcome.session_id:
                 # The vendor session record: later rework/follow-ups/redispatches resume it.
                 journal.append(step_id, "worker-session", adapter=step["adapter"],
+                               model=str((outcome.contract or {}).get("model") or ""),
                                session_id=outcome.session_id,
                                continuity=outcome.continuity or "fresh",
                                cancelled=outcome.cancelled,
@@ -1373,6 +1383,7 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
                       "status": state.get("status", ""),
                       "reason": state.get("reason", ""),
                       "continuity": (session.get("continuity") or ("fresh" if session else "")),
+                      "model": str(session.get("model") or ""),
                       "has_session": bool(session.get("session_id")),
                       "followupable": bool(settled and session.get("session_id")),
                       "progress": progress.get(step["id"], "")})

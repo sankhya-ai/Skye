@@ -3,11 +3,72 @@
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
-import { createRole, getAgentDefinitions, getRoles, type AgentDefinition, type RoleRow } from "../api";
+import {
+  createRole,
+  getAgentDefinitions,
+  getRoles,
+  setRoleModel,
+  type AgentDefinition,
+  type ModelChoice,
+  type RoleRow,
+} from "../api";
 import { humanError } from "../lib";
 import { Badge } from "./ui/Badge";
 
+// What each role does in a mission, so the owner can judge where a stronger model pays off.
+const ROLE_HINT: Record<string, string> = {
+  pm: "Planner - sizes the team for every Team mission",
+  reviewer: "Reviews changes when a step has a review gate",
+  developer: "Does the work in Solo missions and most Team steps",
+  explorer: "Read-only research",
+};
+
+function ModelPicker({
+  role,
+  value,
+  choices,
+  onSaved,
+}: {
+  role: string;
+  value: string;
+  choices: ModelChoice[];
+  onSaved: (model: string) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const known = choices.some((c) => c.value === value);
+  return (
+    <div className="mt-3">
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="shrink-0">Model</span>
+        <select
+          value={value}
+          disabled={saving}
+          aria-label={`Model for ${role}`}
+          onChange={(e) => {
+            const next = e.target.value;
+            setSaving(true);
+            setError(null);
+            setRoleModel(role, next)
+              .then(() => onSaved(next))
+              .catch((err) => setError(humanError(err, "role")))
+              .finally(() => setSaving(false));
+          }}
+          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none disabled:opacity-60"
+        >
+          {!known ? <option value={value}>{value}</option> : null}
+          {choices.map((c) => (
+            <option key={c.value} value={c.value}>{c.label}</option>
+          ))}
+        </select>
+      </label>
+      {error ? <p className="mt-1 text-xs text-destructive">{error}</p> : null}
+    </div>
+  );
+}
+
 export function AgentsView() {
+  const [choices, setChoices] = useState<ModelChoice[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [defs, setDefs] = useState<Map<string, AgentDefinition>>(new Map());
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +85,7 @@ export function AgentsView() {
       const [agentRes, roleRes] = await Promise.all([getAgentDefinitions(), getRoles()]);
       setDefs(new Map(agentRes.agents.map((d) => [d.name, d])));
       setRoles(roleRes.roles);
+      setChoices(roleRes.model_choices ?? []);
       setError(null);
     } catch (e) {
       setError(humanError(e, "roles"));
@@ -58,7 +120,9 @@ export function AgentsView() {
       <div>
         <h2 className="text-lg font-medium">Agents</h2>
         <p className="text-sm text-muted-foreground">
-          Tool lists scope a worker's tools; they are not a security boundary.
+          Pick a model for each agent: a strong one where judgment matters (planning, review), a
+          lighter one for the many implementation turns. Tool lists scope a worker&apos;s tools;
+          they are not a security boundary.
         </p>
       </div>
       {error ? (
@@ -90,8 +154,21 @@ export function AgentsView() {
                 </span>
               ) : null}
             </div>
+            {ROLE_HINT[role.name] ? (
+              <p className="mt-1 text-xs font-medium text-foreground/80">{ROLE_HINT[role.name]}</p>
+            ) : null}
             {role.description ? (
               <p className="mt-1 text-xs text-muted-foreground">{role.description}</p>
+            ) : null}
+            {choices.length > 0 && defs.get(role.name)?.status !== "proposed" ? (
+              <ModelPicker
+                role={role.name}
+                value={role.model ?? ""}
+                choices={choices}
+                onSaved={(model) =>
+                  setRoles((rows) => rows.map((r) => (r.name === role.name ? { ...r, model } : r)))
+                }
+              />
             ) : null}
             <p className="mt-2 font-mono text-xs text-muted-foreground">
               {role.catalogue.tools.join(" · ") || "no tools"}

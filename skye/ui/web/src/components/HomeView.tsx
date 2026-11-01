@@ -7,6 +7,11 @@ import { Spinner } from "./ui/Spinner";
 import { useEffect, useState } from "react";
 import {
   createMission,
+  createProject,
+  getClaudeUsage,
+  initProjectGit,
+  pickFolder,
+  type ClaudeAccount,
   getBacklog,
   getMissionSetup,
   type FeatureRow,
@@ -95,11 +100,22 @@ export function HomeView({
   projects,
   missions,
   onCreated,
+  onProjectsChanged,
 }: {
   projects: Project[];
   missions: MissionRow[];
   onCreated: (id: string) => void;
+  onProjectsChanged: () => void;
 }) {
+  // Team: a light planning session sizes the team (often just one developer).
+  // Solo: one developer session does the goal directly - no planning session at all.
+  const [mode, setMode] = useState<"team" | "solo">(() => {
+    try { return (localStorage.getItem("skye.mode") as "team" | "solo") || "team"; } catch { return "team"; }
+  });
+  const [account, setAccount] = useState<ClaudeAccount | null>(null);
+  const [gitBusy, setGitBusy] = useState(false);
+  const [gitNote, setGitNote] = useState<string | null>(null);
+  const [discoveryTick, setDiscoveryTick] = useState(0);
   const [now, setNow] = useState(() => new Date());
   const [goal, setGoal] = useState("");
   const [project, setProject] = useState("");
@@ -125,7 +141,48 @@ export function HomeView({
 
   useEffect(() => {
     getMissionSetup().then(setSetup).catch(() => {});
+    getClaudeUsage().then((d) => setAccount(d.account)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem("skye.mode", mode); } catch { /* per-viewer convenience only */ }
+  }, [mode]);
+
+  // A mission always works on a project: pick the most recently added one by default.
+  useEffect(() => {
+    if (!project && projects.length > 0) setProject(projects[projects.length - 1].id);
+  }, [projects, project]);
+
+  const addProjectFolder = async () => {
+    setError(null);
+    try {
+      const picked = await pickFolder();
+      let path = picked.path;
+      if (!picked.supported) {
+        path = window.prompt("Absolute path of your project folder") ?? "";
+      }
+      if (!path) return;
+      const saved = await createProject({ name: path.split("/").filter(Boolean).pop() ?? "project", repo: path });
+      onProjectsChanged();
+      setProject(saved.project.id);
+    } catch (e) {
+      setError(humanError(e, "project"));
+    }
+  };
+
+  const makeGitRepo = async () => {
+    if (!project) return;
+    setGitBusy(true);
+    try {
+      const r = await initProjectGit(project);
+      setGitNote(r.detail);
+      setDiscoveryTick((t) => t + 1);
+    } catch (e) {
+      setGitNote(humanError(e, "project"));
+    } finally {
+      setGitBusy(false);
+    }
+  };
 
   // Read-only scope preview for a selected project: exactly which repositories a mission
   // would start with, before anything is created. The preview grants no start authority -
@@ -138,7 +195,7 @@ export function HomeView({
       .then((d) => { if (live) setDiscovery(d.discovery); })
       .catch(() => { if (live) setDiscovery(null); });
     return () => { live = false; };
-  }, [project]);
+  }, [project, discoveryTick]);
 
   // The composer never guesses a path: every repository is typed by the owner and validated
   // by the server's mission loader (duplicate realpaths, aliases and same-repo subdirectories
@@ -163,6 +220,10 @@ export function HomeView({
       setError("Repository names must be unique");
       return;
     }
+    if (!project && declared.length === 0) {
+      setError("Choose the project folder the team should work on");
+      return;
+    }
     const plannerRepo = defaultRepo
       || declared.find((r) => REPO_NAME.test(r.name.trim()))?.path.trim()
       || "";
@@ -172,7 +233,7 @@ export function HomeView({
       // A planner mission: the engine grows the real workflow from the goal at runtime.
       const created = await createMission({
         goal: text,
-        plan: true,
+        ...(mode === "solo" ? { solo: true } : { plan: true }),
         run: true,
         ...(project ? { project } : {}),
         ...(declared.length > 0
@@ -196,6 +257,13 @@ export function HomeView({
         <p className="mb-6 pl-4 font-display text-xl font-normal text-muted-foreground">
           {greeting(now.getHours())} - what should the team work on?
         </p>
+        {account && (!account.installed || !account.logged_in) ? (
+          <div role="alert" className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-xs leading-5 text-destructive">
+            {!account.installed
+              ? <>Claude Code isn&apos;t installed on this machine. Install it from claude.com/claude-code, run <code>claude</code> once in a terminal and log in, then reload this page.</>
+              : <>Claude Code is installed but not logged in. Run <code>claude</code> in a terminal, log in, then reload this page.</>}
+          </div>
+        ) : null}
         {/* berd's chat composer: translucent muted pill over the canvas */}
         <div
           className="rounded-composer p-4 backdrop-blur-md transition-colors"
@@ -215,24 +283,48 @@ export function HomeView({
             className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed text-foreground outline-none"
           />
           <div className="flex items-center justify-between pt-2">
-            {projects.length > 0 ? (
-              <select
-                value={project}
-                onChange={(e) => setProject(e.target.value)}
-                className="h-8 rounded-full border border-border bg-card px-3 text-xs text-muted-foreground outline-none"
-              >
-                <option value="">No project</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
+            <div className="flex items-center gap-1.5">
+              {projects.length > 0 ? (
+                <select
+                  value={project}
+                  onChange={(e) => (e.target.value === "__add" ? void addProjectFolder() : setProject(e.target.value))}
+                  className="h-8 max-w-[11rem] rounded-full border border-border bg-card px-3 text-xs text-muted-foreground outline-none"
+                  aria-label="Project"
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                  <option value="__add">+ Add project folder…</option>
+                </select>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void addProjectFolder()}
+                  className="h-8 rounded-full border border-dashed border-border bg-card px-3 text-xs text-foreground/80 hover:text-foreground"
+                >
+                  + Choose project folder
+                </button>
+              )}
+              <div role="radiogroup" aria-label="How to staff this goal" className="flex h-8 items-center rounded-full border border-border bg-card p-0.5 text-xs">
+                {(["team", "solo"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === m}
+                    onClick={() => setMode(m)}
+                    title={m === "team"
+                      ? "A quick planning session decides the smallest team (often one developer)"
+                      : "One developer session does it directly - fewest tokens"}
+                    className={`h-full rounded-full px-2.5 transition-colors ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {m === "team" ? "Team" : "Solo"}
+                  </button>
                 ))}
-              </select>
-            ) : (
-              <span className="px-1 text-xs text-muted-foreground">
-                Planned dynamically - no fixed pipeline
-              </span>
-            )}
+              </div>
+            </div>
             {/* berd's primary button: near-black pill */}
             <button
               type="button"
@@ -250,8 +342,15 @@ export function HomeView({
           <div data-discovery-preview className="mt-2 pl-4 text-xs text-muted-foreground">
             {discovery.error ? (
               <p>Can&apos;t inspect the project folder: {discovery.error}</p>
+            ) : discovery.root_is_repo && discovery.has_commits === false ? (
+              <p>
+                This git repository has no commits yet, so the team can&apos;t branch from it.{" "}
+                <button type="button" disabled={gitBusy} onClick={() => void makeGitRepo()} className="underline hover:text-foreground">
+                  Make a first commit
+                </button>
+              </p>
             ) : discovery.root_is_repo ? (
-              <p>This project folder is one git repository - Skye works in it directly.</p>
+              <p>The team works on its own copy (a git branch) - your files change only when you bring the result in.</p>
             ) : Object.keys(discovery.repos).length > 0 ? (
               <p>
                 {Object.keys(discovery.repos).length === 1
@@ -261,8 +360,14 @@ export function HomeView({
                 itself and shows why.
               </p>
             ) : (
-              <p>No git repositories found in this project folder.</p>
+              <p>
+                This folder isn&apos;t a git repository yet - the team needs one to work on its own branch.{" "}
+                <button type="button" disabled={gitBusy} onClick={() => void makeGitRepo()} className="underline hover:text-foreground">
+                  Make it a git repository
+                </button>
+              </p>
             )}
+            {gitNote ? <p className="mt-1">{gitNote}</p> : null}
             {!discovery.error && (discovery.skipped > 0
               || discovery.outside_scope.length > 0
               || discovery.inaccessible.length > 0 || discovery.invalid.length > 0

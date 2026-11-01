@@ -13,6 +13,7 @@ import {
 } from "../api";
 import { Button } from "./ui/Button";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
+import { BringIntoProject } from "./BringIntoProject";
 import { MissionFlow } from "./MissionFlow";
 import { DiscussionPanel } from "./DiscussionPanel";
 import { MissionRunTrace } from "./MissionRunTrace";
@@ -337,6 +338,10 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           {actionError}
         </p>
       ) : null}
+      <BringIntoProject
+        missionId={detail.mission.id}
+        settled={!live && ["done", "delivered", "awaiting-verification"].includes(detail.status.status)}
+      />
       <MissionFlow missionId={detail.mission.id} />
       <MissionRunTrace
         busy={busy}

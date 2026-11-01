@@ -17,6 +17,7 @@ export type MissionRow = {
 };
 
 export type StepStatus = {
+  model?: string;
   id: string;
   role: string;
   adapter: string;
@@ -162,6 +163,7 @@ export type ProjectRepoDiscovery = {
     root: string;
     root_exists: boolean;
     root_is_repo: boolean;
+    has_commits?: boolean;
     root_marker_invalid?: boolean;
     repos: Record<string, string>;
     skipped: number;
@@ -209,8 +211,17 @@ export type RoleRow = {
   steps: number;
   done: number;
   failed: number;
+  model?: string;
   catalogue: { tools: string[]; writable: boolean };
 };
+
+export type ModelChoice = { value: string; label: string };
+
+export const setRoleModel = (role: string, model: string) =>
+  api<{ saved: boolean; role: string; model: string }>("/api/policy/models", {
+    method: "POST",
+    body: JSON.stringify({ role, model }),
+  });
 
 export type AgentDefinition = {
   name: string;
@@ -235,7 +246,8 @@ export type AdapterDetail = {
   hint: string;
 };
 export const getRoles = () =>
-  api<{ roles: RoleRow[]; adapters: string[]; adapter_details?: AdapterDetail[] }>(
+  api<{ roles: RoleRow[]; adapters: string[]; adapter_details?: AdapterDetail[];
+         model_choices?: ModelChoice[] }>(
     "/api/roles");
 export const createRole = (role: {
   name: string;
@@ -263,6 +275,7 @@ export const getMissionSetup = () => api<MissionSetup>("/api/mission-setup");
 export const createMission = (spec: {
   goal: string;
   plan?: boolean;
+  solo?: boolean;
   run?: boolean;
   project?: string;
   repo?: string;
@@ -405,3 +418,66 @@ export async function getArtifactText(mission: string, path: string, repo?: stri
   if (!res.ok) throw new Error(`artifact preview failed (${res.status})`);
   return res.text();
 }
+
+export type UsageWindow = {
+  window: string;
+  status: string;
+  resetsAt?: number;
+  utilization?: number;
+  isUsingOverage?: boolean;
+  surpassedThreshold?: number;
+  seen_at?: number;
+  expired?: boolean;
+};
+
+export type ClaudeAccount = {
+  installed: boolean;
+  logged_in: boolean;
+  plan?: string;
+  auth_method?: string;
+  version?: string;
+  hint?: string;
+  error?: string;
+};
+
+export type ClaudeUsage = {
+  account: ClaudeAccount;
+  windows: UsageWindow[];
+  skye_totals: { runs?: number; turns?: number; cost_usd?: number; last_run_at?: number };
+  recent_runs: Array<{ at: number; role: string; model: string; turns?: number; cost_usd?: number }>;
+  usage_page: string;
+  default_adapter: string;
+};
+
+export const getClaudeUsage = (refresh = false) =>
+  api<ClaudeUsage>(`/api/claude${refresh ? "?refresh=1" : ""}`);
+
+export type DeliveryRepo = {
+  branch: string;
+  repo: string;
+  uncommitted_files: number;
+  commits_ahead: number;
+};
+export type MergeResult = {
+  at: number;
+  ok: boolean;
+  repos: Record<string, { ok: boolean; merged?: boolean; detail: string; into?: string }>;
+};
+export const getDelivery = (id: string) =>
+  api<{ repos: Record<string, DeliveryRepo>; last_merge?: MergeResult }>(
+    `/api/missions/${encodeURIComponent(id)}/delivery`);
+export const mergeMission = (id: string) =>
+  api<MergeResult>(`/api/missions/${encodeURIComponent(id)}/merge`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+export const pickFolder = () =>
+  api<{ path: string; supported: boolean }>("/api/pick-folder", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+export const initProjectGit = (id: string) =>
+  api<{ ok: boolean; detail: string }>(`/api/projects/${encodeURIComponent(id)}/init-git`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });

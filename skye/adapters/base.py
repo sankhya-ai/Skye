@@ -301,7 +301,9 @@ class Adapter:
                 "Install it yourself - Skye uses YOUR coding agent, it does not download one.")
         command = self.build_command(contract)
         try:
-            proc = subprocess.run(command, cwd=contract["repo"], capture_output=True, text=True, timeout=timeout)
+            from ..claude_usage import worker_env
+            proc = subprocess.run(command, cwd=contract["repo"], capture_output=True, text=True,
+                                  timeout=timeout, env=worker_env())
         except subprocess.TimeoutExpired:
             return Result(ok=False, output=f"timed out after {timeout}s", command=command, returncode=124)
         return Result(ok=proc.returncode == 0, output=(proc.stdout + proc.stderr)[-8000:],
@@ -382,7 +384,13 @@ class SessionAdapter(Adapter):
                 f"{self.name}: the '{self.binary}' tool is not installed on this machine. "
                 "Install it yourself - Skye uses YOUR coding agent, it does not download one.")
         command = self.build_session_command(contract, resume_session_id)
-        prompt_frame = self.prompt_via_stdin(str(contract.get("brief") or contract["goal"]))
+        # The full prompt (role instructions + owner references + brief) - the same text
+        # one-shot mode sends. Sending only the brief would silently drop the role's
+        # instructions (the reviewer's verdict format among them).
+        build_prompt = getattr(self, "_prompt", None)
+        prompt_text = (build_prompt(contract) if callable(build_prompt)
+                       else str(contract.get("brief") or contract["goal"]))
+        prompt_frame = self.prompt_via_stdin(prompt_text)
         live_path = Path(live_file) if live_file else None
         if live_path is not None:
             live_path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,8 +457,9 @@ class SessionAdapter(Adapter):
                     continuity="resumed" if resume_session_id else "fresh",
                     output=("another run claimed this step between the check and the "
                             "spawn - refusing to race it"))
+        from ..claude_usage import worker_env
         proc = subprocess.Popen(
-            command, cwd=contract["repo"],
+            command, cwd=contract["repo"], env=worker_env(),
             stdin=subprocess.PIPE if prompt_frame is not None or self.SUPPORTS_STEER
             else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
@@ -498,6 +507,23 @@ class SessionAdapter(Adapter):
 
         watcher = threading.Thread(target=_watchdog, daemon=True)
         watcher.start()
+        # Drain stderr concurrently: a worker that writes more than a pipe buffer of
+        # diagnostics would otherwise block forever while Skye waits on stdout.
+        stderr_chunks: list[str] = []
+
+        def _drain_stderr() -> None:
+            try:
+                assert proc.stderr is not None
+                for chunk in proc.stderr:
+                    stderr_chunks.append(chunk)
+                    if len(stderr_chunks) > 400:
+                        del stderr_chunks[:200]
+            except (OSError, ValueError):
+                pass
+
+        stderr_reader = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_reader.start()
+        result_error = ""
         texts: list[str] = []
         session_id = ""
         usage: dict = {}
@@ -510,8 +536,16 @@ class SessionAdapter(Adapter):
                         session_id = event["session_id"]
                     elif event["kind"] == "message":
                         texts.append(event["text"])
+                    elif event["kind"] == "rate-limit":
+                        try:
+                            from ..claude_usage import record_rate_limit
+                            record_rate_limit(event.get("info") or {})
+                        except Exception:
+                            pass  # usage display is best-effort; never fails a run
                     elif event["kind"] == "result":
                         result_ok = bool(event.get("ok"))
+                        if event.get("error"):
+                            result_error = str(event["error"])
                         if event.get("session_id"):
                             session_id = event["session_id"]
                         if event.get("usage"):
@@ -553,11 +587,15 @@ class SessionAdapter(Adapter):
                         live_path.unlink()
                 except (OSError, ValueError):
                     pass
-        stderr_tail = ""
-        try:
-            stderr_tail = (proc.stderr.read() if proc.stderr else "")[-2000:]
-        except OSError:
-            pass
+        stderr_reader.join(timeout=2)
+        stderr_tail = "".join(stderr_chunks)[-2000:]
+        if usage and self.name == "claude-code":
+            try:
+                from ..claude_usage import record_run
+                record_run(usage, role=str(contract.get("role") or ""),
+                           model=str(contract.get("model") or ""))
+            except Exception:
+                pass
         if cancel_event.is_set():
             state["cancelled"] = True
         if state["cancelled"]:
@@ -579,6 +617,8 @@ class SessionAdapter(Adapter):
         rejected = bool(resume_session_id) and returncode != 0
         ok = returncode == 0 and result_ok is not False
         output = "\n".join(texts)[-8000:]
+        if result_error and not ok and result_error not in output:
+            output = (output + "\n" + result_error).strip()[-8000:]
         if stderr_tail and not ok:
             output = (output + "\n" + stderr_tail).strip()[-8000:]
         return SessionResult(ok=ok, output=output, command=command, returncode=returncode,

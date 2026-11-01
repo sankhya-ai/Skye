@@ -6,3 +6,8 @@ skye.egg-info/
 skye.backlog.json
 skye.projects.json
 build/
+.venv/
+skye.policy.json
+skye.approvals.json
+skye.issues.json
+skye.roles.json

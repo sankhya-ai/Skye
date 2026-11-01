@@ -161,6 +161,14 @@ def discover_repos(root: str | Path, *, max_repos: int = 24) -> dict:
         if verdict is True:
             result["root_is_repo"] = True
             result["repos"] = {resolved_root.name or "repo": str(root_path)}
+            # A repository with no commit yet cannot give a mission its own branch.
+            import subprocess as _sp
+            try:
+                result["has_commits"] = _sp.run(
+                    ["git", "-C", str(resolved_root), "rev-parse", "--verify", "HEAD"],
+                    capture_output=True, timeout=10).returncode == 0
+            except (OSError, _sp.TimeoutExpired):
+                result["has_commits"] = False
             return result
         if verdict is None:
             result["error"] = ("git cannot verify the declared folder's .git entry "

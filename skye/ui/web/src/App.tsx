@@ -136,6 +136,7 @@ export default function App() {
             projects={projects}
             missions={missions}
             onCreated={(id) => (window.location.hash = `/mission/${encodeURIComponent(id)}`)}
+            onProjectsChanged={() => void refresh()}
           />
         )}
             </div>

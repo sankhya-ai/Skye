@@ -45,7 +45,13 @@ def validate(contract: dict[str, Any]) -> dict[str, Any]:
     if adapter not in ADAPTERS:
         raise ContractError(f"adapter is required: one of {', '.join(ADAPTERS)}")
     out["adapter"] = adapter
-    gates = out.get("gates", ["tests"])
+    # No gates named = the default tests gate, marked as defaulted: when the team policy has
+    # no test command, a DEFAULT tests gate is recorded as skipped (visibly) instead of
+    # failing every step of a project that has not configured tests. A tests gate the
+    # author asked for explicitly still fails closed without a command.
+    if "gates" not in out or out.get("gates") is None:
+        out["gates_defaulted"] = True
+    gates = out.get("gates") if out.get("gates") is not None else ["tests"]
     if not isinstance(gates, list) or any(g not in GATES for g in gates):
         raise ContractError(f"gates must be a list within {', '.join(GATES)}")
     out["gates"] = gates
