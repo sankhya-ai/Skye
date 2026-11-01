@@ -3,12 +3,13 @@
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
-import { createRole, getRoles, type RoleRow } from "../api";
+import { createRole, getAgentDefinitions, getRoles, type AgentDefinition, type RoleRow } from "../api";
 import { humanError } from "../lib";
 import { Badge } from "./ui/Badge";
 
 export function AgentsView() {
   const [roles, setRoles] = useState<RoleRow[]>([]);
+  const [defs, setDefs] = useState<Map<string, AgentDefinition>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -18,7 +19,11 @@ export function AgentsView() {
 
   const refresh = useCallback(async () => {
     try {
-      setRoles((await getRoles()).roles);
+      // Two reads, merged by name: /api/agents carries definition status (proposed vs
+      // active, version, lineage); /api/roles carries the tool catalogue and run counts.
+      const [agentRes, roleRes] = await Promise.all([getAgentDefinitions(), getRoles()]);
+      setDefs(new Map(agentRes.agents.map((d) => [d.name, d])));
+      setRoles(roleRes.roles);
       setError(null);
     } catch (e) {
       setError(humanError(e, "roles"));
@@ -64,11 +69,25 @@ export function AgentsView() {
       <div className="grid gap-3 sm:grid-cols-2">
         {roles.map((role) => (
           <div key={role.name} className="shadow-card rounded-xl border border-border bg-card p-4">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-sm font-medium">{role.name}</span>
-              <Badge variant={role.source === "builtin" ? "secondary" : "info"}>
-                {role.source === "registry-override" ? "custom (refines builtin)" : role.source}
-              </Badge>
+              {defs.get(role.name) && defs.get(role.name)!.version > 1 ? (
+                <span className="text-xs text-muted-foreground">v{defs.get(role.name)!.version}</span>
+              ) : null}
+              {defs.get(role.name)?.status === "proposed" ? (
+                <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-700">
+                  proposed{defs.get(role.name)!.proposed_by
+                    ? ` by ${defs.get(role.name)!.proposed_by}`
+                    : ""}{" "}- awaiting your promote
+                </Badge>
+              ) : (
+                <Badge variant={role.source === "builtin" ? "secondary" : "info"}>
+                  {role.source === "registry-override" ? "custom (refines builtin)" : role.source}
+                </Badge>
+              )}
+              {defs.get(role.name)?.extends ? (
+                <Badge variant="outline">extends {defs.get(role.name)!.extends}</Badge>
+              ) : null}
               {role.catalogue.writable ? (
                 <Badge variant="info">Write/Edit tools</Badge>
               ) : (

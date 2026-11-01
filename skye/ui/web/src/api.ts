@@ -98,6 +98,20 @@ export type RoleRow = {
   catalogue: { tools: string[]; writable: boolean };
 };
 
+export type AgentDefinition = {
+  name: string;
+  version: number;
+  description: string;
+  instructions: string;
+  extends: string;
+  status: string; // "active" | "proposed" (awaiting the owner's promote decision)
+  proposed_by: string;
+  source: string; // "builtin" | "owner" | "registry-override" | "proposed"
+};
+
+export const getAgentDefinitions = () =>
+  api<{ agents: AgentDefinition[] }>("/api/agents");
+
 export const getRoles = () =>
   api<{ roles: RoleRow[]; adapters: string[] }>("/api/roles");
 export const createRole = (role: {

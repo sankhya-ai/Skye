@@ -121,6 +121,15 @@ fresh = backlog.propose([{"title": "Shopping cart", "brief": "Add a cart to the 
                         project=project["id"], mission="mission-seed")[0]
 
 state_dir = demo / "state"
+# A worker-proposed agent awaiting the owner's promote decision (registry fixture: this is
+# the state a mission's propose-agent flow writes; the UI must distinguish it from active).
+(demo / "skye.roles.json").write_text(json.dumps({"roles": [
+    {"name": "security-auditor", "description": "Reviews changes for common security flaws.",
+     "instructions": "Read the diff, list concrete risks, never edit files.",
+     "catalogue": {"tools": ["Read", "Grep", "Glob"], "writable": False},
+     "status": "proposed", "proposed_by": "reviewer", "source": "worker",
+     "extends": "reviewer", "version": 1}
+]}, indent=2))
 with socket.socket() as probe:
     probe.bind(("127.0.0.1", 0))
     ui_port = probe.getsockname()[1]
@@ -207,6 +216,11 @@ with sync_playwright() as pw:
                 preview.click()
                 page.wait_for_timeout(1500)
         page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
+        if name == "agents":
+            proposed = page.locator("text=awaiting your promote").count()
+            extends_badge = page.locator("text=extends senior-dev").count()
+            print("AGENTS proposed-vs-active distinction:", "PASS" if proposed else "FAIL")
+            print("AGENTS extends lineage badge:", "PASS" if extends_badge else "FAIL")
         if name == "mission-detail":
             # markdown artifact: rendered preview with the link shown as text, never navigation
             md_row = page.locator("div", has=page.locator("span.font-mono", has_text="docs/cart-launch.md")).last
