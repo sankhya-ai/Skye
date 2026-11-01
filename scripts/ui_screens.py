@@ -290,6 +290,15 @@ with sync_playwright() as pw:
                 page.screenshot(path=str(out_dir / "ui-approval-approved.png"), full_page=True)
                 settled = card.count() == 0
                 print("APPROVAL keyboard activation:", "PASS" if settled else "FAIL card still present")
+                # the sidebar list polls on its own 3s cycle: after it lands, an approved
+                # (resume-to-continue) mission must read "approved", never "needs you".
+                page.wait_for_timeout(2600)
+                row_text = page.evaluate(
+                    "(() => { const r = [...document.querySelectorAll('aside a')]"
+                    ".find(a => a.textContent.includes('Weekly sales report'));"
+                    " return r ? r.textContent : ''; })()")
+                print("APPROVAL sidebar label after list refresh:", repr(row_text),
+                      "PASS" if "approved" in row_text and "needs you" not in row_text else "FAIL")
                 print("APPROVAL card flow: captured pending + approved")
             else:
                 print("APPROVAL card flow: NO approve button found - check seed")
