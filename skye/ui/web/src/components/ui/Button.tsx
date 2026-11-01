@@ -40,7 +40,7 @@ export function Button({
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={cn(
-        "inline-flex cursor-pointer items-center justify-center gap-2 rounded-full text-left whitespace-nowrap transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40",
+        "inline-flex cursor-pointer items-center justify-center gap-2 rounded-full text-left whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40",
         VARIANTS[variant] ?? VARIANTS.primary,
         SIZES[size] ?? SIZES.default,
         className,

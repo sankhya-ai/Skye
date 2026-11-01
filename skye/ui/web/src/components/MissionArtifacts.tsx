@@ -65,19 +65,12 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
       </div>
       {open && url ? (
         <div className="mb-2 ml-5 rounded-md border border-border bg-background p-2">
-          {path.toLowerCase().endsWith(".svg") ? (
-            // Verified behavior (scripts/svg_security_probe.py): SVG scripts run on direct
-            // blob navigation even when the HTTP response carried CSP - blob URLs keep no
-            // headers. A sandboxed iframe (no allow-scripts/allow-same-origin) blocks them.
-            <iframe
-              sandbox=""
-              title={path}
-              src={url}
-              className="h-96 w-full rounded-sm border-0 bg-white"
-            />
-          ) : (
-            <img src={url} alt={path} className="h-auto max-h-96 w-full rounded-sm object-contain object-left" />
-          )}
+          {// <img> rendering never executes SVG scripts (verified distinction in
+          // scripts/svg_security_probe.py: scripts only run on direct document navigation,
+          // which this UI never offers). <img> also scales the artwork to fit, where a
+          // fixed-height iframe cropped anything wider than the panel.
+          }
+          <img src={url} alt={path} className="h-auto max-h-96 w-full rounded-sm object-contain object-left" />
         </div>
       ) : null}
     </div>

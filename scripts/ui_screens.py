@@ -37,9 +37,9 @@ POSTER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630
     <circle cx="52" cy="108" r="10" fill="#7dd3a8" stroke="none"/>
     <circle cx="108" cy="108" r="10" fill="#7dd3a8" stroke="none"/>
   </g>
-  <text x="430" y="285" font-family="Inter, sans-serif" font-size="72" font-weight="700" fill="#f2f5f7">The cart that keeps</text>
-  <text x="430" y="370" font-family="Inter, sans-serif" font-size="72" font-weight="700" fill="#f2f5f7">its own receipts.</text>
-  <text x="430" y="440" font-family="Inter, sans-serif" font-size="26" fill="#9aa7b4">Line items, totals and a badge that counts what is there.</text>
+  <text x="430" y="285" font-family="Inter, sans-serif" font-size="56" font-weight="700" fill="#f2f5f7">The cart that keeps</text>
+  <text x="430" y="370" font-family="Inter, sans-serif" font-size="56" font-weight="700" fill="#f2f5f7">its own receipts.</text>
+  <text x="430" y="440" font-family="Inter, sans-serif" font-size="20" fill="#9aa7b4">Line items, totals and a badge that counts what is there.</text>
   <rect x="430" y="490" width="120" height="44" rx="22" fill="#7dd3a8"/>
   <text x="490" y="520" font-family="Inter, sans-serif" font-size="22" font-weight="600" fill="#0b0d10" text-anchor="middle">Shop</text>
 </svg>"""
@@ -163,14 +163,73 @@ with sync_playwright() as pw:
                 page.wait_for_timeout(1500)
         page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
         if name == "backlog":
-            # interaction capture: the Reject confirmation dialog
+            # interaction capture + behavior checks: the Reject confirmation dialog
             reject = page.locator("button", has_text="Reject").first
             if reject.count():
                 reject.click()
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(400)
+                focused = page.evaluate("document.activeElement?.textContent?.trim()")
+                print("DIALOG initial focus:", repr(focused), "PASS" if focused == "Keep it" else "FAIL")
+                page.keyboard.press("Tab")
+                t1 = page.evaluate("document.activeElement?.textContent?.trim()")
+                page.keyboard.press("Tab")
+                t2 = page.evaluate("document.activeElement?.textContent?.trim()")
+                print("DIALOG tab cycle:", repr(t1), "->", repr(t2),
+                      "PASS" if t1 == "Reject" and t2 == "Keep it" else "FAIL")
                 page.screenshot(path=str(out_dir / "ui-backlog-reject-dialog.png"))
                 page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+                gone = page.locator('[role="dialog"]').count() == 0
+                back = page.evaluate("document.activeElement?.textContent?.trim()")
+                print("DIALOG escape closes:", "PASS" if gone else "FAIL",
+                      "| focus returned:", repr(back), "PASS" if back == "Reject" else "FAIL")
+
+# error state: abort the next decide; dialog must stay open with the error
+                page.route("**/api/backlog/decide", lambda route: route.abort())
+                reject2 = page.locator("button", has_text="Reject").first
+                reject2.click()
+                page.wait_for_timeout(300)
+                page.locator('[role="dialog"] button', has_text="Reject").click()
+                page.wait_for_timeout(1000)
+                still_open = page.locator('[role="dialog"]').count() == 1
+                err_shown = page.locator('[role="dialog"] .text-destructive').count() == 1
+                print("DIALOG error state:", "PASS" if still_open and err_shown else "FAIL",
+                      f"(open={still_open}, error={err_shown})")
+                page.screenshot(path=str(out_dir / "ui-backlog-reject-error.png"))
+                page.unroute("**/api/backlog/decide")
+                page.locator('[role="dialog"] button', has_text="Keep it").click()
                 page.wait_for_timeout(400)
+
+# double-submit guard: two fast clicks must produce exactly one decide call
+                decide_calls = []
+                page.on("request", lambda req: decide_calls.append(req.url)
+                        if req.url.endswith("/api/backlog/decide") else None)
+                reject.first.click()
+                page.wait_for_timeout(400)
+                dialog_reject = page.locator('[role="dialog"] button', has_text="Reject")
+                dialog_reject.click()
+                dialog_reject.click(force=True)
+                page.wait_for_timeout(1500)
+                print("DIALOG double-submit:", len(decide_calls), "request(s)",
+                      "PASS" if len(decide_calls) == 1 else "FAIL")
+
+
+        if name == "home":
+            # reduced motion: animation durations collapse to ~0 under the preference
+            ctx = browser.new_context(viewport={"width": 1280, "height": 800},
+                                      reduced_motion="reduce")
+            rpage = ctx.new_page()
+            rpage.goto(ui_url + "#/backlog")
+            rpage.wait_for_timeout(1500)
+            r = rpage.locator("button", has_text="Reject").first
+            if r.count():
+                r.click()
+                dur = rpage.evaluate(
+                    "getComputedStyle(document.querySelector('[role=dialog] > div:last-child')).animationDuration")
+                print("DIALOG reduced-motion animation-duration:", dur,
+                      "PASS" if dur in ("0.01ms", "1e-05s", "0s", "0.00001s") else "FAIL")
+                rpage.screenshot(path=str(out_dir / "ui-backlog-reject-dialog-reduced-motion.png"))
+            ctx.close()
     browser.close()
 ui_proc.terminate()
 print("mission:", mission_id, final)

@@ -40,6 +40,7 @@ export function BacklogView() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -132,29 +133,35 @@ export function BacklogView() {
                       {f.status}
                     </span>
                   </div>
-                  {f.verification?.evidence ? (
-                    <pre className="mt-1 max-h-24 overflow-auto rounded-sm bg-muted/60 px-2 py-1 font-mono text-[10px] leading-relaxed text-muted-foreground">
-                      {f.verification.evidence}
-                    </pre>
-                  ) : null}
-                  {f.verification?.journey_changed ? (
-                    <p className="mt-1 text-xs text-warning">
-                      The journey check itself changed between replays - review what edited it
-                      before trusting this result. For hard integrity, keep the check outside
-                      the team's writable repo.
-                    </p>
-                  ) : null}
-                  {f.verification?.repo_revision ? (
-                    <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                      replayed against {f.verification.repo_revision}
-                    </p>
-                  ) : null}
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {f.brief}
                     {f.status === "awaiting-verification"
                       ? " Done - awaiting journey replay."
                       : ""}
                   </p>
+                  {f.verification?.journey_changed ? (
+                    <p className="mt-1 text-xs text-warning">
+                      The journey check changed between replays - review before trusting this
+                      result. Keep the check outside the team's repo for hard integrity.
+                    </p>
+                  ) : null}
+                  {f.verification?.evidence || f.verification?.repo_revision ? (
+                    <details className="mt-1.5">
+                      <summary className="cursor-pointer text-xs text-muted-foreground/70 hover:text-foreground">
+                        Replay evidence
+                      </summary>
+                      {f.verification?.evidence ? (
+                        <pre className="mt-1 max-h-24 overflow-auto rounded-sm bg-muted/60 px-2 py-1 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                          {f.verification.evidence}
+                        </pre>
+                      ) : null}
+                      {f.verification?.repo_revision ? (
+                        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                          replayed against {f.verification.repo_revision}
+                        </p>
+                      ) : null}
+                    </details>
+                  ) : null}
                   <p className="mt-1.5 text-xs text-muted-foreground/70">
                     {projectName(f.project)} · {provenance(f)}
                     {f.mission_id && f.status !== "delivered" ? " · work started" : ""}
@@ -177,8 +184,10 @@ export function BacklogView() {
                       <Button
                         variant="outline"
                         size="sm"
-                        loading={busy === f.id}
-                        onClick={() => setRejecting(f.id)}
+                        onClick={() => {
+                          setRejectError(null);
+                          setRejecting(f.id);
+                        }}
                       >
                         Reject
                       </Button>
@@ -267,22 +276,41 @@ export function BacklogView() {
       ) : null}
       <Dialog
         open={rejecting !== null}
-        onClose={() => setRejecting(null)}
+        onClose={() => {
+          if (busy) return; // never dismiss mid-action
+          setRejecting(null);
+        }}
         title="Reject this proposal?"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setRejecting(null)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => setRejecting(null)}
+            >
               Keep it
             </Button>
             <Button
               variant="destructive"
               size="sm"
-              loading={busy === rejecting}
+              loading={busy === rejecting && rejecting !== null}
               onClick={() => {
                 const id = rejecting;
-                if (!id) return;
-                setRejecting(null);
-                void act(id, () => decideFeature(id, "rejected"));
+                if (!id || busy) return; // double-submit guard
+                void (async () => {
+                  setBusy(id);
+                  try {
+                    await decideFeature(id, "rejected");
+                    await refresh();
+                    setRejecting(null);
+                    setRejectError(null);
+                  } catch (err) {
+                    setRejectError(err instanceof Error ? err.message : String(err));
+                  } finally {
+                    setBusy(null);
+                  }
+                })();
               }}
             >
               Reject
@@ -291,6 +319,9 @@ export function BacklogView() {
         }
       >
         The team drops it. You can ask again any time.
+        {rejectError ? (
+          <p className="mt-2 text-sm text-destructive">{rejectError}</p>
+        ) : null}
       </Dialog>
     </div>
   );

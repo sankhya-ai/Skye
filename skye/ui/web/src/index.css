@@ -148,8 +148,12 @@ body {
 /* Route-level view transition: quiet, fast, never theatrical. */
 .view-enter { animation: view-in var(--duration-normal) ease-out; }
 
+/* Reduced motion: kill every animation/transition outright - targeting individual
+   utility classes is fragile, and the preference is absolute. */
 @media (prefers-reduced-motion: reduce) {
-  .view-enter, .animate-\[dialog-in_180ms_cubic-bezier\(0\.16\,1\,0\.3\,1\)\], .animate-\[overlay-in_150ms_ease-out\] {
-    animation: none;
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
