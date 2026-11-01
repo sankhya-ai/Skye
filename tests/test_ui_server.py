@@ -659,3 +659,15 @@ def test_discussion_waiting_on_spans_pages(ui_server):
     discuss.ack(state_dir, "m-page", change["id"], author="tester")
     code, data = _req(url, "/api/missions/m-page/discussion?since=0&limit=1")
     assert data["entries"][0]["waiting_on"] == []
+
+
+def test_policy_endpoint_exposes_auto_pickup_state(ui_server, tmp_path, monkeypatch):
+    url, _ = ui_server
+    monkeypatch.setenv("SKYE_POLICY", str(tmp_path / "p.json"))
+    code, data = _req(url, "/api/policy")
+    assert code == 200
+    assert data["auto_pickup"]["enabled"] is False
+    (tmp_path / "p.json").write_text(json.dumps({"auto_pickup": {"enabled": True,
+                                                                 "include_reopened": True}}))
+    code, data = _req(url, "/api/policy")
+    assert data["auto_pickup"] == {"enabled": True, "include_reopened": True, "max_missions": 1}

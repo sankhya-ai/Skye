@@ -20,14 +20,14 @@ def _feature(tmp_path, **overrides):
 
 
 def _cfg(**overrides):
-    cfg = {"enabled": True, "include_reopened": False, "max_missions": 1, "adapter": ""}
+    cfg = {"enabled": True, "include_reopened": False, "max_missions": 1}
     cfg.update(overrides)
     return cfg
 
 
 def test_policy_defaults_pickup_fully_off():
     assert pickup.config(Policy()) == {"enabled": False, "include_reopened": False,
-                                       "max_missions": 1, "adapter": ""}
+                                       "max_missions": 1}
     assert pickup.config(Policy({"auto_pickup": "nonsense"}))["enabled"] is False
     assert pickup.config(Policy({"auto_pickup": {"enabled": True}}))["enabled"] is True
 
@@ -147,3 +147,39 @@ def test_simultaneous_poller_PROCESSES_exactly_one_reserves(tmp_path):
              for i in range(6)]
     codes = [p.wait() for p in procs]
     assert codes.count(0) == 1 and codes.count(3) == 5
+
+
+def test_poll_once_disabled_does_nothing(tmp_path):
+    path = _feature(tmp_path)
+    out = pickup.poll_once(policy=Policy(), picker="p", backlog_path=path,
+                           create_mission=lambda spec: "m-1")
+    assert out == {"enabled": False, "started": []}
+    assert not json.loads(path.read_text())["features"][0].get("mission_id")
+
+
+def test_poll_once_starts_eligible_and_respects_cap_and_reopened(tmp_path):
+    path = tmp_path / "backlog.json"
+    path.write_text(json.dumps({"features": [
+        {"id": "f-1", "title": "a", "brief": "b", "status": "approved", "decided_at": 1,
+         "thread": []},
+        {"id": "f-2", "title": "c", "brief": "d", "status": "approved", "decided_at": 1,
+         "thread": []},
+        {"id": "f-3", "title": "e", "brief": "f", "status": "approved", "decided_at": 1,
+         "reopen_count": 1,
+         "thread": [{"kind": "status", "ts": 99.0, "body": "reopened (occurrence 1); x"}]},
+    ]}))
+    runs = []
+    policy = Policy({"auto_pickup": {"enabled": True, "max_missions": 2}})
+    out = pickup.poll_once(policy=policy, picker="p", backlog_path=path,
+                           create_mission=lambda spec: "m-" + spec["goal"][0],
+                           start_run=runs.append)
+    assert [s["mission_id"] for s in out["started"]] == ["m-a", "m-c"]
+    assert sorted(runs) == ["m-a", "m-c"]
+    features = {f["id"]: f for f in json.loads(path.read_text())["features"]}
+    assert features["f-1"]["missions"] == ["m-a"]  # same history as mark_started
+    assert not features["f-3"].get("mission_id")   # reopened stays manual
+    assert any("auto_pickup" in e["body"] for e in features["f-1"]["thread"])
+    # cap: already one live mission -> only one more start
+    out = pickup.poll_once(policy=policy, picker="p", backlog_path=path,
+                           create_mission=lambda spec: "m-x", live_count=1)
+    assert len(out["started"]) == 0  # f-3 not eligible; cap reached check happens per ticket

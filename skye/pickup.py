@@ -43,11 +43,10 @@ def config(policy: Any) -> dict[str, Any]:
     """The auto_pickup block of a Policy, normalized. Absent or malformed means fully off."""
     raw = getattr(policy, "auto_pickup", None)
     if not isinstance(raw, dict):
-        return {"enabled": False, "include_reopened": False, "max_missions": 1, "adapter": ""}
+        return {"enabled": False, "include_reopened": False, "max_missions": 1}
     return {"enabled": bool(raw.get("enabled")),
             "include_reopened": bool(raw.get("include_reopened")),
-            "max_missions": max(1, int(raw.get("max_missions") or 1)),
-            "adapter": str(raw.get("adapter") or "")}
+            "max_missions": max(1, int(raw.get("max_missions") or 1))}
 
 
 def _lock_path(target: Path) -> Path:
@@ -141,6 +140,9 @@ def launch(feature_id: str, *, picker: str, path: str | Path | None = None,
                 backlog._write(target, data)
                 raise PickupError("mission creation failed; reservation cleared")
             feature["mission_id"] = mission_id
+            missions = feature.setdefault("missions", [])
+            if mission_id not in missions:
+                missions.append(mission_id)  # identical to backlog.mark_started's history
             feature.pop("pickup", None)
             backlog._thread(feature, actor="auto-pickup", kind="status",
                             body=f"started mission {mission_id} automatically under "
@@ -166,3 +168,39 @@ def abort(feature_id: str, *, picker: str, path: str | Path | None = None, reaso
                                     body=f"automatic start aborted: {reason}")
                 backlog._write(target, data)
             return
+
+
+def poll_once(*, policy: Any, picker: str, backlog_path: str | Path | None = None,
+              create_mission: Callable[[dict[str, Any]], str] | None = None,
+              start_run: Callable[[str], None] | None = None,
+              live_count: int = 0, now: float | None = None) -> dict[str, Any]:
+    """One picker tick. Disabled policy does nothing. Otherwise walk approved tickets in
+    backlog order, start each eligible one through reserve+launch (same ticket fields and
+    history as the manual /api/backlog/start path), and stop at the configured mission cap.
+    The caller reloads the Policy from disk before EVERY tick, so switching auto_pickup off
+    stops the next start instead of a stale in-memory copy. A ticket that fails to reserve
+    or launch is skipped with its thread note intact; one bad ticket never stalls the rest."""
+    cfg = config(policy)
+    if not cfg["enabled"]:
+        return {"enabled": False, "started": []}
+    started: list[dict[str, Any]] = []
+    running = live_count
+    for feature in backlog.list_features(backlog_path, status="approved"):
+        if running >= cfg["max_missions"]:
+            break
+        if eligible(feature, cfg):
+            continue
+        try:
+            reserve(feature["id"], picker=picker, path=backlog_path, now=now)
+        except PickupError:
+            continue  # another poller holds it, or it changed; both are fine
+        try:
+            result = launch(feature["id"], picker=picker, path=backlog_path,
+                            create_mission=create_mission)
+        except PickupError:
+            continue
+        if start_run:
+            start_run(result["mission_id"])
+        started.append(result)
+        running += 1
+    return {"enabled": True, "started": started}
