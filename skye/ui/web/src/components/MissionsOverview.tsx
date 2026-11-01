@@ -41,11 +41,13 @@ function MissionRowButton({ row, onOpen }: { row: MissionRow; onOpen: () => void
     >
       <span className="min-w-0">
         <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-base font-normal text-foreground">{row.id}</span>
+          <span className="truncate text-base font-normal text-foreground">
+            {row.goal || row.id}
+          </span>
         </span>
-        {row.goal ? (
-          <span className="mt-2 block truncate text-sm text-muted-foreground">{row.goal}</span>
-        ) : null}
+        <span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground/70">
+          {row.id}
+        </span>
         <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1.5">
             <span
