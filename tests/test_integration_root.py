@@ -217,8 +217,10 @@ def test_review_sendback_repairs_and_passes_through_real_root(root_server, tmp_p
     assert journal[-1]["status"] == "done"
 
 
-class SimulatedCrash(Exception):
-    """The process 'dies' right after the review-round journal entry is fsync'd."""
+class SimulatedCrash(BaseException):
+    """The process 'dies' right after a journal entry is fsync'd. BaseException, not Exception:
+    the dispatcher converts ordinary Exceptions into a failed Outcome (a settled result), and a
+    real process death is not a settled result - it must escape the same way here."""
 
 
 @requires_runtime
@@ -312,3 +314,145 @@ def test_crash_after_review_sendback_recovers_through_real_root(root_server, tmp
     entries = [json.loads(line) for line in journal_path.read_text().splitlines()]
     assert [e["event"] for e in entries].count("dispatched") == 2  # original + redo, no more
     assert entries[-1]["event"] == "settled" and entries[-1]["status"] == "done"
+
+
+def _root_crash_seam(monkeypatch, mission_mod, crash_on, fired):
+    """Crash the run right after the chosen journal entry is fsync'd."""
+    real_append = mission_mod.Journal.append
+
+    def append_then_crash(self, step, event, **fields):
+        real_append(self, step, event, **fields)
+        if event == crash_on and not fired["done"]:
+            fired["done"] = True
+            raise SimulatedCrash(f"process died right after journaling {event}")
+
+    monkeypatch.setattr(mission_mod.Journal, "append", append_then_crash)
+    return real_append
+
+
+def _simple_root_mission(tmp_path, mission_id):
+    mission_path = tmp_path / f"{mission_id}.json"
+    mission_path.write_text(json.dumps({
+        "id": mission_id, "goal": "write a file", "repo": str(tmp_path / f"ws-{mission_id}"),
+        "steps": [{"id": "build", "role": "developer", "adapter": "root",
+                   "goal": f"write out-{mission_id}.py", "gates": [],
+                   "contract_keys": ["summary"], "budget": {"max_steps": 6}}]}))
+    (tmp_path / f"ws-{mission_id}").mkdir()
+    return mission_path
+
+
+@requires_runtime
+def test_operator_redispatch_with_a_stale_root_job_launches_a_fresh_one(root_server, tmp_path, monkeypatch):
+    """The browser-exercised bug, on the real path: an interrupted step WITH a stale prior job
+    id on record, and the operator's explicit redispatch. The journal must say redispatch (not
+    reattached), and a NEW real Root job must run - the stale job's old result must not be
+    polled in as if it were this attempt's."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([
+        tool_call("w", "WriteFile", {"path": "out-m-redispatch.py", "content": "print('v1')\n"}),
+        text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "worker-job", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-redispatch")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    stale_jobs = {p.name for p in (home / "jobs").glob("*.json")}
+    assert len(stale_jobs) == 1  # the orphaned, soon-stale job
+
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None,
+                          state_dir=state_dir, redispatch="build")
+    assert outcome.status == "done", outcome.reason
+    now_jobs = {p.name for p in (home / "jobs").glob("*.json")}
+    assert len(now_jobs) == 2, "a FRESH Root job must run; the stale one must not be reused"
+    new_job = (now_jobs - stale_jobs).pop()
+    result = json.loads(outcome.steps["build"]["output"])
+    assert result["job"] == new_job.split(".")[0]
+    journal = [json.loads(l)
+               for l in (state_dir / "missions/m-redispatch/journal.jsonl").read_text().splitlines()]
+    kinds = [e["event"] for e in journal]
+    assert "redispatch" in kinds and "reattached" not in kinds
+    assert journal[kinds.index("redispatch")].get("superseded_job")
+
+
+@requires_runtime
+def test_reattach_through_real_root_reuses_the_live_prior_job(root_server, tmp_path, monkeypatch):
+    """The companion case: no operator decision, prior job id journaled - resume REATTACHES to
+    the real prior Root job (no duplicate job) and settles from its result."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([
+        tool_call("w", "WriteFile", {"path": "out-m-reattach.py", "content": "print('v1')\n"}),
+        text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "worker-job", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-reattach")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    prior_jobs = {p.name for p in (home / "jobs").glob("*.json")}
+    assert len(prior_jobs) == 1
+
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert {p.name for p in (home / "jobs").glob("*.json")} == prior_jobs  # no duplicate job
+    journal = (state_dir / "missions/m-reattach/journal.jsonl").read_text()
+    assert "reattached" in journal and "redispatch" not in journal
+
+
+@requires_runtime
+def test_interrupted_before_job_id_pauses_for_the_operator_through_real_root(root_server, tmp_path, monkeypatch):
+    """Crash after 'dispatched' but before the worker-job id lands: resume must NOT silently
+    re-run. The mission reports interrupted and names redispatch/reset; no new Root job."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "dispatched", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-interrupted")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    jobs_before = {p.name for p in (home / "jobs").glob("*.json")}
+
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "interrupted"
+    assert "mission redispatch" in outcome.reason and "mission reset" in outcome.reason
+    assert {p.name for p in (home / "jobs").glob("*.json")} == jobs_before  # nothing re-ran

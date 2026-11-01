@@ -52,8 +52,8 @@ class Policy:
             if rule.get("adapter") == contract["adapter"] and rule.get("role") in (contract["role"], "*"):
                 return ("ok", "")
         return ("rule",
-                f"no policy rule allows unattended {contract['adapter']}/{contract['role']}: "
-                "the owner confirms this contract first")
+                f"{contract['adapter']}/{contract['role']} is not on the team's unattended "
+                "list, so this run needs your approval before it starts")
 
     def unattended_ok(self, contract: dict[str, Any], running: int = 0) -> str:
         """Why a contract may not run unattended, or '' when it may. Adapter and role must both be
