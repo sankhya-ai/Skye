@@ -433,6 +433,36 @@ class UiHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(data)
                     return
+                if url.path == "/api/agents":
+                    # The team's agent definitions: builtins, active registry entries and
+                    # worker-proposed agents awaiting the owner's promote decision.
+                    from .. import agents as agents_module
+                    return self._json({"agents": agents_module.list_definitions()})
+                if url.path == "/api/tickets":
+                    # Same records as /api/backlog, with the ticket fields the detail views
+                    # need: labels, thread, missions history, reopen count.
+                    return self._json({"tickets": backlog.list_features(),
+                                       "pickup_due": [f["id"] for f in backlog.pickup_due()]})
+                if url.path.startswith("/api/missions/") and url.path.endswith("/discussion"):
+                    # The mission's team line. ?since=<seq> returns only newer entries plus
+                    # the cursor to poll with next; contract-change entries carry waiting_on
+                    # (the roles that still owe an ack) so the UI can show caught-up state.
+                    parts = url.path.strip("/").split("/")
+                    mission_id = parts[2]
+                    params = parse_qs(url.query)
+                    since = int((params.get("since") or ["0"])[0] or 0)
+                    limit = min(500, int((params.get("limit") or ["100"])[0] or 100))
+                    from .. import discuss as discuss_module
+                    page = discuss_module.read(self.state_dir, mission_id,
+                                               since=since, limit=limit)
+                    acked = {(e.get("ack_of"), e.get("author"))
+                             for e in page["entries"] if e.get("kind") == "ack"}
+                    for entry in page["entries"]:
+                        if entry.get("kind") == "contract-change":
+                            entry["waiting_on"] = [
+                                r for r in entry.get("requires_ack") or []
+                                if (entry.get("id"), r) not in acked]
+                    return self._json(page)
                 if url.path.startswith("/api/missions/"):
                     mission_id = url.path.rsplit("/", 1)[-1]
                     payload = mission_payload(self.state_dir, mission_id)

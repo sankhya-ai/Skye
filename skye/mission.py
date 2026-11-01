@@ -107,9 +107,14 @@ def load_mission(path: str | Path) -> dict[str, Any]:
             raise MissionError(f"step '{step_id}': {error}") from error
     mission_id = str(raw.get("id") or "").strip() or fingerprint(
         {"goal": raw.get("goal", ""), "steps": steps})[:16]
+    max_rounds = raw.get("max_review_rounds")
+    if max_rounds is not None and (not isinstance(max_rounds, int)
+                                   or not 0 <= max_rounds <= 8):
+        raise MissionError("max_review_rounds must be an integer 0-8")
     return {"id": mission_id, "goal": str(raw.get("goal") or "").strip(),
             "repo": str(raw.get("repo") or "").strip(), "steps": steps,
-            "project": str(raw.get("project") or "").strip()}
+            "project": str(raw.get("project") or "").strip(),
+            "max_review_rounds": max_rounds}
 
 
 class Journal:
@@ -149,11 +154,11 @@ class Journal:
             if not step:
                 continue
             if kind in ("dispatched", "settled", "needs-owner", "redispatch", "reattached",
-                        "skipped"):
+                        "skipped", "review-round"):
                 if kind == "dispatched" or states.get(step, {}).get("event") not in (
-                        "settled", "skipped"):
+                        "settled", "skipped", "review-round"):
                     states[step] = dict(entry)
-                elif kind in ("settled", "skipped"):
+                elif kind in ("settled", "skipped", "review-round"):
                     states[step] = dict(entry)
             elif kind == "worker-job" and step in states and states[step].get("event") in (
                     "dispatched", "reattached", "redispatch"):
@@ -250,29 +255,61 @@ def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[
     return ""
 
 
-def _handoff_brief(step: dict[str, Any], outcomes: dict[str, dict[str, Any]]) -> str:
+def _step_claims(step: dict[str, Any]) -> list[str]:
+    """The step's declared write-paths, lightly normalized (load_mission already validated them
+    through the contract validator)."""
+    return [c.strip().replace("\\", "/").lstrip("./").rstrip("/")
+            for c in (step.get("claims") or []) if str(c).strip()]
+
+
+def _handoff_brief(step: dict[str, Any], outcomes: dict[str, dict[str, Any]], *,
+                   mission_id: str = "", discussion_tail: str = "",
+                   unacked: list[dict[str, Any]] | None = None) -> str:
     base = str(step.get("brief") or step["goal"]).strip()
+    parts = [base]
+    if step.get("review_feedback"):
+        parts += ["", "## Review feedback - the reviewer sent this back; address every point",
+                  str(step["review_feedback"])[:OUTPUT_TAIL]]
+    if unacked:
+        parts += ["", "## Unacked contract changes for your role",
+                  "Read each one and ack with `skye ack` before building on it - or object on "
+                  "the team line instead of silently adapting:"]
+        for change in unacked[:4]:
+            parts.append(f"- {change.get('id')} by {change.get('author')}: "
+                         f"{str(change.get('body') or '')[:300]}")
     needs = step.get("needs") or []
-    if not needs:
-        return base
-    parts = [base, "", "## Handoff from previous steps"]
-    for need in needs:
-        outcome = outcomes.get(need) or {}
-        parts.append(f"### {need} ({outcome.get('role', '?')}) - {outcome.get('status', '?')}")
-        tail = (outcome.get("output") or "").strip()
-        if tail:
-            parts.append(tail[-OUTPUT_TAIL:])
+    if needs:
+        parts += ["", "## Handoff from previous steps"]
+        for need in needs:
+            outcome = outcomes.get(need) or {}
+            parts.append(f"### {need} ({outcome.get('role', '?')}) - {outcome.get('status', '?')}")
+            tail = (outcome.get("output") or "").strip()
+            if tail:
+                parts.append(tail[-OUTPUT_TAIL:])
+    if discussion_tail:
+        parts += ["", "## Team line (latest)", discussion_tail]
+    if mission_id:
+        say_cmd = f"skye say {mission_id} --as {step['role']}"
+        parts += ["", "## Talking to the team",
+                  f"This mission's team line: post with `{say_cmd} 'message'` "
+                  "(kind contract-change with --ack-needed ROLE when you change an interface "
+                  f"others depend on); read new posts with `skye hear {mission_id} --since <cursor>`. "
+                  "Running teammates do not see your post until they read it - post early, "
+                  "not after finishing."]
     return "\n".join(parts)
 
 
 def _step_contract(mission: dict[str, Any], step: dict[str, Any],
-                   outcomes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+                   outcomes: dict[str, dict[str, Any]], *,
+                   discussion_tail: str = "",
+                   unacked: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     contract = {k: step[k] for k in ("goal", "role", "adapter") }
     contract["repo"] = step.get("repo") or mission["repo"]
-    for optional in ("gates", "budget", "branch", "contract_keys"):
+    for optional in ("gates", "budget", "branch", "contract_keys", "claims"):
         if optional in step:
             contract[optional] = step[optional]
-    contract["brief"] = _handoff_brief(step, outcomes)
+    contract["brief"] = _handoff_brief(step, outcomes, mission_id=mission["id"],
+                                       discussion_tail=discussion_tail, unacked=unacked)
     return validate(contract)
 
 
@@ -333,6 +370,10 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         if kind == "skipped":
             outcomes[step_id] = {"status": "skipped", "role": step["role"],
                                  "reason": state.get("reason", ""), "output": ""}
+            continue
+        if kind == "review-round":
+            # Sent back by the reviewer before the crash: pending again, with the feedback.
+            pending[step_id] = {**step, "review_feedback": state.get("feedback", "")}
             continue
         pending[step_id] = step
 
@@ -397,6 +438,47 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                           f"this step, or `skye mission reset <file>` to start clean.")
             else:
                 ready.append(step)
+        # Claims gate: a step whose declared write-paths intersect another selected step's
+        # claims - or a RUNNING dispatch's claims anywhere on this state dir - waits for a
+        # later wave. Worklist order wins; held steps stay pending and are retried after the
+        # wave settles. This is the interference guard for parallel work: colliding writes are
+        # prevented by serialization, not merely logged after the fact.
+        held_reasons: list[str] = []
+        if ready:
+            from .contract import claims_conflict
+            from .registry import Registry
+            live_claims: list[tuple[list[str], str]] = []
+            try:
+                for record in Registry(state_dir).others():
+                    if record.get("claims"):
+                        live_claims.append((list(record["claims"]),
+                                            f"{record.get('role', '?')} "
+                                            f"({record.get('goal', '')[:60]})"))
+            except OSError:
+                pass  # no registry dir yet: no live claims exist
+            selected: list[dict[str, Any]] = []
+            selected_claims: list[tuple[list[str], str]] = []
+            for step in ready:
+                claims = _step_claims(step)
+                conflict = None
+                if claims:
+                    for other_claims, who in selected_claims + live_claims:
+                        hit = claims_conflict(claims, other_claims)
+                        if hit:
+                            conflict = f"claims '{hit[0]}' intersects '{hit[1]}' held by {who}"
+                            break
+                if conflict:
+                    journal.append(step["id"], "claim-held", reason=conflict, role=step["role"])
+                    emit(events.make_event("mission-step", {"goal": step["goal"],
+                                                            "role": step["role"],
+                                                            "adapter": step["adapter"]},
+                                           status="claim-held", reason=conflict, **context))
+                    held_reasons.append(f"{step['id']}: {conflict}")
+                else:
+                    selected.append(step)
+                    if claims:
+                        selected_claims.append((claims, f"step {step['id']}"))
+            ready = selected
         # Skips settled above remove steps from consideration; drop them from pending now.
         for step_id in list(pending):
             if step_id in outcomes:
@@ -412,6 +494,15 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                        reason=interrupted_reason, **context))
                 return MissionOutcome(status="interrupted", mission_id=mission["id"],
                                       reason=interrupted_reason, steps=outcomes)
+            # Nothing runnable because every ready step is claim-held against dispatches
+            # still running elsewhere: transient, not a failure - re-run when they settle.
+            if held_reasons:
+                reason = ("every runnable step is claim-held against work still running: "
+                          + "; ".join(held_reasons)
+                          + ". Re-run `skye mission run` once the holder settles.")
+                emit(events.make_event("mission", {}, status="blocked-claims", reason=reason, **context))
+                return MissionOutcome(status="blocked-claims", mission_id=mission["id"],
+                                      reason=reason, steps=outcomes)
             # Nothing ready and nothing running: every remaining step waits on a need that can no
             # longer settle (its dependency failed or was skipped in a way validation missed).
             leftover = ", ".join(sorted(pending))
@@ -423,11 +514,17 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         # Dispatch this wave concurrently. Contracts, briefs and the journal's dispatched entries
         # are prepared in worklist order on the main thread; only the blocking dispatch() calls
         # (worker run + gates) run on worker threads.
+        from . import discuss
+        discussion_tail = discuss.tail_text(state_dir, mission["id"])
+        wave_roles = [s["role"] for s in ready]
+        unacked = discuss.unacked(state_dir, mission["id"], wave_roles)
         contracts: dict[str, dict[str, Any]] = {}
         for step in ready:
             step_id = step["id"]
             context["step"] = step_id
-            contracts[step_id] = _step_contract(mission, step, outcomes)
+            contracts[step_id] = _step_contract(
+                mission, step, outcomes, discussion_tail=discussion_tail,
+                unacked=[c for c in unacked if step["role"] in (c.get("waiting_on") or [])])
             journal.append(step_id, "dispatched", fingerprint=fingerprint(contracts[step_id]))
             emit(events.make_event("mission-step", contracts[step_id], status="dispatched", **context))
 
@@ -459,6 +556,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             step_id = step["id"]
             context["step"] = step_id
             outcome = results[step_id]
+            if outcome.status == "claim-held":
+                # Another process claimed overlapping write-paths first (atomic registry check
+                # at dispatch). Hold the step: no settled entry, retried on the next wave or
+                # run. If every runnable step ends up held, the wave-loop exits blocked-claims.
+                journal.append(step_id, "claim-held", reason=outcome.reason, role=step["role"])
+                pending[step_id] = step
+                continue
             if outcome.status == "needs-owner":
                 journal.append(step_id, "needs-owner", reason=outcome.reason,
                                fingerprint=outcome.fingerprint)
@@ -467,6 +571,29 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 if wave_needs_owner is None:
                     wave_needs_owner = (step_id, outcome)
                 continue
+            # Review send-back: a reviewer asking for changes re-queues the step with the
+            # feedback, bounded per step by max_review_rounds and journaled every round - a
+            # redo edge, never a silent retry. No "settled" lands, so a crash mid-loop resumes
+            # into the redo (the journal's review-round entry re-seeds the feedback).
+            if outcome.status == "gate-failed":
+                review_gate = next((g for g in outcome.gates
+                                    if g.get("gate") == "review" and g.get("changes_requested")),
+                                   None)
+                if review_gate is not None:
+                    max_rounds = int(mission.get("max_review_rounds")
+                                     if mission.get("max_review_rounds") is not None
+                                     else policy.max_review_rounds)
+                    rounds = sum(1 for e in journal.entries()
+                                 if e.get("step") == step_id and e.get("event") == "review-round")
+                    if rounds < max_rounds:
+                        feedback = str(review_gate.get("feedback") or review_gate.get("detail") or "")
+                        journal.append(step_id, "review-round", round=rounds + 1,
+                                       feedback=feedback[:2000], role=step["role"])
+                        emit(events.make_event("mission-step", contracts[step_id],
+                                               status="review-round", reason=feedback[:160],
+                                               **context))
+                        pending[step_id] = {**step, "review_feedback": feedback[:2000]}
+                        continue
             journal.append(step_id, "settled", status=outcome.status, reason=outcome.reason,
                            output=outcome.worker_output[-4000:], gates=outcome.gates,
                            worker_job=outcome.worker_job, role=step["role"])
@@ -501,6 +628,20 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                title=feature["title"])
                 emit(events.make_event("mission-step", {}, status="feature-proposed",
                                        feature=feature["title"], **context))
+            # Agent proposals: a step may propose new specialist DEFINITIONS ({"propose_agents":
+            # [...]}). They land in the roles registry as PROPOSED - visible to the owner,
+            # unusable by contracts until promoted. A proposed step naming an unpromoted agent
+            # is rejected by ordinary contract validation; the owner promotes first.
+            from . import agents
+            accepted_agents, rejected_agents = agents.propose(
+                agents.extract_proposals(outcome.worker_output), mission=mission["id"])
+            for record in accepted_agents:
+                journal.append(step_id, "agent-accepted", agent=record["name"])
+                emit(events.make_event("mission-step", {}, status="agent-accepted",
+                                       reason=f"proposed agent '{record['name']}' awaits owner "
+                                              "promotion", **context))
+            for row in rejected_agents:
+                journal.append(step_id, "agent-rejected", agent=row["name"], reason=row["reason"])
             # Dynamic growth: a settled step may propose follow-up steps. Validated, capped,
             # journaled BEFORE they join the workflow - and dispatched later through the same
             # policy gate.
@@ -520,7 +661,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    reason=f"the mission already has {MAX_STEPS} steps (the cap)")
                     continue
                 spec = {k: proposal[k] for k in ("id", "role", "adapter", "goal")}
-                for optional in ("brief", "needs", "gates", "budget", "when", "repo", "contract_keys"):
+                for optional in ("brief", "needs", "gates", "budget", "when", "repo",
+                                 "contract_keys", "claims"):
                     if optional in proposal:
                         spec[optional] = proposal[optional]
                 journal.append(step_id, "step-accepted", spec=spec)
@@ -560,6 +702,15 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         record["end_truncated"] = end_truncated
         artifacts_path.write_text(json.dumps(record) + "\n", "utf-8")
     backlog.mark_delivered(mission["id"], journey_ok=journey_ok, evidence=journey_evidence)
+    # The ticket is the permanent home: the mission's team-line discussion folds into its
+    # thread so a later repair reads the working conversation, not just the outcomes.
+    from . import discuss
+    folded = backlog.fold_discussion(
+        mission["id"], discuss.read(state_dir, mission["id"], since=0, limit=500)["entries"])
+    if folded:
+        emit(events.make_event("mission", {}, status="discussion-folded",
+                               reason=f"{folded} team-line entr(ies) folded into the ticket",
+                               **context))
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 
 

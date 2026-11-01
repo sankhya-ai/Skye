@@ -13,13 +13,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
 from typing import Any
 
 DEFAULT_PATH = "skye.backlog.json"
-STATUSES = ("pending", "approved", "awaiting-verification", "delivered", "rejected")
+STATUSES = ("pending", "approved", "awaiting-verification", "delivered", "reopened",
+            "rejected")
+
+# Labels are how the team sorts a ticket without reading it: type:* (bug/feature/chore),
+# area:* (frontend/backend/...), severity:*, or a plain owner word. Validated like everything
+# else owner- or worker-supplied - a label is data other flows filter on, never free text.
+LABEL = re.compile(r"^[a-z][a-z0-9-]{0,29}(:[a-z][a-z0-9-]{0,29})?$")
+MAX_LABELS = 12
+THREAD_KINDS = ("comment", "evidence", "verdict", "status", "discussion")
+MAX_THREAD_BODY = 4000
 
 
 class BacklogError(ValueError):
@@ -82,8 +92,11 @@ def propose(entries: list[dict[str, Any]], *, project: str = "", mission: str = 
             continue
         record = {"id": f"feat-{secrets.token_hex(4)}", "project": project,
                   "title": title, "brief": brief, "status": "pending",
+                  "kind": str(entry.get("kind") or "feature"),
+                  "labels": validate_labels(entry.get("labels") or []),
                   "proposed_by": mission, "proposed_at": time.time(),
-                  "decided_at": None, "decision_note": "", "mission_id": ""}
+                  "decided_at": None, "decision_note": "", "mission_id": "",
+                  "missions": [], "thread": [], "reopen_count": 0}
         data["features"].append(record)
         existing.add((project, title.lower()))
         added.append(record)
@@ -102,9 +115,13 @@ def decide(feature_id: str, decision: str, *, note: str = "",
     data = _read(target)
     for feature in data["features"]:
         if feature.get("id") == feature_id:
-            if feature.get("status") != "pending":
+            if feature.get("status") not in ("pending", "reopened"):
                 raise BacklogError(
-                    f"feature {feature_id} is {feature.get('status')}; only pending features can be decided")
+                    f"feature {feature_id} is {feature.get('status')}; only pending or "
+                    "reopened tickets can be decided")
+            if feature.get("status") == "reopened":
+                _thread(feature, actor="owner", kind="status",
+                        body=f"repair {decision}" + (f": {note}" if note else ""))
             feature["status"] = decision
             feature["decided_at"] = time.time()
             feature["decision_note"] = note
@@ -119,6 +136,9 @@ def mark_started(feature_id: str, mission_id: str, path: str | Path | None = Non
     for feature in data["features"]:
         if feature.get("id") == feature_id:
             feature["mission_id"] = mission_id
+            missions = feature.setdefault("missions", [])
+            if mission_id and mission_id not in missions:
+                missions.append(mission_id)  # every attempt stays linked; the ticket outlives runs
             _write(target, data)
             return
 
@@ -206,3 +226,138 @@ def record_verification(feature_id: str, passed: bool, *, evidence: str = "",
             _write(target, data)
             return feature
     raise BacklogError(f"unknown feature {feature_id!r}")
+
+
+def validate_labels(labels: list[Any]) -> list[str]:
+    """Normalize and validate labels; bad labels fail loudly, they are filter data."""
+    if not isinstance(labels, list):
+        raise BacklogError("labels must be a list")
+    out: list[str] = []
+    for label in labels:
+        clean = str(label or "").strip().lower()
+        if not LABEL.match(clean):
+            raise BacklogError(
+                f"label {label!r} must be lowercase a-z 0-9 -, optionally namespaced (area:frontend)")
+        if clean not in out:
+            out.append(clean)
+        if len(out) > MAX_LABELS:
+            raise BacklogError(f"a ticket carries at most {MAX_LABELS} labels")
+    return out
+
+
+def set_labels(feature_id: str, labels: list[Any], *, actor: str = "owner",
+               path: str | Path | None = None) -> dict[str, Any]:
+    """Apply labels to a ticket (replaces the set), journaled on the thread."""
+    clean = validate_labels(labels)
+    target = Path(path or default_path())
+    data = _read(target)
+    for feature in data["features"]:
+        if feature.get("id") == feature_id:
+            old = feature.get("labels") or []
+            feature["labels"] = clean
+            if clean != old:
+                _thread(feature, actor=actor, kind="status",
+                        body=f"labels: {', '.join(clean) if clean else '(cleared)'}")
+            _write(target, data)
+            return feature
+    raise BacklogError(f"unknown feature {feature_id!r}")
+
+
+def _thread(feature: dict[str, Any], *, actor: str, kind: str, body: str,
+            refs: list[str] | None = None) -> dict[str, Any]:
+    entry = {"ts": time.time(), "actor": str(actor or "owner")[:40], "kind": kind,
+             "body": str(body or "")[:MAX_THREAD_BODY],
+             "refs": [str(r)[:300] for r in (refs or [])][:16]}
+    feature.setdefault("thread", []).append(entry)
+    return entry
+
+
+def add_thread(feature_id: str, *, actor: str, kind: str, body: str,
+               refs: list[str] | None = None, path: str | Path | None = None) -> dict[str, Any]:
+    """Append to the ticket's permanent thread: discussion, evidence, verdicts, status notes.
+    The thread is the ticket's memory - later repairs read it instead of re-asking."""
+    if kind not in THREAD_KINDS:
+        raise BacklogError(f"thread kind must be one of {THREAD_KINDS}, got {kind!r}")
+    if not str(body or "").strip():
+        raise BacklogError("an empty thread entry says nothing")
+    target = Path(path or default_path())
+    data = _read(target)
+    for feature in data["features"]:
+        if feature.get("id") == feature_id:
+            entry = _thread(feature, actor=actor, kind=kind, body=body, refs=refs)
+            _write(target, data)
+            return entry
+    raise BacklogError(f"unknown feature {feature_id!r}")
+
+
+def reopen(feature_id: str, *, evidence: str, labels: list[Any] | None = None,
+           actor: str = "owner", path: str | Path | None = None) -> dict[str, Any]:
+    """A bug on DELIVERED work reopens the SAME ticket - never a fresh, context-free one.
+
+    The ticket keeps its whole thread (the original discussion, work and review), gains the
+    bug evidence and labels, and moves delivered -> reopened. From there the owner decides
+    (decide(): reopened -> approved) and the normal intake starts the repair mission - with
+    the original context attached. Reopening any other status is an error: pending/approved
+    work is not delivered yet, and a rejected ticket stays rejected."""
+    target = Path(path or default_path())
+    data = _read(target)
+    for feature in data["features"]:
+        if feature.get("id") == feature_id:
+            if feature.get("status") != "delivered":
+                raise BacklogError(
+                    f"feature {feature_id} is {feature.get('status')}; only delivered work reopens "
+                    "(use send_back for work awaiting verification)")
+            feature["status"] = "reopened"
+            feature["mission_id"] = ""  # the delivered attempt is history (missions[] keeps it)
+            feature["reopen_count"] = int(feature.get("reopen_count") or 0) + 1
+            if labels:
+                merged = list(feature.get("labels") or [])
+                for label in validate_labels(labels):
+                    if label not in merged:
+                        merged.append(label)
+                feature["labels"] = merged[:MAX_LABELS]
+            _thread(feature, actor=actor, kind="evidence",
+                    body=str(evidence or "").strip() or "bug reported (no detail given)")
+            _thread(feature, actor=actor, kind="status",
+                    body=f"reopened (occurrence {feature['reopen_count']}); "
+                         "the owner decides whether the repair runs")
+            _write(target, data)
+            return feature
+    raise BacklogError(f"unknown feature {feature_id!r}")
+
+
+def fold_discussion(mission_id: str, entries: list[dict[str, Any]], *,
+                    path: str | Path | None = None, cap: int = 50) -> int:
+    """Fold a settled mission's team-line discussion into its ticket's thread, so the ticket -
+    the permanent home - keeps the team's working conversation, not just outcomes.
+    Returns how many entries landed (0 when no ticket links this mission)."""
+    target = Path(path or default_path())
+    data = _read(target)
+    folded = 0
+    for feature in data["features"]:
+        linked = feature.get("mission_id") == mission_id or mission_id in (feature.get("missions") or [])
+        if not linked:
+            continue
+        thread = feature.setdefault("thread", [])
+        already = {e.get("refs", [None])[0] for e in thread if e.get("kind") == "discussion"}
+        for entry in entries[:cap]:
+            marker = str(entry.get("id") or "")
+            if marker and marker in already:
+                continue
+            thread.append({"ts": entry.get("ts", time.time()),
+                           "actor": str(entry.get("author") or "?"),
+                           "kind": "discussion",
+                           "body": f"[{entry.get('kind', 'note')}] {entry.get('body', '')}"[:MAX_THREAD_BODY],
+                           "refs": [marker] if marker else []})
+            folded += 1
+    if folded:
+        _write(target, data)
+    return folded
+
+
+def pickup_due(*, path: str | Path | None = None) -> list[dict[str, Any]]:
+    """Reopened tickets whose repair the owner APPROVED but that have not started: the queue a
+    human (or a deliberately configured automation, outside this repo's defaults) picks from.
+    Read-only - listing due work never starts it; starting rides the normal intake and policy."""
+    return [f for f in list_features(path)
+            if f.get("status") == "approved" and f.get("reopen_count") and not f.get("mission_id")]

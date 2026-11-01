@@ -41,9 +41,13 @@ def _read(path: str | Path | None = None) -> dict[str, Any]:
 
 
 def known(path: str | Path | None = None) -> tuple[str, ...]:
-    """Every role a contract may name: builtins plus the owner's registry roles."""
+    """Every role a contract may name: builtins plus the owner's ACTIVE registry roles.
+    A worker-PROPOSED agent (status "proposed") is deliberately absent: it becomes a
+    capability only when the owner promotes it (agents.promote / `skye agents promote`)."""
     names = list(BUILTIN_ROLES)
     for entry in _read(path)["roles"]:
+        if entry.get("status", "active") == "proposed":
+            continue
         name = str(entry.get("name") or "")
         if name and name not in names:
             names.append(name)
@@ -68,7 +72,10 @@ def describe(path: str | Path | None = None) -> list[dict[str, Any]]:
         if not name:
             continue
         row = {"name": name, "source": "registry",
-               "description": str(entry.get("description") or "")}
+               "description": str(entry.get("description") or ""),
+               "status": str(entry.get("status") or "active"),
+               "proposed_by": str(entry.get("proposed_by") or ""),
+               "has_instructions": bool(str(entry.get("instructions") or "").strip())}
         for i, existing in enumerate(out):
             if existing["name"] == name:  # a registry entry REFINES a builtin's catalogue
                 out[i] = {**row, "source": "registry-override"}
@@ -92,6 +99,16 @@ def add(entry: dict[str, Any], path: str | Path | None = None) -> dict[str, Any]
     record = {"name": name, "description": str(entry.get("description") or "").strip(),
               "catalogue": {"tools": [str(t) for t in tools],
                             "writable": bool(catalogue.get("writable"))}}
+    # Definition fields (the agent schema): instructions are the capability text, extends
+    # composes on a base definition, status gates usability ("proposed" cannot run),
+    # source/proposed_by keep provenance. Missing fields default to an active owner role -
+    # back-compatible with registries written before the schema existed.
+    record["instructions"] = str(entry.get("instructions") or "").strip()
+    record["extends"] = str(entry.get("extends") or "").strip()
+    record["version"] = int(entry.get("version") or 1)
+    record["status"] = str(entry.get("status") or "active")
+    record["source"] = str(entry.get("source") or "owner")
+    record["proposed_by"] = str(entry.get("proposed_by") or "")
     target = Path(path or default_path())
     data = _read(target)
     data["roles"] = [r for r in data["roles"] if r.get("name") != name]
@@ -114,3 +131,21 @@ def instructions_for(role: str, path: str | Path | None = None) -> str:
         if entry.get("name") == role:
             return str(entry.get("instructions") or "").strip()
     return ""
+
+
+def promote(name: str, path: str | Path | None = None) -> dict[str, Any]:
+    """Activate a worker-proposed agent: the owner's decision that this capability may run.
+    Only proposed -> active; anything else is an error, never a silent no-op."""
+    target = Path(path or default_path())
+    data = _read(target)
+    for entry in data["roles"]:
+        if entry.get("name") == name:
+            if entry.get("status", "active") != "proposed":
+                raise RoleError(f"agent {name!r} is not waiting for promotion "
+                                f"(status: {entry.get('status', 'active')})")
+            entry["status"] = "active"
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
+            tmp.replace(target)
+            return entry
+    raise RoleError(f"unknown agent {name!r}")

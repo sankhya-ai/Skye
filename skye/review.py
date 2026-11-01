@@ -20,19 +20,23 @@ import re
 from typing import Any
 
 VERDICT_INSTRUCTION = (
-    'End your review with a JSON block on a single line: {"verdict": "pass"} or '
+    'End your review with a JSON block on a single line: {"verdict": "pass"}, '
+    '{"verdict": "request-changes", "feedback": ["what to change"]}, or '
     '{"verdict": "block", "reasons": ["why"]}. Only an explicit "pass" verdict passes the '
-    "review gate; a missing or malformed verdict fails it."
+    "review gate; a missing or malformed verdict fails it. Request changes when the work is "
+    "close and the author can fix specific points; block only what is wrong, unsafe or "
+    "off-brief."
 )
 
-_JSON_VERDICT = re.compile(r'"verdict"\s*:\s*"(pass|block)"')
-_LINE_VERDICT = re.compile(r"^\s*VERDICT\s*:\s*(pass|block)\s*$", re.IGNORECASE | re.MULTILINE)
-_REASONS = re.compile(r'"reasons"\s*:\s*\[(.*?)\]', re.DOTALL)
+_JSON_VERDICT = re.compile(r'"verdict"\s*:\s*"(pass|block|request-changes)"')
+_LINE_VERDICT = re.compile(r"^\s*VERDICT\s*:\s*(pass|block|request-changes)\s*$", re.IGNORECASE | re.MULTILINE)
+_REASONS = re.compile(r'"(?:reasons|feedback)"\s*:\s*\[(.*?)\]', re.DOTALL)
 
 
 def parse_verdict(output: str) -> tuple[str | None, str]:
     """Extract the reviewer's verdict from worker output. Returns (verdict, reasons) where
-    verdict is 'pass', 'block', or None when the output carries no parseable verdict.
+    verdict is 'pass', 'block', 'request-changes', or None when the output carries no parseable
+    verdict. For 'request-changes' the second element carries the feedback points.
 
     Handles the Root adapter's JSON envelope (the model's reply is a string field inside the
     adapter's result JSON) as well as raw stdout from the CLI adapters. The LAST verdict wins -

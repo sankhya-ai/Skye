@@ -594,3 +594,41 @@ def test_verification_is_bound_to_mission_revision_and_check(ui_server, tmp_path
         assert payload["feature"]["verification"]["journey_changed"] is True
     finally:
         policy_path_default().unlink(missing_ok=True)
+
+
+def test_agents_and_tickets_endpoints(ui_server, monkeypatch, tmp_path):
+    url, _ = ui_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    from skye import backlog
+    feature = backlog.propose([{"title": "Cart", "brief": "b", "labels": ["area:frontend"]}],
+                              project="web")[0]
+    code, data = _req(url, "/api/agents")
+    assert code == 200
+    names = {a["name"] for a in data["agents"]}
+    assert {"senior-dev", "backend-dev", "frontend-dev", "pm"} <= names
+    code, data = _req(url, "/api/tickets")
+    assert code == 200
+    ticket = next(t for t in data["tickets"] if t["id"] == feature["id"])
+    assert ticket["labels"] == ["area:frontend"]
+    assert data["pickup_due"] == []
+
+
+def test_discussion_endpoint_reads_the_team_line_with_acks(ui_server):
+    url, state_dir = ui_server
+    from skye import discuss
+    change = discuss.post(state_dir, "m-ui", author="backend-dev", kind="contract-change",
+                          body="api v2", requires_ack=["frontend-dev"])
+    code, data = _req(url, "/api/missions/m-ui/discussion?since=0")
+    assert code == 200
+    assert data["entries"][0]["id"] == change["id"]
+    assert data["entries"][0]["waiting_on"] == ["frontend-dev"]
+    assert data["cursor"] == change["seq"]
+    discuss.ack(state_dir, "m-ui", change["id"], author="frontend-dev")
+    code, data = _req(url, "/api/missions/m-ui/discussion?since=0")
+    assert data["entries"][-1]["kind"] == "ack"
+    # after the ack, the change no longer waits on frontend-dev
+    first = next(e for e in data["entries"] if e["kind"] == "contract-change")
+    assert first["waiting_on"] == []
+    # polling from the cursor returns only newer entries
+    code, data = _req(url, f"/api/missions/m-ui/discussion?since={change['seq']}")
+    assert [e["kind"] for e in data["entries"]] == ["ack"]
