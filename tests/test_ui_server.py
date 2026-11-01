@@ -240,3 +240,18 @@ def test_roles_api_lists_and_creates_dynamic_roles(ui_server, tmp_path, monkeypa
     status, payload = _req(url, "/api/roles", method="POST",
                            body={"role": {"name": "NO SPACES"}})
     assert status == 400 and "role name" in payload["error"]
+
+
+def test_create_mission_with_plan_builds_a_planner_step(ui_server, tmp_path):
+    """The composer never hardcodes a pipeline: {"plan": true} yields ONE planner step whose
+    worker proposes the real steps at runtime via propose_steps."""
+    url, state_dir = ui_server
+    status, payload = _req(url, "/api/missions", method="POST",
+                           body={"goal": "ship a landing page", "plan": True})
+    assert status == 200, payload
+    snapshot = json.loads(
+        (state_dir / "missions" / payload["id"] / "mission.json").read_text())
+    [step] = snapshot["steps"]
+    assert step["id"] == "plan" and step["role"] == "pm"
+    assert "propose_steps" in step["brief"] and "ship a landing page" in step["brief"]
+    assert "needs" not in step  # no fixed pipeline - the planner decides the shape

@@ -124,7 +124,7 @@ def main() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page(viewport={"width": 1100, "height": 900})
-        page.goto(ui_url)
+        page.goto(ui_url + "#/missions")
         page.wait_for_selector('[data-testid="mission-row-ui-demo"]', timeout=15000)
         page.screenshot(path=str(out_dir / "01-overview-needs-owner.png"), full_page=True)
 

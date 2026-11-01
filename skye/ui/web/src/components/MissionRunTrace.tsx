@@ -89,7 +89,7 @@ function StepIcon({ state }: { state: string }) {
     case "dispatched":
       return <Loader2 className={cn(cls, "animate-spin text-info")} />;
     case "needs-owner":
-      return <CircleAlert className={cn(cls, "text-amber-400")} />;
+      return <CircleAlert className={cn(cls, "text-amber-600")} />;
     case "interrupted":
       return <CircleAlert className={cn(cls, "text-destructive")} />;
     default:
@@ -109,7 +109,7 @@ function stateBadge(state: string, approved?: boolean) {
     case "dispatched":
       return <Badge variant="info">running</Badge>;
     case "needs-owner":
-      return <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-300">needs owner</Badge>;
+      return <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700">needs owner</Badge>;
     case "interrupted":
       return <Badge variant="destructive">interrupted</Badge>;
     case "skipped":

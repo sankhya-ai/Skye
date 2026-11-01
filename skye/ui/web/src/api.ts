@@ -71,3 +71,33 @@ export const resumeMission = (id: string) =>
   api<{ resumed: boolean }>(`/api/missions/${id}/resume`, { method: "POST", body: "{}" });
 export const redispatchStep = (id: string, step: string) =>
   api<{ redispatched: string }>(`/api/missions/${id}/redispatch`, { method: "POST", body: JSON.stringify({ step }) });
+
+export type RoleRow = {
+  name: string;
+  source: string;
+  description: string;
+  steps: number;
+  done: number;
+  failed: number;
+  catalogue: { tools: string[]; writable: boolean };
+};
+
+export const getRoles = () =>
+  api<{ roles: RoleRow[]; adapters: string[] }>("/api/roles");
+export const createRole = (role: {
+  name: string;
+  description: string;
+  catalogue: { tools: string[]; writable: boolean };
+}) => api<{ saved: boolean; role: RoleRow }>("/api/roles", {
+  method: "POST",
+  body: JSON.stringify({ role }),
+});
+export const getPolicy = () =>
+  api<{ raw: Record<string, unknown>; path: string; max_concurrent: number }>("/api/policy");
+export const savePolicy = (policy: Record<string, unknown>) =>
+  api<{ saved: boolean }>("/api/policy", { method: "POST", body: JSON.stringify({ policy }) });
+export const createMission = (spec: { goal: string; plan?: boolean; run?: boolean }) =>
+  api<{ id: string; running: boolean }>("/api/missions", {
+    method: "POST",
+    body: JSON.stringify(spec),
+  });

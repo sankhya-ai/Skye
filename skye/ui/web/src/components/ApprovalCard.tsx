@@ -39,7 +39,7 @@ export function ApprovalCard({
       <button
         type="button"
         disabled={busy}
-        className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+        className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-800 transition hover:bg-amber-500/20 disabled:opacity-50"
         onClick={async () => {
           setBusy(true);
           setError(null);

@@ -1,19 +1,19 @@
 @import "tailwindcss";
 
-/* shadcn-style tokens (dark), matching the palette used by the source screens
-   in block/buzz and block/berd so adapted components keep their look. */
+/* Light canvas adapted from block/berd's visual language (Apache-2.0, see skye/ui/NOTICE):
+   #f5f5f5 dot-grid canvas, white cards, #242424 foreground, #666666 muted, #e8e8e8 borders. */
 :root {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --ring: oklch(0.556 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --success: oklch(0.696 0.17 162.48);
-  --info: oklch(0.696 0.12 240);
+  --background: #f5f5f5;
+  --foreground: #242424;
+  --card: #ffffff;
+  --card-foreground: #242424;
+  --muted: #efefef;
+  --muted-foreground: #666666;
+  --border: #e8e8e8;
+  --ring: #242424;
+  --destructive: #c0392b;
+  --success: #1e8e5a;
+  --info: #2563eb;
   --radius: 0.625rem;
 }
 
@@ -37,5 +37,16 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+/* berd's signature dot-grid canvas (.bg-dot-grid, 24px) */
+.bg-dot-grid {
+  background-image: radial-gradient(circle, #cbcbcb 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* berd's card shadow */
+.shadow-card {
+  box-shadow: 0 2px 8px rgba(76, 76, 76, 0.15);
 }

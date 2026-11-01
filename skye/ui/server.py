@@ -145,14 +145,37 @@ def policy_path_default() -> Path:
     return Path(os.environ.get("SKYE_POLICY", "").strip() or "skye.policy.json")
 
 
+PLANNER_BRIEF = """You are the planner for this goal:
+
+{goal}
+
+Break it into concrete specialist steps and reply with JSON exactly of the form
+{{"propose_steps": [{{"id": "...", "role": "...", "adapter": "...", "goal": "...",
+"brief": "...", "needs": ["..."]}}]}}.
+Name roles from the team's role registry (builtins plus owner-defined specialists),
+keep every step small and self-contained, and use needs for steps that depend on an
+earlier step's outcome. Do not do the work yourself - your reply becomes the workflow.
+"""
+
+
 def create_mission(state_dir: Path, spec: dict) -> str:
     """Validate a UI-authored mission exactly like a mission file, then snapshot it so
-    resume/run read the recorded definition. Returns the mission id."""
+    resume/run read the recorded definition. With {"plan": true} the mission starts as a
+    single PLANNER step whose worker proposes the real workflow at runtime through the
+    mission engine's validated propose-steps machinery - nothing is hardcoded here.
+    Returns the mission id."""
     import tempfile
+    goal = str(spec.get("goal") or "").strip()
+    steps = spec.get("steps") or []
+    if spec.get("plan"):
+        steps = [{"id": "plan", "role": str(spec.get("planner_role") or "pm"),
+                  "adapter": str(spec.get("adapter") or "root"), "goal": goal,
+                  "brief": PLANNER_BRIEF.format(goal=goal), "gates": [],
+                  "budget": {"max_steps": 12}}]
     mission_id = str(spec.get("id") or "").strip() or f"mission-{secrets.token_hex(4)}"
-    mission = {"id": mission_id, "goal": str(spec.get("goal") or "").strip(),
+    mission = {"id": mission_id, "goal": goal,
                "repo": str(spec.get("repo") or "").strip() or os.getcwd(),
-               "steps": spec.get("steps") or []}
+               "steps": steps}
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
         json.dump(mission, handle)
         temp_path = handle.name
