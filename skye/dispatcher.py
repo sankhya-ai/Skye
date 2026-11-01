@@ -199,8 +199,9 @@ def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, brid
         # A reviewer CONTRACT through the same dispatch path: a second worker judges the diff, so
         # no worker grades its own work and Skye judges nothing itself. The reviewer runs inside
         # this dispatch's concurrency slot (sequentially, after the worker finished - real
-        # concurrency stays one), and its verdict decides the gate: only an explicit "approve"
-        # passes; "reject", a missing verdict, or a reviewer that never finished all fail.
+        # concurrency stays one), and its verdict decides the gate: only an explicit "pass"
+        # opens it; "block", a missing/malformed/unknown verdict, or a reviewer that never
+        # finished all fail.
         verdict = dispatch(review.build_review_contract(spec, policy.review_role or "reviewer"),
                            policy, runner=runner, bridge=bridge, approvals_path=approvals_path,
                            event_context=event_context)
@@ -220,8 +221,22 @@ def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, brid
             # The send-back: not a pass, not a hard fail. The gate does not open, and the
             # MISSION layer decides whether the step gets another bounded round with this
             # feedback (a redo edge, journaled) or the failure stands.
+            # Two fail-closed cases never produce a redo edge:
+            if not reasons.strip():
+                # ...no usable feedback: a blind redo would replay the identical brief.
+                return {"gate": "review", "ok": False,
+                        "detail": "reviewer requested changes without usable feedback; a blind "
+                                  "redo would replay the identical brief, so the gate fails "
+                                  "closed instead", "reviewer": tail}
+            if spec.get("role") == (policy.review_role or "reviewer"):
+                # ...an invalid redo target: the step under review IS the reviewer, so the
+                # send-back would route the reviewer's work to itself.
+                return {"gate": "review", "ok": False,
+                        "detail": "reviewer requested changes on a review step; a review step "
+                                  "cannot be sent back to itself, so the gate fails closed "
+                                  "instead", "reviewer": tail}
             return {"gate": "review", "ok": False, "changes_requested": True,
-                    "detail": f"reviewer requested changes: {reasons or 'no feedback given'}",
+                    "detail": f"reviewer requested changes: {reasons}",
                     "feedback": reasons, "reviewer": tail}
         return {"gate": "review", "ok": False,
                 "detail": "the reviewer finished without a parseable verdict; the review gate "
