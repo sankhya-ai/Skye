@@ -37,14 +37,20 @@ function statesFromJournal(journal: JournalEntry[]): Map<string, StepState> {
     switch (entry.event) {
       case "dispatched":
         next.state = "dispatched";
+        next.reason = undefined;  // a new attempt supersedes the previous one's reason
+        next.status = undefined;
         next.at = entry.ts;
         break;
       case "reattached":
         next.state = "dispatched";
+        next.reason = undefined;  // a new attempt supersedes the previous one's reason
+        next.status = undefined;
         next.at = entry.ts;
         break;
       case "redispatch":
         next.state = "dispatched";
+        next.reason = undefined;  // a new attempt supersedes the previous one's reason
+        next.status = undefined;
         next.at = entry.ts;
         break;
       case "settled":

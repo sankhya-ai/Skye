@@ -50,8 +50,10 @@ export function AgentsView() {
       <div>
         <h2 className="text-lg font-medium">Agents</h2>
         <p className="text-sm text-muted-foreground">
-          Every role here really dispatches. Add a specialist and it validates in contracts
-          immediately - roles are defined by the team, not hardcoded.
+          Every role here really dispatches. The owner defines specialists in the roles
+          registry; a new role validates in contracts immediately. Tool lists scope which
+          tools a worker is offered through its adapter's CLI configuration - they are not
+          an OS security boundary.
         </p>
       </div>
       {error ? (
@@ -68,9 +70,9 @@ export function AgentsView() {
                 {role.source === "registry-override" ? "custom (refines builtin)" : role.source}
               </Badge>
               {role.catalogue.writable ? (
-                <Badge variant="info">writable</Badge>
+                <Badge variant="info">Write/Edit tools</Badge>
               ) : (
-                <Badge variant="secondary">read-only</Badge>
+                <Badge variant="secondary">no Write/Edit tools</Badge>
               )}
             </div>
             {role.description ? (
@@ -115,7 +117,7 @@ export function AgentsView() {
             checked={writable}
             onChange={(e) => setWritable(e.target.checked)}
           />
-          May write files (otherwise read-only)
+          Offer Write/Edit tools (otherwise read tools only)
         </label>
         <button
           type="button"

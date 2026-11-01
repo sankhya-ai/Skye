@@ -102,7 +102,7 @@ export default function App() {
           ))}
         </nav>
         <p className="mt-auto px-3 text-[11px] leading-4 text-muted-foreground">
-          Local only - every run is journaled and recoverable.
+          Local only. Runs are journaled; interrupted work waits for an explicit operator decision.
         </p>
       </aside>
       <main className="bg-dot-grid min-w-0 flex-1">
