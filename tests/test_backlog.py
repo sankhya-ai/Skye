@@ -1,3 +1,5 @@
+import pytest
+
 import json
 
 from skye import backlog
@@ -83,3 +85,22 @@ def test_pending_feature_is_not_deliverable(tmp_path):
     backlog.mark_started(feature["id"], "mission-1", path=path)
     backlog.mark_delivered("mission-1", journey_ok=True, path=path)
     assert backlog.list_features(path)[0]["status"] == "pending"
+
+
+def test_send_back_only_from_awaiting_verification(tmp_path):
+    path = str(tmp_path / "skye.backlog.json")
+    feature = backlog.propose([{"title": "Fix", "brief": "b"}], mission="s", path=path)[0]
+    with pytest.raises(backlog.BacklogError):
+        backlog.send_back(feature["id"], path=path)
+    backlog.decide(feature["id"], "approved", path=path)
+    with pytest.raises(backlog.BacklogError):
+        backlog.send_back(feature["id"], path=path)
+    backlog.mark_started(feature["id"], "m1", path=path)
+    backlog.mark_delivered("m1", journey_ok=False, path=path)
+    sent = backlog.send_back(feature["id"], note="replay failed", path=path)
+    assert sent["status"] == "approved" and sent["mission_id"] == ""
+    # and the next attempt can start and deliver through a passing replay
+    backlog.mark_started(feature["id"], "m2", path=path)
+    backlog.mark_delivered("m2", journey_ok=False, path=path)
+    done = backlog.record_verification(feature["id"], True, evidence="journey clean", path=path)
+    assert done["status"] == "delivered"

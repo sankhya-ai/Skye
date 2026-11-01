@@ -33,7 +33,7 @@ class RootAdapter(Adapter):
     FORWARDED_BUDGET = ("max_cost_usd",)
 
     def __init__(self, base_url: str = "", *, token: str = "",
-                 root_home: str | Path = "", poll_seconds: float = 2.0) -> None:
+                 root_home: str | Path = "", poll_seconds: float = 0.0) -> None:
         # Configuration by environment (the same names Root itself uses where they apply):
         # SKYE_ROOT_URL, SKYE_ROOT_TOKEN, or SKYE_ROOT_HOME/TURA_CODE_HOME to read <home>/token.
         import os  # noqa: PLC0415
@@ -47,6 +47,12 @@ class RootAdapter(Adapter):
             except OSError:
                 token = ""
         self.token = token
+        # SKYE_ROOT_POLL_SECONDS overrides the 2s default job poll (tests/demos want faster).
+        if not poll_seconds:
+            try:
+                poll_seconds = float(os.environ.get("SKYE_ROOT_POLL_SECONDS", "") or 2.0)
+            except ValueError:
+                poll_seconds = 2.0
         self.poll_seconds = poll_seconds
 
     def _call(self, method: str, path: str, body: dict | None = None, timeout: int = 30) -> dict:

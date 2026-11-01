@@ -90,7 +90,9 @@ def missions_overview(state_dir: Path) -> list[dict]:
                 continue
             journal = payload["journal"]
             project_id = payload["mission"].get("project", "")
-            last = journal[-1]["ts"] if journal else None
+            # journal ts is numeric epoch; the API contract (and the sidebar's string sort)
+            # expects a string - normalize at the boundary, never leak the raw type.
+            last = str(journal[-1]["ts"]) if journal else None
             status = payload["status"]
             dynamic_ids = {str(s.get("id")) for s in payload["dynamic_steps"]}
             authored_ids = {s["id"] for s in status["steps"]}
@@ -433,6 +435,13 @@ class UiHandler(BaseHTTPRequestHandler):
                                    "command": policy.journey_command,
                                    "evidence": result["evidence"],
                                    "timed_out": result["timed_out"]})
+            if url.path == "/api/backlog/rework":
+                try:
+                    feature = backlog.send_back(str(body.get("feature") or ""),
+                                                note=str(body.get("note") or ""))
+                except backlog.BacklogError as error:
+                    return self._json({"error": str(error)}, 409)
+                return self._json({"sent_back": True, "feature": feature})
             if url.path == "/api/backlog/start":
                 feature_id = str(body.get("feature") or "")
                 features = {f["id"]: f for f in backlog.list_features()}

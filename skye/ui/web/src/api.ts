@@ -137,6 +137,11 @@ export const decideFeature = (feature: string, decision: "approved" | "rejected"
     method: "POST",
     body: JSON.stringify({ feature, decision, note }),
   });
+export const reworkFeature = (feature: string, note = "") =>
+  api<{ sent_back: boolean; feature: FeatureRow }>("/api/backlog/rework", {
+    method: "POST",
+    body: JSON.stringify({ feature, note }),
+  });
 export const verifyFeature = (feature: string) =>
   api<{ verified: boolean; feature: FeatureRow; command: string; evidence: string }>(
     "/api/backlog/verify",

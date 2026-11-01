@@ -96,7 +96,7 @@ export function Sidebar({
   };
 
   const chats = [...missions]
-    .sort((a, b) => (b.last_activity ?? "").localeCompare(a.last_activity ?? ""))
+    .sort((a, b) => String(b.last_activity ?? "").localeCompare(String(a.last_activity ?? "")))
     .slice(0, 8);
 
   return (

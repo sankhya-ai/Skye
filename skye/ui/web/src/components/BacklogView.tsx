@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   decideFeature,
+  reworkFeature,
   verifyFeature,
   getBacklog,
   getIssues,
@@ -132,7 +133,17 @@ export function BacklogView() {
                       {f.status}
                     </span>
                   </div>
-                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{f.brief}</p>
+                  {f.verification?.evidence ? (
+                    <pre className="mt-1 max-h-24 overflow-auto rounded-sm bg-muted/60 px-2 py-1 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                      {f.verification.evidence}
+                    </pre>
+                  ) : null}
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    {f.brief}
+                    {f.status === "awaiting-verification"
+                      ? " Work is done; delivery waits on a passing journey replay (set one in Settings if none is configured)."
+                      : ""}
+                  </p>
                   <p className="mt-1.5 text-xs text-muted-foreground/70">
                     {projectName(f.project)} · {provenance(f)}
                     {f.mission_id && f.status !== "delivered" ? " · work started" : ""}
@@ -164,14 +175,30 @@ export function BacklogView() {
                     </>
                   ) : null}
                   {f.status === "awaiting-verification" ? (
-                    <button
-                      type="button"
-                      disabled={busy === f.id}
-                      onClick={() => void act(f.id, () => verifyFeature(f.id))}
-                      className="h-8 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
-                    >
-                      Replay journey
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={busy === f.id}
+                        onClick={() => void act(f.id, () => verifyFeature(f.id))}
+                        className="h-8 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
+                      >
+                        Replay journey
+                      </button>
+                      {f.verification && !f.verification.journey_passed ? (
+                        <button
+                          type="button"
+                          disabled={busy === f.id}
+                          onClick={() =>
+                            void act(f.id, () =>
+                              reworkFeature(f.id, "journey replay failed - sent back for repair"),
+                            )
+                          }
+                          className="h-8 rounded-full border border-border px-3 text-xs text-muted-foreground transition hover:text-foreground disabled:opacity-30"
+                        >
+                          Send back
+                        </button>
+                      ) : null}
+                    </>
                   ) : null}
                   {f.status === "approved" && !f.mission_id ? (
                     <button

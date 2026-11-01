@@ -144,6 +144,27 @@ def mark_delivered(mission_id: str, *, journey_ok: bool = False,
         _write(target, data)
 
 
+def send_back(feature_id: str, *, note: str = "",
+              path: str | Path | None = None) -> dict[str, Any]:
+    """A failed journey replay sends the work back: awaiting-verification -> approved, so the
+    owner can start the next repair attempt. The failing evidence stays on the record."""
+    target = Path(path or default_path())
+    data = _read(target)
+    for feature in data["features"]:
+        if feature.get("id") == feature_id:
+            if feature.get("status") != "awaiting-verification":
+                raise BacklogError(
+                    f"feature {feature_id} is {feature.get('status')}; "
+                    "only work awaiting verification can be sent back")
+            feature["status"] = "approved"
+            feature["mission_id"] = ""
+            if note:
+                feature["decision_note"] = note
+            _write(target, data)
+            return feature
+    raise BacklogError(f"unknown feature {feature_id!r}")
+
+
 def record_verification(feature_id: str, passed: bool, *, evidence: str = "",
                         path: str | Path | None = None) -> dict[str, Any]:
     """The outcome of replaying the user journey for a feature. Only a PASS moves a feature
