@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getMissions, getProjects, type MissionRow, type Project } from "./api";
 import { AgentsView } from "./components/AgentsView";
+import { BacklogView } from "./components/BacklogView";
 import { HomeView } from "./components/HomeView";
 import { MissionDetailView } from "./components/MissionDetailView";
 import { MissionsOverview } from "./components/MissionsOverview";
@@ -76,7 +77,7 @@ export default function App() {
   const path = route.split("?")[0];
   const isDetail = path.startsWith("/mission/");
   const detailId = isDetail ? decodeURIComponent(path.slice("/mission/".length)) : null;
-  const activeNav = isDetail ? "/missions" : ["/", "/missions", "/agents", "/settings"].includes(path) ? path : "/";
+  const activeNav = isDetail ? "/missions" : ["/", "/missions", "/backlog", "/agents", "/settings"].includes(path) ? path : "/";
 
   return (
     <div className="bg-dot-grid min-h-screen">
@@ -94,6 +95,10 @@ export default function App() {
         ) : path === "/missions" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
             <MissionsView missions={missions} projects={projects} />
+          </div>
+        ) : path === "/backlog" ? (
+          <div className="mx-auto max-w-3xl px-4 py-8">
+            <BacklogView />
           </div>
         ) : path === "/agents" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">

@@ -116,3 +116,28 @@ export const createProject = (project: { name: string; repo: string }) =>
     method: "POST",
     body: JSON.stringify({ project }),
   });
+
+export type FeatureRow = {
+  id: string;
+  project: string;
+  title: string;
+  brief: string;
+  status: string;
+  proposed_by: string;
+  proposed_at: number;
+  decided_at: number | null;
+  decision_note: string;
+  mission_id: string;
+};
+
+export const getBacklog = () => api<{ features: FeatureRow[] }>("/api/backlog");
+export const decideFeature = (feature: string, decision: "approved" | "rejected", note = "") =>
+  api<{ decided: boolean; feature: FeatureRow }>("/api/backlog/decide", {
+    method: "POST",
+    body: JSON.stringify({ feature, decision, note }),
+  });
+export const startFeature = (feature: string, run = true) =>
+  api<{ id: string; running: boolean }>("/api/backlog/start", {
+    method: "POST",
+    body: JSON.stringify({ feature, run }),
+  });

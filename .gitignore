@@ -3,3 +3,5 @@ __pycache__/
 events.jsonl
 skye.egg-info/
 .skye/
+skye.backlog.json
+skye.projects.json

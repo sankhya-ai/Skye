@@ -335,3 +335,35 @@ def test_planner_mission_grows_the_workflow_at_runtime(tmp_path, monkeypatch):
     status = mission_status(mission, state_dir)
     assert status["status"] == "done"
     assert [s["id"] for s in status["steps"]] == ["plan", "build", "check"]
+
+
+def test_backlog_round_trip_through_the_api(ui_server, tmp_path, monkeypatch):
+    """Proposed feature -> owner approves -> Start creates a planner mission under the project;
+    the feature records its mission. Rejected and unapproved starts are refused."""
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "skye.projects.json"))
+    url, _ = ui_server
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "webshop", "repo": str(tmp_path)}})
+    project_id = payload["project"]["id"]
+    from skye import backlog
+    feature = backlog.propose([{"title": "Add cart", "brief": "shopping cart"}],
+                              project=project_id, mission="mission-seed")[0]
+    status, payload = _req(url, "/api/backlog")
+    assert status == 200
+    assert payload["features"][0]["id"] == feature["id"]
+    status, payload = _req(url, "/api/backlog/start", method="POST", body={"feature": feature["id"]})
+    assert status == 409  # pending features cannot start
+    status, payload = _req(url, "/api/backlog/decide", method="POST",
+                           body={"feature": feature["id"], "decision": "approved", "note": "go"})
+    assert status == 200, payload
+    assert payload["feature"]["status"] == "approved"
+    status, payload = _req(url, "/api/backlog/start", method="POST", body={"feature": feature["id"]})
+    assert status == 200, payload
+    mission_id = payload["id"]
+    stored = backlog.list_features()[0]
+    assert stored["mission_id"] == mission_id
+    status, payload = _req(url, f"/api/missions/{mission_id}")
+    assert status == 200
+    assert payload["mission"]["project"] == project_id
+    assert "Add cart" in payload["mission"]["goal"]

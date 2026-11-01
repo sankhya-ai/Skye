@@ -472,3 +472,53 @@ def test_status_stays_needs_owner_when_a_later_dynamic_step_finished(tmp_path):
     assert outcome.status == "needs-owner"
     status = mission_status(mission, tmp_path / "st")
     assert status["status"] == "needs-owner", status
+
+
+def test_settled_step_feature_proposals_land_in_the_owner_backlog(tmp_path, monkeypatch):
+    """A worker may propose FEATURES; they persist as pending backlog items for the owner,
+    journaled with provenance, and never start work by themselves."""
+    from skye import backlog
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    steps = [{"id": "dev", "role": "developer", "adapter": "claude-code",
+              "goal": "build it", "gates": []}]
+    mission = load_mission(_mission_file(tmp_path, steps, project="shop"))
+
+    def runner(spec):
+        return Result(ok=True,
+                      output='shipped {"propose_features": [{"title": "Search",'
+                             ' "brief": "full-text search"}, {"title": "no brief"}]}',
+                      command=["fake"])
+
+    outcome = run_mission(mission, _policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done", outcome.reason
+    features = backlog.list_features()
+    assert len(features) == 1
+    assert features[0]["status"] == "pending"
+    assert features[0]["project"] == "shop"
+    assert features[0]["proposed_by"] == "m1"
+    journal = Journal(tmp_path / "st" / "missions" / "m1" / "journal.jsonl")
+    events = [json.loads(line) for line in
+              (tmp_path / "st" / "missions" / "m1" / "journal.jsonl").read_text().splitlines()]
+    assert any(e.get("event") == "feature-proposed" for e in events)
+
+
+def test_done_mission_delivers_its_approved_feature(tmp_path, monkeypatch):
+    """A mission started from an approved backlog feature marks it delivered on done."""
+    from skye import backlog
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    feature = backlog.propose([{"title": "Cart", "brief": "shopping cart"}],
+                              project="shop", mission="seed")[0]
+    backlog.decide(feature["id"], "approved")
+    backlog.mark_started(feature["id"], "m1")
+    steps = [{"id": "dev", "role": "developer", "adapter": "claude-code",
+              "goal": "build it", "gates": []}]
+    mission = load_mission(_mission_file(tmp_path, steps))
+
+    def runner(spec):
+        return Result(ok=True, output="ok", command=["fake"])
+
+    outcome = run_mission(mission, _policy(), runner=runner,
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=tmp_path / "st")
+    assert outcome.status == "done", outcome.reason
+    assert backlog.list_features()[0]["status"] == "delivered"

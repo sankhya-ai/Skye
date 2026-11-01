@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from skye import __version__
-from skye import approvals, gateway, projects, roles
+from skye import approvals, backlog, gateway, projects, roles
 from skye.contract import ADAPTERS, ROLES
 from skye.mission import (Journal, MissionError, default_state_dir, load_mission,
                           mission_status, reset_mission, run_mission)
@@ -157,6 +157,9 @@ Break it into concrete specialist steps and reply with JSON exactly of the form
 Name roles from the team's role registry (builtins plus owner-defined specialists),
 keep every step small and self-contained, and use needs for steps that depend on an
 earlier step's outcome. Do not do the work yourself - your reply becomes the workflow.
+If you see follow-up product work beyond this goal, also propose it for the owner's
+backlog in the same reply: "propose_features": [{"title": "...", "brief": "..."}] -
+proposals wait for the owner's approval before any work starts.
 """
 
 
@@ -172,7 +175,7 @@ def create_mission(state_dir: Path, spec: dict) -> str:
     if spec.get("plan"):
         steps = [{"id": "plan", "role": str(spec.get("planner_role") or "pm"),
                   "adapter": str(spec.get("adapter") or "root"), "goal": goal,
-                  "brief": PLANNER_BRIEF.format(goal=goal), "gates": [],
+                  "brief": PLANNER_BRIEF.replace("{goal}", goal), "gates": [],
                   "budget": {"max_steps": 12}}]
     project_id = str(spec.get("project") or "").strip()
     repo = str(spec.get("repo") or "").strip()
@@ -314,6 +317,8 @@ class UiHandler(BaseHTTPRequestHandler):
                                        "live": {k: v for k, v in _live_missions.items()}})
                 if url.path == "/api/approvals":
                     return self._json({"approvals": approvals.pending(self.approvals_path)})
+                if url.path == "/api/backlog":
+                    return self._json({"features": backlog.list_features()})
                 if url.path == "/api/projects":
                     return self._json({"projects": projects.list_projects()})
                 if url.path == "/api/roles":
@@ -353,6 +358,31 @@ class UiHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._json({"error": "invalid JSON body"}, 400)
         try:
+            if url.path == "/api/backlog/decide":
+                try:
+                    feature = backlog.decide(str(body.get("feature") or ""),
+                                             str(body.get("decision") or ""),
+                                             note=str(body.get("note") or ""))
+                except backlog.BacklogError as error:
+                    return self._json({"error": str(error)}, 400)
+                return self._json({"decided": True, "feature": feature})
+            if url.path == "/api/backlog/start":
+                feature_id = str(body.get("feature") or "")
+                features = {f["id"]: f for f in backlog.list_features()}
+                feature = features.get(feature_id)
+                if feature is None:
+                    return self._json({"error": "unknown feature"}, 404)
+                if feature["status"] != "approved":
+                    return self._json(
+                        {"error": "only an owner-approved feature can start work"}, 409)
+                mission_id = create_mission(
+                    self.state_dir,
+                    {"goal": f"{feature['title']}: {feature['brief']}", "plan": True,
+                     "project": feature.get("project", ""), "adapter": body.get("adapter")})
+                backlog.mark_started(feature_id, mission_id)
+                if body.get("run"):
+                    resume_in_thread(self.state_dir, mission_id)
+                return self._json({"id": mission_id, "running": bool(body.get("run"))})
             if url.path == "/api/projects":
                 record = body.get("project")
                 if not isinstance(record, dict):

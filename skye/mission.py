@@ -205,6 +205,34 @@ def extract_proposals(output: str) -> list[dict[str, Any]]:
     return []
 
 
+def extract_feature_proposals(output: str) -> list[dict[str, Any]]:
+    """A worker's proposed FEATURES for the team backlog: the last JSON object carrying a
+    "propose_features" list. Same envelope handling as step proposals; entries are data for the
+    owner's queue - proposing never starts work."""
+    texts = [output or ""]
+    try:
+        data = json.loads(output or "")
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("reply"), str):
+        texts.insert(0, data["reply"])
+    decoder = json.JSONDecoder()
+    for text in texts:
+        found = None
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                parsed, _end = decoder.raw_decode(text, index)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict) and isinstance(parsed.get("propose_features"), list):
+                found = parsed
+        if found is not None:
+            return [item for item in found["propose_features"] if isinstance(item, dict)]
+    return []
+
+
 def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[str, Any]) -> str:
     """Why a proposed step cannot join the workflow, or '' when it can."""
     step_id = str(step.get("id") or "").strip()
@@ -437,6 +465,30 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 if wave_failed is None:
                     wave_failed = (step_id, outcome)
                 continue
+            # Feature proposals for the owner queue: journaled and persisted, never started.
+            from . import backlog
+            raw_features = extract_feature_proposals(outcome.worker_output)
+            # Filter like contracts before they reach the owner queue: a feature needs a
+            # title and a brief. One malformed entry must not sink the valid ones.
+            valid_features = [f for f in raw_features
+                              if str(f.get("title") or "").strip()
+                              and str(f.get("brief") or "").strip()]
+            dropped = len(raw_features) - len(valid_features)
+            if dropped:
+                journal.append(step_id, "features-rejected",
+                               reason=f"{dropped} proposal(s) missing a title or brief")
+            try:
+                proposed_features = backlog.propose(
+                    valid_features,
+                    project=mission.get("project", ""), mission=mission["id"])
+            except backlog.BacklogError as error:
+                proposed_features = []
+                journal.append(step_id, "features-rejected", reason=str(error))
+            for feature in proposed_features:
+                journal.append(step_id, "feature-proposed", feature_id=feature["id"],
+                               title=feature["title"])
+                emit(events.make_event("mission-step", {}, status="feature-proposed",
+                                       feature=feature["title"], **context))
             # Dynamic growth: a settled step may propose follow-up steps. Validated, capped,
             # journaled BEFORE they join the workflow - and dispatched later through the same
             # policy gate.
@@ -478,6 +530,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             return MissionOutcome(status=outcome.status, mission_id=mission["id"],
                                   reason=f"step '{step_id}': {outcome.reason}", steps=outcomes)
     emit(events.make_event("mission", {}, status="done", **context))
+    from . import backlog
+    backlog.mark_delivered(mission["id"])  # an approved feature's done mission delivers it
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 
 
