@@ -4,7 +4,14 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
-import { ApiError, getPolicy, savePolicy, type AutoPickup } from "../api";
+import {
+  ApiError,
+  getPolicy,
+  getRoles,
+  savePolicy,
+  type AdapterDetail,
+  type AutoPickup,
+} from "../api";
 import { humanError } from "../lib";
 
 type Rule = { adapter: string; role: string };
@@ -25,6 +32,10 @@ export function SettingsView() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Installation availability from the engine's own probe, loaded once with the page (never
+  // polled): "available" means installed/reachable, not signed in - auth is only exercised
+  // by a real dispatch.
+  const [adapters, setAdapters] = useState<AdapterDetail[] | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -59,6 +70,9 @@ export function SettingsView() {
 
   useEffect(() => {
     void refresh();
+    getRoles()
+      .then((d) => setAdapters(d.adapter_details ?? null))
+      .catch(() => {});
   }, [refresh]);
 
   const save = async () => {
@@ -175,9 +189,14 @@ export function SettingsView() {
                 }
                 className="rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
               >
-                {ADAPTERS.map((a) => (
-                  <option key={a}>{a}</option>
-                ))}
+                {ADAPTERS.map((a) => {
+                  const detail = adapters?.find((d) => d.name === a);
+                  return (
+                    <option key={a}>
+                      {a}{detail && !detail.available ? " (not installed)" : ""}
+                    </option>
+                  );
+                })}
               </select>
               <input
                 value={rule.role}
@@ -197,10 +216,29 @@ export function SettingsView() {
               </button>
             </div>
           ))}
-          <p className="text-xs text-muted-foreground">
-            Specialists run your own tools: claude-code and codex must be installed and
-            signed in on this machine, or the step fails when dispatched.
-          </p>
+          {adapters ? (
+            <div className="text-xs text-muted-foreground">
+              <ul className="space-y-0.5">
+                {adapters.map((a) => (
+                  <li key={a.name}>
+                    <span className="font-mono">{a.name}</span>
+                    {a.available
+                      ? " - installed"
+                      : ` - not available: ${a.hint}`}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-muted-foreground/70">
+                Installed, not signed-in check: your own login is only exercised by a real
+                run - a signed-out tool fails when the step is dispatched.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Specialists run your own tools: claude-code and codex must be installed and
+              signed in on this machine, or the step fails when dispatched.
+            </p>
+          )}
           <button
             type="button"
             onClick={() => setRules([...rules, { adapter: "root", role: "developer" }])}

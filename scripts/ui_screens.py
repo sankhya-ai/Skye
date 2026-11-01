@@ -705,9 +705,9 @@ wt = Path(rec1["worktree"])
 subprocess.run(["git", "add", "."], cwd=wt, check=True)
 subprocess.run(["git", "commit", "-qm", "worker: add feature"], cwd=wt, check=True)
 (wt / "scratch.py").write_text("# uncommitted scratch\n")
-# the lost tree (clean unregister+delete; a raw rmtree loss currently leaves a stale git
-# worktree registration that prepare() does not prune - reported to backend as a gap)
-subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo, check=True)
+# the lost tree: a raw directory wipe - the stale git worktree registration must be pruned
+# by prepare() itself (B2c regression: real loss, not a clean git worktree remove)
+shutil.rmtree(wt)
 rec2 = wsm.prepare(mission_def, state_dir=state_dir, policy=policy_obj)
 print("RECOVERY record marks uncommitted loss:",
       "PASS" if rec2.get("uncommitted_lost") and rec2.get("recovered_from_branch") else "FAIL")
@@ -866,6 +866,55 @@ with sync_playwright() as pw:
     npage.screenshot(path=str(out_dir / "ui-recovery-multi-narrow.png"), full_page=True)
     nctx.close()
     browser.close()
+
+
+# --- composer multi-repo setup: the owner declares repos in the real UI, never guessed ---
+policy_now = json.loads((demo / "skye.policy.json").read_text())
+policy_now["workspaces"] = {"enabled": True}
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+with sync_playwright() as pw:
+    browser = pw.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(ui_url + "#/")
+    page.wait_for_timeout(2000)
+    page.locator('textarea[placeholder="Describe the goal..."]').fill(
+        "Composer probe: change backend + frontend together")
+    page.locator("text=Multiple repositories").click()
+    page.locator("text=+ Add repository").click()
+    page.locator("text=+ Add repository").click()
+    page.locator('input[placeholder="name (e.g. backend)"]').nth(0).fill("backend")
+    page.locator('input[placeholder="/absolute/path/to/repo"]').nth(0).fill(str(repo_be))
+    page.locator('input[placeholder="name (e.g. backend)"]').nth(1).fill("frontend")
+    page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill(str(repo_fe))
+    page.select_option("details select", label="backend")
+    # validation is real: a relative path is refused before anything is sent
+    page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill("relative/path")
+    page.locator('button[aria-label="Start mission"]').click()
+    refused = page.locator("text=needs an absolute path").count()
+    page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill(str(repo_fe))
+    print("COMPOSER refuses a non-absolute repo path before submit:", "PASS" if refused else "FAIL")
+    page.locator('button[aria-label="Start mission"]').click()
+    page.wait_for_timeout(3000)
+    page.wait_for_selector("text=repositories", timeout=15000)
+    mode = page.locator("text=separate Git worktrees across 2 repositories").count()
+    names = page.locator("text=frontend").count() and page.locator("text=backend").count()
+    print("COMPOSER multi-repo mission runs with per-repo worktrees shown:",
+          "PASS" if mode and names else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-composer-multirepo.png"), full_page=True)
+    # adapter availability in Settings: truthful installed/not-installed from the engine probe
+    page.goto(ui_url + "#/settings")
+    page.wait_for_timeout(2000)
+    codex_line = page.locator("li", has_text="codex").first
+    codex_unavail = codex_line.count() and "not available" in codex_line.inner_text()
+    honest_auth = page.locator("text=only exercised by a real run").count()
+    print("SETTINGS adapter availability: codex reported not available (no codex binary here):",
+          "PASS" if codex_unavail else "FAIL")
+    print("SETTINGS availability disclaims auth probing:",
+          "PASS" if honest_auth else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-settings-adapters.png"), full_page=True)
+    browser.close()
+policy_now.pop("workspaces")
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
 
 print("mission:", mission_id, final)
 print("UI SCREENS OK")

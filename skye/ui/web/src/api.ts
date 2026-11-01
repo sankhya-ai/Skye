@@ -143,8 +143,17 @@ export type AgentDefinition = {
 export const getAgentDefinitions = () =>
   api<{ agents: AgentDefinition[] }>("/api/agents");
 
+export type AdapterDetail = {
+  name: string;
+  available: boolean;
+  probe: string;
+  binary: string;
+  auth: string;
+  hint: string;
+};
 export const getRoles = () =>
-  api<{ roles: RoleRow[]; adapters: string[] }>("/api/roles");
+  api<{ roles: RoleRow[]; adapters: string[]; adapter_details?: AdapterDetail[] }>(
+    "/api/roles");
 export const createRole = (role: {
   name: string;
   description: string;
@@ -162,11 +171,19 @@ export const getPolicy = () =>
 export const savePolicy = (policy: Record<string, unknown>, baseRevision: string) =>
   api<{ saved: boolean; revision: string }>("/api/policy",
     { method: "POST", body: JSON.stringify({ policy, base_revision: baseRevision }) });
+export type MissionSetup = {
+  fields: Record<string, { type: string; required: boolean | string; note?: string }>;
+  workspaces: { note: string; payload: string };
+};
+export const getMissionSetup = () => api<MissionSetup>("/api/mission-setup");
+
 export const createMission = (spec: {
   goal: string;
   plan?: boolean;
   run?: boolean;
   project?: string;
+  repo?: string;
+  repos?: Record<string, string>;
 }) =>
   api<{ id: string; running: boolean }>("/api/missions", {
     method: "POST",

@@ -5,7 +5,15 @@ import { ArrowUp } from "lucide-react";
 import { humanError } from "../lib";
 import { Spinner } from "./ui/Spinner";
 import { useEffect, useState } from "react";
-import { createMission, getBacklog, type FeatureRow, type MissionRow, type Project } from "../api";
+import {
+  createMission,
+  getBacklog,
+  getMissionSetup,
+  type FeatureRow,
+  type MissionRow,
+  type MissionSetup,
+  type Project,
+} from "../api";
 
 function HomeClock({ now }: { now: Date }) {
   const parts = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -96,6 +104,9 @@ export function HomeView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [features, setFeatures] = useState<FeatureRow[]>([]);
+  const [setup, setSetup] = useState<MissionSetup | null>(null);
+  const [repoRows, setRepoRows] = useState<Array<{ name: string; path: string }>>([]);
+  const [defaultRepo, setDefaultRepo] = useState("");
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -109,9 +120,37 @@ export function HomeView({
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    getMissionSetup().then(setSetup).catch(() => {});
+  }, []);
+
+  // The composer never guesses a path: every repository is typed by the owner and validated
+  // by the server's mission loader (duplicate realpaths, aliases and same-repo subdirectories
+  // are rejected there, exactly like a mission file).
+  const REPO_NAME = /^[A-Za-z0-9._-]+$/;
+
   const submit = async () => {
     const text = goal.trim();
     if (!text || busy) return;
+    const declared = repoRows.filter((r) => r.name.trim() || r.path.trim());
+    for (const row of declared) {
+      if (!REPO_NAME.test(row.name.trim())) {
+        setError(`Repository name "${row.name || "?"}" must be plain letters, digits, . _ or -`);
+        return;
+      }
+      if (!row.path.trim().startsWith("/")) {
+        setError(`Repository "${row.name}" needs an absolute path`);
+        return;
+      }
+    }
+    if (new Set(declared.map((r) => r.name.trim())).size !== declared.length) {
+      setError("Repository names must be unique");
+      return;
+    }
+    if (declared.length > 0 && !defaultRepo) {
+      setError("Choose the default repository the planner runs in");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -121,6 +160,12 @@ export function HomeView({
         plan: true,
         run: true,
         ...(project ? { project } : {}),
+        ...(declared.length > 0
+          ? {
+              repos: Object.fromEntries(declared.map((r) => [r.name.trim(), r.path.trim()])),
+              repo: defaultRepo,
+            }
+          : {}),
       });
       onCreated(created.id);
     } catch (e) {
@@ -186,6 +231,70 @@ export function HomeView({
             </button>
           </div>
         </div>
+        <details className="mt-2 pl-4 text-xs">
+          <summary className="cursor-pointer text-muted-foreground/70 hover:text-foreground">
+            Multiple repositories (monorepo or separate repos)
+          </summary>
+          <div className="mt-2 space-y-1.5">
+            {repoRows.map((row, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <input
+                  value={row.name}
+                  onChange={(e) =>
+                    setRepoRows(repoRows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))
+                  }
+                  placeholder="name (e.g. backend)"
+                  className="w-32 rounded-md border border-border bg-background px-2 py-1 text-xs outline-none"
+                />
+                <input
+                  value={row.path}
+                  onChange={(e) =>
+                    setRepoRows(repoRows.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)))
+                  }
+                  placeholder="/absolute/path/to/repo"
+                  className="flex-1 rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setRepoRows(repoRows.filter((_, j) => j !== i))}
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={`Remove repository ${row.name || i + 1}`}
+                >
+                  x
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setRepoRows([...repoRows, { name: "", path: "" }])}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              + Add repository
+            </button>
+            {repoRows.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <label className="text-muted-foreground">Default repo</label>
+                <select
+                  value={defaultRepo}
+                  onChange={(e) => setDefaultRepo(e.target.value)}
+                  className="h-7 rounded-md border border-border bg-card px-2 text-xs text-muted-foreground outline-none"
+                >
+                  <option value="">Choose...</option>
+                  {repoRows
+                    .filter((r) => REPO_NAME.test(r.name.trim()) && r.path.trim())
+                    .map((r) => (
+                      <option key={r.name} value={r.path.trim()}>
+                        {r.name.trim()}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            ) : null}
+            {setup?.fields?.repos?.note ? (
+              <p className="text-[11px] text-muted-foreground/70">{setup.fields.repos.note}</p>
+            ) : null}
+          </div>
+        </details>
         {error ? <p className="mt-2 pl-4 text-xs text-destructive">{error}</p> : null}
         <Glanceables projects={projects} missions={missions} features={features} />
       </div>
