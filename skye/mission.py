@@ -410,7 +410,7 @@ def _progress_journaler(journal: "Journal", emit, context: dict[str, Any],
     the live event bridge as they arrive - the UI's progress view reads both."""
     def on_progress(event: dict[str, Any]) -> None:
         fields = {"kind": event["kind"]}
-        if event["kind"] in ("message", "error"):
+        if event["kind"] in ("message", "error", "steer-ack", "steer-rejected"):
             fields["text"] = str(event.get("text", ""))[:300]
         elif event["kind"] == "tool":
             fields["text"] = str(event.get("name", ""))[:120]
@@ -605,6 +605,40 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     # text appended to the brief and the recorded session resumed - same-session continuity,
     # never a blind fresh run. A follow-up on a step with no recorded session, or a running
     # step, is rejected with a reason, not guessed at.
+    # Live-steered follow-ups: the server journals intent BEFORE submitting and
+    # submitted/undelivered after. An intent with neither outcome (server died
+    # mid-submit), or a submission with neither a provider receipt (steer-ack) nor a
+    # terminal step record, is delivery-UNKNOWN: pause for the operator with the text
+    # preserved - never silently treat it as delivered or dropped.
+    live_entries = journal.entries()
+    for i, entry in enumerate(live_entries):
+        if not (entry.get("event") == "follow-up"
+                and entry.get("delivery") == "steered-live"
+                and entry.get("state") == "intent" and entry.get("follow_id")):
+            continue
+        fid = entry["follow_id"]
+        step_id = str(entry.get("step") or "")
+        later = live_entries[i + 1:]
+        resolved = any(e.get("step") == step_id and e.get("event") in (
+            "cancelled", "resume-rejected", "redispatch", "follow-up-undelivered")
+            for e in later)
+        submitted = any(e.get("event") == "follow-up-submitted"
+                        and e.get("follow_id") == fid for e in later)
+        settled_after = any(e.get("step") == step_id and e.get("event") == "settled"
+                            for e in later)
+        acked = any(e.get("step") == step_id and e.get("event") == "worker-progress"
+                    and e.get("kind") in ("steer-ack", "steer-rejected") for e in later)
+        if resolved or (submitted and (acked or settled_after)):
+            continue
+        state = "submitted but unconfirmed" if submitted else "submission unknown"
+        reason = (f"a live follow-up on step '{step_id}' is {state} (the server may "
+                  f"have died mid-submit; text preserved: "
+                  f"'{str(entry.get('text') or '')[:120]}'). Skye will not guess - "
+                  "inspect the step, then redispatch it (resume or --fresh).")
+        emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
+                               **context))
+        return MissionOutcome(status="needs-owner", mission_id=mission["id"],
+                              reason=reason, steps={})
     followups_path = mission_dir / "followups.jsonl"
     consumed_path = mission_dir / "followups.consumed"
     try:
@@ -687,6 +721,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                session_id=outcome.session_id,
                                continuity=outcome.continuity or "fresh",
                                cancelled=outcome.cancelled,
+                               protocol=getattr(outcome, "protocol", "") or "",
                                resume_rejected=outcome.resume_rejected)
                 sessions[target] = {"session_id": outcome.session_id,
                                     "adapter": step["adapter"]}
@@ -978,6 +1013,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                session_id=outcome.session_id,
                                continuity=outcome.continuity or "fresh",
                                cancelled=outcome.cancelled,
+                               protocol=getattr(outcome, "protocol", "") or "",
                                resume_rejected=outcome.resume_rejected)
                 sessions[step_id] = {"session_id": outcome.session_id,
                                      "adapter": step["adapter"]}

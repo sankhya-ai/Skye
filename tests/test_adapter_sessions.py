@@ -21,6 +21,7 @@ FAKES = Path(__file__).parent / "fakes"
 def fake_path(monkeypatch, tmp_path):
     log = tmp_path / "invocations.jsonl"
     monkeypatch.setenv("PATH", f"{FAKES}:{__import__('os').environ['PATH']}")
+    monkeypatch.setenv("CODEX_PROTOCOL", "exec")  # these tests pin the exec transport
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.delenv("FAKE_SLEEP", raising=False)
     monkeypatch.delenv("FAKE_MARK", raising=False)
@@ -163,3 +164,85 @@ def test_codex_resume_rejection_fails_closed(fake_path, tmp_path):
     result = CodexAdapter().run_session(_contract(tmp_path), resume_session_id="bad-session")
     assert not result.ok and result.resume_rejected
     assert len(_argv_lines(fake_path)) == 1
+
+
+# ----- codex app-server transport (default; codex-rs/app-server JSON-RPC over stdio) -----
+
+def _wait_for(pred, timeout: float = 10.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_codex_app_server_fresh_run_streams_events_and_thread_id(fake_path, tmp_path,
+                                                                 monkeypatch):
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    events: list = []
+    result = CodexAdapter().run_session(_contract(tmp_path), on_event=events.append)
+    assert result.ok, result.error or result.output
+    assert result.session_id == "thr-new-1" and result.continuity == "fresh"
+    assert result.protocol.startswith("app-server")
+    rpcs = [json.loads(line)["rpc"] for line in fake_path.read_text().splitlines()
+            if '"rpc"' in line]
+    assert rpcs[0] == "initialize"
+    assert "thread/start" in rpcs and "turn/start" in rpcs
+    assert any(e.get("kind") == "message" and "codex did the work" in e.get("text", "")
+               for e in events)
+
+
+def test_codex_app_server_resume_uses_thread_resume(fake_path, tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    result = CodexAdapter().run_session(_contract(tmp_path), resume_session_id="thr-old")
+    assert result.ok and result.continuity == "resumed"
+    assert result.session_id == "thr-old"
+    rpcs = [json.loads(line)["rpc"] for line in fake_path.read_text().splitlines()
+            if '"rpc"' in line]
+    assert "thread/resume" in rpcs and "thread/start" not in rpcs
+
+
+def test_codex_app_server_resume_rejection_fails_closed(fake_path, tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    result = CodexAdapter().run_session(_contract(tmp_path), resume_session_id="bad-session")
+    assert not result.ok and result.resume_rejected
+    # no silent fallback to a fresh thread after a rejected resume
+    rpcs = [json.loads(line)["rpc"] for line in fake_path.read_text().splitlines()
+            if '"rpc"' in line]
+    assert "thread/start" not in rpcs
+
+
+def test_codex_app_server_bad_handshake_falls_back_to_exec_loudly(fake_path, tmp_path,
+                                                                  monkeypatch):
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    monkeypatch.setenv("FAKE_BAD_HANDSHAKE", "1")
+    result = CodexAdapter().run_session(_contract(tmp_path))
+    assert result.ok  # the exec transport still delivers the work
+    assert result.protocol.startswith("exec-json-fallback:"), result.protocol
+    assert result.continuity == "fresh" and result.session_id
+
+
+def test_codex_app_server_mid_turn_steer_reaches_the_turn(fake_path, tmp_path,
+                                                          monkeypatch):
+    # FAKE_EXPECT_STEER holds the turn open until a turn/steer request arrives, so the
+    # steer lands deterministically mid-turn - no timing race.
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    monkeypatch.setenv("FAKE_EXPECT_STEER", "1")
+    import threading as _t
+    from skye.adapters import base
+    adapter = CodexAdapter()
+    box: dict = {}
+    thread = _t.Thread(target=lambda: box.__setitem__(
+        "result", adapter.run_session(_contract(tmp_path), run_key="m1:dev")),
+        daemon=True)
+    thread.start()
+    assert _wait_for(lambda: "m1:dev" in base._LIVE)
+    assert base.steer_live("m1:dev", "also add logging") == "steered"
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    result = box["result"]
+    assert result.ok and "Follow-up received: also add logging" in result.output
+    rpcs = [json.loads(line)["rpc"] for line in fake_path.read_text().splitlines()
+            if '"rpc"' in line]
+    assert "turn/steer" in rpcs

@@ -46,6 +46,9 @@ class SessionResult(Result):
     # A live-file check found a still-running (or unverifiable) worker for this exact
     # step - starting another would run two processes against the same session/repo.
     duplicate_live: bool = False
+    #: Which vendor protocol carried the run ("stream-json", "exec-json", "app-server",
+    #: "exec-json-fallback:<reason>") - journaled on worker-session for honest reporting.
+    protocol: str = ""
     usage: dict = field(default_factory=dict)
 
 
@@ -95,22 +98,25 @@ def steer_live(run_key: str, text: str) -> str:
     if proc.poll() is not None:
         return "exiting"
     adapter = entry["adapter"]
-    frame = adapter.steer_frame(text) if getattr(adapter, "SUPPORTS_STEER", False) else None
-    if frame is None:
+    if not getattr(adapter, "SUPPORTS_STEER", False):
         return "unsupported"
-    with entry["lock"]:
-        # closing means the final turn's result already landed: a write now would sit in a
-        # pipe nobody consumes - report it undelivered instead of pretending.
-        if entry["closing"] or proc.poll() is not None:
-            return "exiting"
-        try:
-            assert proc.stdin is not None
-            proc.stdin.write(frame)
-            proc.stdin.flush()
-        except (BrokenPipeError, OSError):
-            return "exiting"
-        entry["steers"] += 1
-    return "steered"
+    # The adapter owns the wire shape and any protocol preconditions (e.g. codex
+    # turn/steer's expectedTurnId). "steered" means SUBMITTED to the process; consumption
+    # is a provider event (a replay echo / accepted steer response), journaled separately.
+    return adapter.steer_into(entry, text)
+
+
+def _pid_identity(pid: int) -> "tuple[str, int] | None":
+    """(start-time token, process-group id) for a live pid, from /proc - a pid alone is
+    not an identity (PIDs get reused). None when the process is gone or unreadable; the
+    caller treats None as unverifiable, i.e. fail-closed."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        # fields after the (comm) parens: state ppid pgrp session ... starttime(field 22)
+        tail = stat[stat.rindex(")") + 2:].split()
+        return (tail[19], int(tail[2]))  # starttime, pgrp
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -141,6 +147,92 @@ def _signal_group(proc: "subprocess.Popen", *, grace: float = 5.0) -> None:
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
+        pass
+
+
+def live_claim(live_file: "str | Path | None", command: list, run_key: "str | None",
+               continuity: str) -> "SessionResult | None":
+    """The pre-spawn duplicate guard (see run_session): a still-running or unverifiable
+    prior worker blocks with duplicate_live. On success the step is CLAIMED (O_EXCL
+    record) and None returns. Shared by protocol-specific session runners."""
+    if live_file is None:
+        return None
+    live_path = Path(live_file)
+    live_path.parent.mkdir(parents=True, exist_ok=True)
+    if live_path.exists():
+        try:
+            prior = json.loads(live_path.read_text("utf-8"))
+            prior_pid = int(prior.get("pid") or 0)
+        except (OSError, ValueError, TypeError, AttributeError):
+            prior, prior_pid = None, 0
+        if prior is None:
+            reason = f"the live record {live_path.name} is unreadable"
+        elif prior_pid <= 0:
+            reason = ("a prior run claimed this step but crashed before recording its "
+                      "worker pid - that worker's fate is unknown")
+        elif not _pid_alive(prior_pid):
+            reason = ""
+        else:
+            identity = _pid_identity(prior_pid)
+            if identity is None:
+                reason = f"pid {prior_pid} is alive but its identity cannot be verified"
+            elif not prior.get("starttime") or not prior.get("pgid"):
+                reason = (f"pid {prior_pid} is alive but the live record carries no "
+                          "start-time/process-group identity to check against")
+            elif identity == (str(prior.get("starttime")), int(prior.get("pgid"))):
+                reason = f"worker pid {prior_pid} is still running"
+            else:
+                reason = ""  # pid reused: the recorded worker is verifiably gone
+        if reason:
+            return SessionResult(
+                ok=False, duplicate_live=True, command=command, returncode=-1,
+                continuity=continuity,
+                output=(f"a previous worker for this step: {reason} - Skye will not "
+                        "start a duplicate against the same session. Stop the old "
+                        "process (or confirm it is gone), then resume."))
+        try:
+            live_path.unlink()
+        except OSError:
+            pass
+    try:
+        fd = os.open(live_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(json.dumps({"claim": True, "claimer": os.getpid(),
+                                     "run_key": run_key or "",
+                                     "started": time.time()}) + "\n")
+    except FileExistsError:
+        return SessionResult(
+            ok=False, duplicate_live=True, command=command, returncode=-1,
+            continuity=continuity,
+            output=("another run claimed this step between the check and the spawn - "
+                    "refusing to race it"))
+    return None
+
+
+def live_record(live_file: "str | Path | None", proc: "subprocess.Popen",
+                run_key: "str | None", adapter_name: str) -> None:
+    """Fill the claim with the spawned worker's verified identity (pid + start-time +
+    process group)."""
+    if live_file is None:
+        return
+    try:
+        identity = _pid_identity(proc.pid) or ("", -1)
+        Path(live_file).write_text(json.dumps(
+            {"pid": proc.pid, "starttime": identity[0], "pgid": identity[1],
+             "run_key": run_key or "", "adapter": adapter_name,
+             "started": time.time()}) + "\n", "utf-8")
+    except OSError:
+        pass
+
+
+def live_release(live_file: "str | Path | None", proc: "subprocess.Popen") -> None:
+    """Remove only OUR record (pid match) - never a successor's claim."""
+    if live_file is None:
+        return
+    try:
+        if json.loads(Path(live_file).read_text("utf-8")).get("pid") == proc.pid:
+            Path(live_file).unlink()
+    except (OSError, ValueError):
         pass
 
 
@@ -210,6 +302,29 @@ class SessionAdapter(Adapter):
         None when the protocol has no live-input channel."""
         return None
 
+    def steer_into(self, entry: dict, text: str) -> str:
+        """Submit a follow-up into the live run. Default: write steer_frame() to stdin
+        under the closing lock; adapters with a request/response protocol override this.
+        Returns "steered" (submitted - consumption is a separate provider event),
+        "exiting", "no-active-turn", or "unsupported"."""
+        frame = self.steer_frame(text)
+        if frame is None:
+            return "unsupported"
+        proc = entry["proc"]
+        with entry["lock"]:
+            # closing means the final turn's result already landed: a write now would sit
+            # in a pipe nobody consumes - report it undelivered instead of pretending.
+            if entry["closing"] or proc.poll() is not None:
+                return "exiting"
+            try:
+                assert proc.stdin is not None
+                proc.stdin.write(frame)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                return "exiting"
+            entry["steers"] += 1
+        return "steered"
+
     def parse_stream_line(self, line: str) -> list[dict]:
         """One NDJSON line -> normalized events (possibly several, possibly none).
         Normalized kinds: session (session_id), message (text), tool (name),
@@ -229,28 +344,65 @@ class SessionAdapter(Adapter):
         command = self.build_session_command(contract, resume_session_id)
         prompt_frame = self.prompt_via_stdin(str(contract.get("brief") or contract["goal"]))
         live_path = Path(live_file) if live_file else None
-        if live_path is not None and live_path.exists():
-            # Crash-consistency guard: a prior run's worker may STILL be alive (the worker
-            # is its own process group - it survives a server crash). Starting another
-            # process against the same step would run two workers into one session/repo.
-            # Unverifiable means alive: fail closed, never gamble on a duplicate.
+        if live_path is not None:
+            live_path.parent.mkdir(parents=True, exist_ok=True)
+            if live_path.exists():
+                # Crash-consistency guard: a prior run's worker may STILL be alive (the
+                # worker is its own process group - it survives a server crash). Identity
+                # is pid + start-time + process group, never the pid alone (PIDs are
+                # reused). Anything unverifiable blocks: unknowns pause.
+                try:
+                    prior = json.loads(live_path.read_text("utf-8"))
+                    prior_pid = int(prior.get("pid") or 0)
+                except (OSError, ValueError, TypeError, AttributeError):
+                    prior, prior_pid = None, 0
+                if prior is None:
+                    reason = f"the live record {live_path.name} is unreadable"
+                elif prior_pid <= 0:
+                    reason = ("a prior run claimed this step but crashed before recording "
+                              "its worker pid - that worker's fate is unknown")
+                elif not _pid_alive(prior_pid):
+                    reason = ""  # verifiably dead: stale record, safe to replace
+                else:
+                    identity = _pid_identity(prior_pid)
+                    if identity is None:
+                        reason = (f"pid {prior_pid} is alive but its identity cannot be "
+                                  "verified")
+                    elif not prior.get("starttime") or not prior.get("pgid"):
+                        # An older/foreign record without identity fields: a live pid with
+                        # an unverifiable identity - fail closed, never gamble on reuse.
+                        reason = (f"pid {prior_pid} is alive but the live record carries "
+                                  "no start-time/process-group identity to check against")
+                    elif identity == (str(prior.get("starttime")), int(prior.get("pgid"))):
+                        reason = f"worker pid {prior_pid} is still running"
+                    else:
+                        reason = ""  # pid reused: the recorded worker is verifiably gone
+                if reason:
+                    return SessionResult(
+                        ok=False, duplicate_live=True, command=command, returncode=-1,
+                        continuity="resumed" if resume_session_id else "fresh",
+                        output=(f"a previous worker for this step: {reason} - Skye will "
+                                "not start a duplicate against the same session. Stop the "
+                                "old process (or confirm it is gone), then resume."))
+                try:
+                    live_path.unlink()  # stale: that process is verifiably gone
+                except OSError:
+                    pass
+            # Claim BEFORE spawning (O_EXCL): two runners racing this step cannot both
+            # pass, and a crash in the spawn window leaves a claim-only record the next
+            # run pauses on instead of gambling.
             try:
-                prior_pid = int(json.loads(live_path.read_text("utf-8")).get("pid"))
-            except (OSError, ValueError, TypeError, AttributeError):
-                prior_pid = 0
-            if prior_pid <= 0 or _pid_alive(prior_pid):
-                detail = (f"pid {prior_pid} may still be running" if prior_pid > 0 else
-                          f"the live record {live_path.name} is unreadable")
+                fd = os.open(live_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, "w") as handle:
+                    handle.write(json.dumps({"claim": True, "claimer": os.getpid(),
+                                             "run_key": run_key or "",
+                                             "started": time.time()}) + "\n")
+            except FileExistsError:
                 return SessionResult(
                     ok=False, duplicate_live=True, command=command, returncode=-1,
                     continuity="resumed" if resume_session_id else "fresh",
-                    output=(f"a previous worker for this step {detail} - Skye will not "
-                            "start a duplicate against the same session. Stop the old "
-                            "process (or confirm it is gone), then resume."))
-            try:
-                live_path.unlink()  # stale: that process is verifiably gone
-            except OSError:
-                pass
+                    output=("another run claimed this step between the check and the "
+                            "spawn - refusing to race it"))
         proc = subprocess.Popen(
             command, cwd=contract["repo"],
             stdin=subprocess.PIPE if prompt_frame is not None or self.SUPPORTS_STEER
@@ -259,9 +411,10 @@ class SessionAdapter(Adapter):
             start_new_session=True)  # its own process group: cancel/timeout signal the tree
         if live_path is not None:
             try:
-                live_path.parent.mkdir(parents=True, exist_ok=True)
+                identity = _pid_identity(proc.pid) or ("", -1)
                 live_path.write_text(json.dumps(
-                    {"pid": proc.pid, "run_key": run_key or "", "adapter": self.name,
+                    {"pid": proc.pid, "starttime": identity[0], "pgid": identity[1],
+                     "run_key": run_key or "", "adapter": self.name,
                      "started": time.time()}) + "\n", "utf-8")
             except OSError:
                 pass

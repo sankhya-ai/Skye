@@ -377,9 +377,11 @@ def test_steer_after_the_final_turn_reports_undelivered(fake_path, tmp_path):
 
 
 def test_codex_exec_reports_live_steer_unsupported(fake_path, tmp_path, monkeypatch):
-    # Grounded in codex-rs/exec (one-shot, no stdin input channel); the vendor's live
-    # input is the separate app-server turn/steer protocol, which Skye does not implement.
+    # Grounded in codex-rs/exec (one-shot, no stdin input channel): the exec transport
+    # has no live-input mechanism, so steering reports unsupported there even though
+    # the app-server transport supports turn/steer.
     from skye.adapters.codex import CodexAdapter
+    monkeypatch.setenv("CODEX_PROTOCOL", "exec")
     monkeypatch.setenv("FAKE_SLEEP", "5")
     adapter = CodexAdapter()
     box: dict = {}
@@ -581,7 +583,9 @@ def test_follow_up_endpoint_steers_a_live_run(ui_server, tmp_path, monkeypatch, 
     assert _wait_for(lambda: "m1:dev" in base._LIVE), "run never registered live"
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "also add logging"})
-    assert status == 200 and body["delivery"] == "steered", body
+    # "submitted" = handed to the live process; consumption is the provider's own
+    # later event (steer-ack), never implied by the write.
+    assert status == 200 and body["delivery"] == "submitted", body
 
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
@@ -594,6 +598,83 @@ def test_follow_up_endpoint_steers_a_live_run(ui_server, tmp_path, monkeypatch, 
     follow_ups = [e for e in _journal(state_dir).entries()
                   if e.get("event") == "follow-up"]
     assert follow_ups and follow_ups[0]["delivery"] == "steered-live"
+    assert follow_ups[0]["state"] == "intent" and follow_ups[0]["follow_id"]
     progress = [e.get("text") for e in _journal(state_dir).entries()
                 if e.get("event") == "worker-progress"]
     assert "Follow-up received: also add logging" in progress
+
+
+# ----- live-steer durability: intent without a confirmed outcome pauses the owner -----
+
+def test_live_steer_intent_without_outcome_pauses_with_text_preserved(fake_path, tmp_path):
+    # Window: the server journaled the live-steer intent, then died before recording
+    # submitted/undelivered. The follow-up may or may not have reached the worker, so
+    # the engine fails CLOSED: needs-owner, text preserved, no silent either-way guess.
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    _journal(state_dir).append("dev", "follow-up", follow_id="f1",
+                               text="also add logging", delivery="steered-live",
+                               state="intent")
+
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner"
+    assert "unconfirmed" in outcome.reason or "unknown" in outcome.reason
+    assert "also add logging" in outcome.reason  # text preserved for the operator
+    assert len(_argv_lines(fake_path)) == 1  # nothing redispatched
+
+    # the documented escape: operator redispatch (a terminal entry) resolves the scan
+    outcome = run_mission(mission, _policy(), state_dir=state_dir, redispatch="dev")
+    assert outcome.status == "done", outcome.reason
+
+
+def test_live_steer_submitted_without_receipt_or_settle_pauses(fake_path, tmp_path):
+    # Submitted to the process, but no provider receipt (steer-ack) and no terminal
+    # step record: delivery is still unconfirmed - pause, never claim consumption.
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="tweak it",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner" and "submitted but unconfirmed" in outcome.reason
+
+    # a later settle (or steer-ack) for the same step proves the journey - scan clears
+    journal.append("dev", "settled", status="done", reason="", output="tweaked",
+                   gates=[], worker_job="", role="developer")
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+
+
+def test_concurrent_cancel_calls_never_crash_and_agree_on_death(fake_path, tmp_path,
+                                                                monkeypatch):
+    # Two owners hit cancel at once: both calls must return a verified state (stopped /
+    # exiting / not-live / unkillable) - no exception, no pretend confirmation.
+    from skye.adapters import base
+    from skye.adapters.claude_code import ClaudeCodeAdapter
+    monkeypatch.setenv("FAKE_SLEEP", "30")
+    adapter = ClaudeCodeAdapter()
+    box: dict = {}
+    thread = threading.Thread(target=lambda: box.__setitem__(
+        "result", adapter.run_session(
+            {"repo": str(tmp_path), "goal": "work", "brief": "work"},
+            run_key="m1:dev")),
+        daemon=True)
+    thread.start()
+    assert _wait_for(lambda: "m1:dev" in base._LIVE)
+    results: list = []
+    threads = [threading.Thread(target=lambda: results.append(
+        base.cancel_live("m1:dev"))) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    thread.join(timeout=10)
+    assert len(results) == 2
+    assert all(r in ("stopped", "exiting", "not-live", "unkillable") for r in results)
+    assert "stopped" in results or "exiting" in results or "not-live" in results
+    # a third cancel after death is honest about it
+    assert base.cancel_live("m1:dev") in ("not-live", "exiting")

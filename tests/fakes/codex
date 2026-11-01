@@ -17,6 +17,89 @@ if "resume" in argv:
         sys.stderr.write(f"ERROR: no rollout found for session {thread_id}\n")
         sys.exit(1)
 
+if argv and argv[0] == "app-server":
+    # Newline-delimited JSON-RPC 2.0 over stdio (codex-rs/app-server-transport: stdin
+    # lines). Deterministic turn control: FAKE_EXPECT_STEER=1 holds the turn open until
+    # a turn/steer request arrives; FAKE_SLEEP delays notifications for cancel tests.
+    import os
+    turn_no = 0
+    active_turn = None
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            continue
+        if log:
+            with open(log, "a") as handle:
+                handle.write(json.dumps({"rpc": msg.get("method"), "id": msg.get("id")}) + "\n")
+        method, rid = msg.get("method"), msg.get("id")
+        params = msg.get("params") or {}
+        def reply(result=None, error=None):
+            out = {"jsonrpc": "2.0", "id": rid}
+            out["error" if error else "result"] = error or result
+            print(json.dumps(out), flush=True)
+        def notify(name, payload):
+            print(json.dumps({"jsonrpc": "2.0", "method": name, "params": payload}),
+                  flush=True)
+        if method == "initialize":
+            if os.environ.get("FAKE_BAD_HANDSHAKE"):
+                # A build whose app-server speaks something else: the adapter must
+                # reject the guard and fall back to exec, loudly.
+                reply({"bogus": True})
+            else:
+                reply({"userAgent": "codex-fake/1.0", "codexHome": "/tmp/fake-codex-home",
+                       "platformFamily": "unix", "os": "linux"})
+        elif method == "thread/start":
+            reply({"thread": {"id": "thr-new-1"}, "model": "fake",
+                   "modelProvider": "fake"})
+        elif method == "thread/resume":
+            if params.get("threadId") == "bad-session":
+                reply(error={"code": -32602, "message": "no rollout found"})
+            else:
+                reply({"thread": {"id": params.get("threadId")}})
+        elif method == "turn/start":
+            turn_no += 1
+            active_turn = f"turn-{turn_no}"
+            thread_id = params.get("threadId", "thr-new-1")
+            reply({"turn": {"id": active_turn, "status": "inProgress"}})
+            notify("turn/started", {"threadId": thread_id,
+                                    "turn": {"id": active_turn, "status": "inProgress"}})
+            sleep = float(os.environ.get("FAKE_SLEEP", "0"))
+            if sleep:
+                time.sleep(sleep)
+            notify("item/completed", {"threadId": thread_id, "turnId": active_turn,
+                   "completedAtMs": 1,
+                   "item": {"id": "i1", "type": "agentMessage",
+                            "text": "codex did the work"}})
+            notify("item/completed", {"threadId": thread_id, "turnId": active_turn,
+                   "completedAtMs": 1,
+                   "item": {"id": "i2", "type": "commandExecution", "command": "pytest -q",
+                            "aggregatedOutput": "ok", "exitCode": 0,
+                            "status": "completed"}})
+            if not os.environ.get("FAKE_EXPECT_STEER"):
+                notify("turn/completed", {"threadId": thread_id,
+                       "turn": {"id": active_turn, "status": "completed"}})
+                active_turn = None
+        elif method == "turn/steer":
+            if not active_turn or params.get("expectedTurnId") != active_turn:
+                reply(error={"code": -32602, "message": "no matching active turn"})
+            else:
+                reply({"turnId": active_turn})
+                text = (params.get("input") or [{}])[0].get("text", "")
+                notify("item/completed",
+                       {"threadId": params.get("threadId", "thr-new-1"),
+                        "turnId": active_turn, "completedAtMs": 1,
+                        "item": {"id": "i9", "type": "agentMessage",
+                                 "text": f"Follow-up received: {text}"}})
+                notify("turn/completed",
+                       {"threadId": params.get("threadId", "thr-new-1"),
+                        "turn": {"id": active_turn, "status": "completed"}})
+                active_turn = None
+    sys.exit(0)
+
 print(json.dumps({"type": "thread.started", "thread_id": thread_id}), flush=True)
 sleep = float(os.environ.get("FAKE_SLEEP", "0"))
 if sleep:

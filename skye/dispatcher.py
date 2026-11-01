@@ -42,6 +42,7 @@ class Outcome:
     continuity: str = ""
     cancelled: bool = False
     resume_rejected: bool = False
+    protocol: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
 
 
@@ -176,6 +177,7 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
                               "continuity": result.continuity,
                               "cancelled": result.cancelled,
                               "resume_rejected": result.resume_rejected,
+                              "protocol": getattr(result, "protocol", "") or "",
                               "usage": result.usage}
         if getattr(result, "duplicate_live", False):
             # A worker for this exact step may still be running after a crash: fail

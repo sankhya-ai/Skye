@@ -1,6 +1,11 @@
 import json
+import os
+import subprocess
+import threading
+import time
 
-from .base import SessionAdapter
+from .base import (AdapterError, SessionAdapter, SessionResult, _LIVE, _LIVE_LOCK,
+                   _signal_group, live_claim, live_record, live_release)
 
 
 class CodexAdapter(SessionAdapter):
@@ -15,13 +20,10 @@ class CodexAdapter(SessionAdapter):
     binary = "codex"
     # Only the wall-clock timeout is enforceable here; max_steps/max_cost_usd surface as notes.
     ENFORCED_BUDGET = ("timeout_seconds",)
-    # NO live steering on this protocol: `codex exec` is one-shot - it takes one prompt and
-    # runs it to completion (codex-rs/exec has no stdin input channel). The vendor's live
-    # mid-turn input is `turn/steer` on the separate `codex app-server` JSON-RPC protocol
-    # (codex-rs/app-server-protocol: TurnSteerParams, marked experimental upstream); Skye
-    # does not implement that protocol, so follow-ups on codex are after-turn continuations
-    # via `exec resume`, never live injection. steer_live() reports "unsupported".
-    SUPPORTS_STEER = False
+    # Live steering: the app-server session mode (run_session below) supports it via
+    # `turn/steer`; the exec fallback does not. steer_into() answers per RUN MODE from
+    # the registry entry, so an exec-mode run reports "unsupported" honestly.
+    SUPPORTS_STEER = True
 
     def _prompt(self, contract: dict) -> str:
         prompt = contract.get("brief") or contract["goal"]
@@ -85,3 +87,281 @@ class CodexAdapter(SessionAdapter):
         if kind == "error":
             return [{"kind": "error", "text": str(data.get("message") or "stream error")}]
         return []
+
+
+    # -- App-server session protocol ------------------------------------------------
+    # Grounded in codex-rs source (app-server-protocol + app-server-transport): newline-
+    # delimited JSON-RPC 2.0 over stdio (`codex app-server`; transport reads stdin line
+    # by line). Flow: initialize {clientInfo} -> {userAgent, codexHome, ...}; thread/start
+    # {cwd, sandbox} or thread/resume {threadId}; turn/start {threadId, input:[{type:
+    # "text", text}]}; stream turn/started, item/completed (agentMessage text,
+    # commandExecution), turn/completed. Live follow-up: turn/steer {threadId, input,
+    # expectedTurnId} - the METHOD is a stable (non-experimental) v2 request with a
+    # provider-enforced active-turn precondition; only some optional FIELDS are marked
+    # experimental, and Skye sends none of them. We do NOT opt into the experimentalApi
+    # capability. Version guard: any unexpected handshake shape BEFORE work starts falls
+    # back to exec; a protocol break mid-turn fails closed (no silent exec re-run after
+    # side effects may have happened).
+
+    #: handshake fields that must be present and correctly typed (version guard)
+    _APP_SERVER_GUARD = {"userAgent": str, "codexHome": str, "platformFamily": str}
+
+    def run_session(self, contract: dict, *, timeout: int = 1800,
+                    resume_session_id: "str | None" = None,
+                    run_key: "str | None" = None,
+                    on_event=None,
+                    cancel_event: "threading.Event | None" = None,
+                    live_file: "str | None" = None) -> SessionResult:
+        # CODEX_PROTOCOL=exec pins the older exec-JSONL transport for codex builds
+        # that predate the app-server; anything else uses the app-server and falls
+        # back to exec (loudly, via the protocol field) if the handshake cannot
+        # complete.
+        if os.environ.get("CODEX_PROTOCOL", "").strip().lower() == "exec":
+            return super().run_session(
+                contract, timeout=timeout, resume_session_id=resume_session_id,
+                run_key=run_key, on_event=on_event, cancel_event=cancel_event,
+                live_file=live_file)
+        if not self.available():
+            raise AdapterError(
+                f"{self.name}: the '{self.binary}' tool is not installed on this machine. "
+                "Install it yourself - Skye uses YOUR coding agent, it does not download one.")
+        continuity = "resumed" if resume_session_id else "fresh"
+        command = [self.binary, "app-server"]
+        guard = live_claim(live_file, command, run_key, continuity)
+        if guard is not None:
+            return guard
+        proc = subprocess.Popen(
+            command, cwd=contract["repo"], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+            start_new_session=True)  # its own process group: cancel/timeout signal the tree
+        live_record(live_file, proc, run_key, self.name)
+        if cancel_event is None:
+            cancel_event = threading.Event()
+        entry = None
+        if run_key:
+            entry = {"proc": proc, "cancel": cancel_event, "adapter": self,
+                     "steers": 0, "closing": False, "lock": threading.Lock(),
+                     "rpc": {"thread_id": "", "turn_id": "", "seq": 0}}
+            with _LIVE_LOCK:
+                _LIVE[run_key] = entry
+        state = {"cancelled": False, "timed_out": False}
+        deadline = time.monotonic() + timeout
+
+        def _watchdog() -> None:
+            while proc.poll() is None:
+                if cancel_event.is_set():
+                    state["cancelled"] = True
+                    _signal_group(proc, grace=self.CANCEL_GRACE)
+                    return
+                if time.monotonic() > deadline:
+                    state["timed_out"] = True
+                    _signal_group(proc, grace=self.CANCEL_GRACE)
+                    return
+                time.sleep(0.1)
+
+        watcher = threading.Thread(target=_watchdog, daemon=True)
+        watcher.start()
+        try:
+            try:
+                result = self._app_server_turn(proc, contract, resume_session_id,
+                                               continuity, command, on_event, entry)
+            finally:
+                if proc.stdin is not None:
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
+                returncode = proc.wait()
+                watcher.join(timeout=self.CANCEL_GRACE + 2)
+                if run_key:
+                    with _LIVE_LOCK:
+                        _LIVE.pop(run_key, None)
+                live_release(live_file, proc)
+        except _FallbackToExec as error:
+            # Handshake failed BEFORE any work: no side effects, so the proven exec
+            # session path is a safe, journaled fallback (never after the turn started).
+            if cancel_event.is_set():
+                return SessionResult(ok=False, cancelled=True, command=command,
+                                     returncode=-1, continuity=continuity,
+                                     protocol="app-server")
+            if on_event is not None:
+                on_event({"kind": "error",
+                          "text": f"app-server unusable ({error}); running one-shot exec "
+                                  "- live follow-ups unsupported this run"})
+            result = super().run_session(
+                contract, timeout=timeout, resume_session_id=resume_session_id,
+                run_key=run_key, on_event=on_event, cancel_event=cancel_event,
+                live_file=live_file)
+            result.protocol = f"exec-json-fallback: {str(error)[:160]}"
+            return result
+        if state["cancelled"] or cancel_event.is_set():
+            result.ok = False
+            result.cancelled = True
+            result.returncode = returncode
+        if state["timed_out"]:
+            result.ok = False
+            result.timed_out = True
+            result.returncode = 124
+            result.output = f"timed out after {timeout}s"
+        return result
+
+    def steer_into(self, entry: dict, text: str) -> str:
+        rpc = entry.get("rpc")
+        if rpc is None:
+            return "unsupported"  # an exec-mode run has no live-input channel
+        proc = entry["proc"]
+        with entry["lock"]:
+            if entry["closing"] or proc.poll() is not None:
+                return "exiting"
+            if not rpc.get("turn_id"):
+                return "no-active-turn"  # provider requires the active turn id
+            rpc["seq"] += 1
+            frame = json.dumps({
+                "jsonrpc": "2.0", "id": f"steer-{rpc['seq']}", "method": "turn/steer",
+                "params": {"threadId": rpc["thread_id"],
+                           "input": [{"type": "text", "text": text}],
+                           "expectedTurnId": rpc["turn_id"]}}) + "\n"
+            try:
+                proc.stdin.write(frame)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                return "exiting"
+        return "steered"  # SUBMITTED; the provider's steer response is the receipt
+
+    def _app_server_turn(self, proc, contract, resume_session_id, continuity, command,
+                         on_event, entry) -> SessionResult:
+        """The full app-server exchange. Protocol-shape failures BEFORE the turn starts
+        raise _FallbackToExec (no side effects yet); after turn start they fail closed."""
+        rpc = (entry or {}).get("rpc", {"thread_id": "", "turn_id": "", "seq": 0})
+        responses: dict = {}
+        texts: list[str] = []
+        session_id = ""
+        usage: dict = {}
+        turn_started = False
+        turn_done = False
+        result_ok: "bool | None" = None
+        protocol_error = ""
+
+        def _send(method: str, params: dict, req_id: str) -> None:
+            proc.stdin.write(json.dumps(
+                {"jsonrpc": "2.0", "id": req_id, "method": method,
+                 "params": params}) + "\n")
+            proc.stdin.flush()
+
+        _send("initialize", {"clientInfo": {"name": "skye", "title": None,
+                                            "version": "1"},
+                             "capabilities": {"experimentalApi": False}}, "init")
+        # One pass over stdout drives the whole exchange: requests advance when their
+        # response arrives; notifications become normalized events as they stream.
+        phase = "initialize"
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if "id" in msg and ("result" in msg or "error" in msg):
+                responses[msg["id"]] = msg
+                rid = msg["id"]
+                if rid == "init":
+                    result = msg.get("result") or {}
+                    if (msg.get("error") is not None
+                            or any(not isinstance(result.get(f), t)
+                                   for f, t in self._APP_SERVER_GUARD.items())):
+                        # Version guard: the server does not speak the protocol shape we
+                        # grounded against - fall back BEFORE any side effect.
+                        raise _FallbackToExec(f"unexpected initialize response: "
+                                              f"{str(msg)[:200]}")
+                    _send_notification(proc, "initialized")
+                    sandbox = "workspace-write" if contract.get("tools_writable") else "read-only"
+                    if resume_session_id:
+                        _send("thread/resume", {"threadId": resume_session_id}, "thread")
+                    else:
+                        _send("thread/start", {"cwd": contract["repo"],
+                                               "sandbox": sandbox}, "thread")
+                elif rid == "thread":
+                    if msg.get("error") is not None:
+                        if resume_session_id:
+                            # Rejected resume: fail CLOSED, never a silent fresh thread.
+                            return SessionResult(
+                                ok=False, resume_rejected=True, command=command,
+                                returncode=1, continuity=continuity,
+                                protocol="app-server",
+                                session_id=resume_session_id,
+                                output=f"thread/resume rejected: "
+                                       f"{str(msg.get('error'))[:300]}")
+                        raise _FallbackToExec(f"thread/start failed: "
+                                              f"{str(msg.get('error'))[:200]}")
+                    thread = (msg.get("result") or {}).get("thread") or {}
+                    session_id = str(thread.get("id") or "")
+                    if not session_id:
+                        raise _FallbackToExec("thread response carried no thread id")
+                    rpc["thread_id"] = session_id
+                    if on_event is not None:
+                        on_event({"kind": "session", "session_id": session_id})
+                    _send("turn/start",
+                          {"threadId": session_id,
+                           "input": [{"type": "text",
+                                      "text": self._prompt(contract)}]}, "turn")
+                elif rid == "turn":
+                    if msg.get("error") is not None:
+                        protocol_error = f"turn/start failed: {str(msg.get('error'))[:300]}"
+                        break
+                    turn = (msg.get("result") or {}).get("turn") or {}
+                    rpc["turn_id"] = str(turn.get("id") or "")
+                    turn_started = True
+                elif str(rid).startswith("steer-"):
+                    if on_event is not None:
+                        if msg.get("error") is not None:
+                            on_event({"kind": "steer-rejected",
+                                      "text": str(msg.get("error"))[:300]})
+                        else:
+                            on_event({"kind": "steer-ack",
+                                      "text": str((msg.get("result") or {})
+                                                  .get("turnId", ""))})
+                continue
+            method = msg.get("method")
+            params = msg.get("params") or {}
+            if method == "turn/started":
+                turn = params.get("turn") or {}
+                if turn.get("id"):
+                    rpc["turn_id"] = str(turn["id"])
+                turn_started = True
+            elif method == "item/completed":
+                item = params.get("item") or {}
+                itype = item.get("type")
+                if itype == "agentMessage" and item.get("text"):
+                    texts.append(str(item["text"]))
+                    if on_event is not None:
+                        on_event({"kind": "message", "text": str(item["text"])})
+                elif itype == "commandExecution":
+                    if on_event is not None:
+                        on_event({"kind": "tool",
+                                  "name": str(item.get("command") or "")[:120]})
+            elif method == "turn/completed":
+                turn = params.get("turn") or {}
+                status = str(turn.get("status") or "")
+                result_ok = status in ("completed", "")
+                turn_done = True
+                if entry is not None:
+                    with entry["lock"]:
+                        entry["closing"] = True
+                break  # one process per turn: close stdin in the finally, server exits
+        if not turn_started and not turn_done and not protocol_error and proc.poll() not in (None, 0):
+            raise _FallbackToExec(f"app-server exited before the turn started "
+                                  f"(exit {proc.poll()})")
+        ok = bool(turn_done and result_ok and not protocol_error)
+        return SessionResult(ok=ok, output="\n".join(texts)[-8000:], command=command,
+                             returncode=0 if ok else 1,
+                             session_id=session_id, continuity=continuity,
+                             protocol="app-server",
+                             resume_rejected=False, usage=usage)
+
+
+class _FallbackToExec(Exception):
+    """The app-server handshake failed before any work: run the proven exec path."""
+
+
+def _send_notification(proc, method: str) -> None:
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method}) + "\n")
+    proc.stdin.flush()

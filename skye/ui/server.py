@@ -1151,15 +1151,29 @@ class UiHandler(BaseHTTPRequestHandler):
                         running = _live_missions.get(mission_id, {}).get("running")
                     if running:
                         from ..adapters import base as _adapter_base
+                        from ..mission import Journal as _Journal
+                        import uuid as _uuid
+                        journal = _Journal(mission_dir / "journal.jsonl")
+                        # Durable intent BEFORE the write: if this server dies after
+                        # submitting, the journal says the follow-up exists but its
+                        # delivery is unconfirmed - the next run pauses on it instead of
+                        # guessing. "steered" = SUBMITTED to the process; consumption is
+                        # the provider's own event (replay echo / steer response),
+                        # journaled by the engine as steer-ack progress.
+                        follow_id = _uuid.uuid4().hex[:12]
+                        journal.append(step, "follow-up", follow_id=follow_id,
+                                       text=text[:500], delivery="steered-live",
+                                       state="intent")
                         steered = _adapter_base.steer_live(f"{mission_id}:{step}", text)
                         if steered == "steered":
-                            from ..mission import Journal as _Journal
-                            _Journal(mission_dir / "journal.jsonl").append(
-                                step, "follow-up", text=text[:500],
-                                delivery="steered-live")
+                            journal.append(step, "follow-up-submitted",
+                                           follow_id=follow_id)
                             return self._json({"accepted": True, "step": step,
-                                               "delivery": "steered",
+                                               "delivery": "submitted",
+                                               "receipt": "pending provider event",
                                                "continuity": "same-live-session"})
+                        journal.append(step, "follow-up-undelivered",
+                                       follow_id=follow_id, reason=steered)
                         if steered == "unsupported":
                             return self._json(
                                 {"error": f"the {step_status['adapter']} exec protocol is "
@@ -1169,6 +1183,11 @@ class UiHandler(BaseHTTPRequestHandler):
                                           "which Skye does not implement. Retry after the "
                                           "step settles - the follow-up then resumes the "
                                           "recorded session."}, 409)
+                        if steered == "no-active-turn":
+                            return self._json(
+                                {"error": f"step '{step}' has no active turn right now "
+                                          "(the vendor requires one for steering); retry "
+                                          "while it is mid-turn or after it settles"}, 409)
                         return self._json(
                             {"error": f"step '{step}' is not taking input right now (the "
                                       "run may have just finished its turn); retry after "
