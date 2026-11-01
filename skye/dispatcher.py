@@ -125,14 +125,7 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
         else:
             run = lambda s: adapter.run(s, timeout=timeout)
         try:
-            # Owner-authored role instructions (registry "instructions" field) travel with
-            # the goal text into the worker. A copy is passed: the contract on disk and its
-            # approval fingerprint never change.
-            from .roles import instructions_for
-            guidance = instructions_for(spec["role"])
-            run_spec = ({**spec, "brief": guidance + "\n\n" + (spec.get("brief") or spec["goal"])}
-                        if guidance else spec)
-            result = run(run_spec)
+            result = run(spec)
         except Exception as error:
             emit("failed", spec, status="failed", reason=str(error), fingerprint=fp)
             return Outcome(status="failed", contract=spec, reason=str(error), fingerprint=fp,

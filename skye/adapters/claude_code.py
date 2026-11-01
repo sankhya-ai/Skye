@@ -18,6 +18,8 @@ class ClaudeCodeAdapter(Adapter):
 
     def build_command(self, contract: dict) -> list[str]:
         prompt = contract.get("brief") or contract["goal"]
+        if contract.get("role_instructions"):
+            prompt = contract["role_instructions"] + "\n\n" + prompt
         command = [self.binary, "-p", prompt, "--output-format", "text"]
         tools = (contract.get("tools") or [])
         if tools:

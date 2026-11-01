@@ -16,6 +16,8 @@ class CodexAdapter(Adapter):
 
     def build_command(self, contract: dict) -> list[str]:
         prompt = contract.get("brief") or contract["goal"]
+        if contract.get("role_instructions"):
+            prompt = contract["role_instructions"] + "\n\n" + prompt
         writable = bool(contract.get("tools_writable"))
         sandbox = "workspace-write" if writable else "read-only"
         return [self.binary, "exec", "--sandbox", sandbox, prompt]

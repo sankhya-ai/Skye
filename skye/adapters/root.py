@@ -85,7 +85,10 @@ class RootAdapter(Adapter):
         else:
             budget = dict(contract.get("budget") or {})
             budget.setdefault("max_steps", 25)
-            body = {"goal": contract.get("brief") or contract["goal"], "workspace": contract["repo"],
+            goal_text = contract.get("brief") or contract["goal"]
+            if contract.get("role_instructions"):
+                goal_text = contract["role_instructions"] + "\n\n" + goal_text
+            body = {"goal": goal_text, "workspace": contract["repo"],
                     "role": contract["role"], "budget": budget, "credentials": []}
             if contract.get("contract_keys"):
                 body["contract"] = list(contract["contract_keys"])

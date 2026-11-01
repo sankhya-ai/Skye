@@ -124,31 +124,41 @@ def test_artifact_file_refuses_symlink_escape(tmp_path):
         artifact_file(state, "m1", "poster.svg")
 
 
-def test_role_instructions_reach_worker_without_touching_contract(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
-    (tmp_path / "roles.json").write_text(json.dumps({"roles": [
+def test_role_instructions_bind_at_validation_into_approval_fingerprint(tmp_path, monkeypatch):
+    roles_file = tmp_path / "roles.json"
+    roles_file.write_text(json.dumps({"roles": [
         {"name": "designer", "instructions": "Diverge first. No generic hooks."}]}))
-    from skye.roles import instructions_for
-    assert instructions_for("designer") == "Diverge first. No generic hooks."
-    assert instructions_for("developer") == ""
-
-    import skye.dispatcher as dispatcher
-    captured = {}
-
-    def fake_run(spec, **kwargs):
-        captured["brief"] = spec.get("brief")
-        from skye.adapters.base import Result
-        return Result(ok=True, output="done")
-
-    (tmp_path / "repo").mkdir(exist_ok=True)
-    contract = {"goal": "make a poster", "brief": "Poster for the launch.", "repo": str(tmp_path / "repo"),
-                "role": "designer", "adapter": "root", "gates": [], "budget": {}}
+    monkeypatch.setenv("SKYE_ROLES", str(roles_file))
+    (tmp_path / "repo").mkdir()
+    raw = {"goal": "make a poster", "brief": "Poster for the launch.",
+           "repo": str(tmp_path / "repo"), "role": "designer", "adapter": "root",
+           "gates": [], "budget": {}}
+    from skye.approvals import fingerprint
     from skye.contract import validate
-    spec = validate(contract)
-    spec["id"] = "s1"
-    from skye.policy import Policy
-    policy = Policy(data={"allow_unattended": [{"adapter": "root", "role": "*"}]})
-    outcome = dispatcher.dispatch(spec, policy=policy, runner=fake_run)
-    assert outcome.status == "done"
-    assert captured["brief"].startswith("Diverge first. No generic hooks.\n\nPoster for the launch.")
-    assert spec.get("brief") == "Poster for the launch."  # the contract itself is untouched
+
+    spec = validate(dict(raw))
+    # the brief stays the owner's own words; instructions live in their own contract field
+    assert spec["brief"] == "Poster for the launch."
+    assert spec["role_instructions"] == "Diverge first. No generic hooks."
+    approved_fp = fingerprint(spec)
+
+    # re-validation of an already-validated contract is idempotent under an unchanged registry
+    assert validate(dict(spec)) == spec
+    assert fingerprint(dict(spec)) == approved_fp
+
+    # editing the registry afterwards FAILS CLOSED: fingerprints are computed through
+    # validate() under the current registry, so the approved text can no longer match -
+    # the old approval is useless and a fresh approval under the new instructions is needed.
+    roles_file.write_text(json.dumps({"roles": [
+        {"name": "designer", "instructions": "SUBSTITUTED instructions."}]}))
+    assert fingerprint(spec) != approved_fp          # old approval cannot be consumed
+    substituted = validate(dict(raw))
+    assert substituted["role_instructions"] == "SUBSTITUTED instructions."
+    assert fingerprint(substituted) != approved_fp
+
+    # and with no registry instructions at all, the field disappears and the fingerprint
+    # changes again - never a silent fall-back to the approved text.
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "absent.json"))
+    plain = validate(dict(raw))
+    assert "role_instructions" not in plain
+    assert fingerprint(plain) != approved_fp

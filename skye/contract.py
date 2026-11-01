@@ -50,6 +50,18 @@ def validate(contract: dict[str, Any]) -> dict[str, Any]:
     out["gates"] = gates
     out["branch"] = str(out.get("branch") or "").strip()
     out["brief"] = str(out.get("brief") or "").strip()  # the worker's small, self-contained brief
+    # Owner-authored role instructions (registry "instructions" field) snapshot into the
+    # contract at VALIDATION time as their own field: the text the owner reviews and approves
+    # IS the text the worker receives, and the approval fingerprint covers it (fingerprint()
+    # validates, so a registry edit changes the fingerprint of future approvals - it can never
+    # silently retarget an approved one). A separate field keeps re-validation idempotent.
+    # Adapters prepend it to the worker's prompt; absent when the registry has none.
+    from .roles import instructions_for
+    guidance = instructions_for(out["role"])
+    if guidance:
+        out["role_instructions"] = guidance
+    else:
+        out.pop("role_instructions", None)
     budget = out.get("budget") or {}
     if not isinstance(budget, dict):
         raise ContractError("budget must be an object")
