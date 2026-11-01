@@ -603,6 +603,12 @@ def test_follow_up_endpoint_steers_a_live_run(ui_server, tmp_path, monkeypatch, 
     progress = [e.get("text") for e in _journal(state_dir).entries()
                 if e.get("event") == "worker-progress"]
     assert "Follow-up received: also add logging" in progress
+    # the run's identity ties the server's intent to the engine's own records: ONE
+    # non-empty run_instance across the intent, the dispatch and the progress stream
+    entries = _journal(state_dir).entries()
+    tokens = {e.get("run_instance") for e in entries
+              if e.get("event") in ("follow-up", "dispatched", "worker-progress")}
+    assert len(tokens) == 1 and next(iter(tokens))
 
 
 # ----- live-steer durability: intent without a confirmed outcome pauses the owner -----
@@ -637,7 +643,7 @@ def test_live_steer_submitted_without_receipt_or_settle_pauses(fake_path, tmp_pa
     assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="tweak it",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
 
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
@@ -652,7 +658,7 @@ def test_live_steer_submitted_without_receipt_or_settle_pauses(fake_path, tmp_pa
 
     # only the provider-correlated receipt (steer-ack carrying THIS follow-up's text)
     # proves consumption
-    journal.append("dev", "worker-progress", kind="steer-ack", text="tweak it")
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a", text="tweak it")
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
     assert outcome.status == "done", outcome.reason
 
@@ -663,17 +669,17 @@ def test_one_receipt_never_clears_two_concurrent_submits(fake_path, tmp_path):
     assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="same words",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
     journal.append("dev", "follow-up", follow_id="f2", text="same words",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f2")
     # ONE provider receipt for that text: it clears the FIRST submission only.
-    journal.append("dev", "worker-progress", kind="steer-ack", text="same words")
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a", text="same words")
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
     assert outcome.status == "needs-owner" and "unconfirmed" in outcome.reason
     # the second receipt clears the second
-    journal.append("dev", "worker-progress", kind="steer-ack", text="same words")
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a", text="same words")
     assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
 
 
@@ -683,10 +689,10 @@ def test_unrelated_steer_ack_does_not_resolve_a_submission(fake_path, tmp_path):
     assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
     # an ack for DIFFERENT text (unrelated provider activity) must not resolve f1
-    journal.append("dev", "worker-progress", kind="steer-ack",
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a",
                    text="some other echoed message")
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
     assert outcome.status == "needs-owner" and "add logging" in outcome.reason
@@ -700,10 +706,10 @@ def test_accepted_but_unapplied_steer_pauses_as_not_consumed(fake_path, tmp_path
     assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
-    journal.append("dev", "worker-progress", kind="steer-accepted", text="add logging")
-    journal.append("dev", "worker-progress", kind="steer-unapplied", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-accepted", run_instance="run-a", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-unapplied", run_instance="run-a", text="add logging")
     journal.append("dev", "settled", status="done", reason="", output="x",
                    gates=[], worker_job="", role="developer")
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
@@ -781,14 +787,14 @@ def test_stale_or_early_receipt_never_resolves_a_submission(fake_path, tmp_path)
     state_dir = tmp_path / "st"
     assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
     journal = _journal(state_dir)
-    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a", text="add logging")
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
     assert outcome.status == "needs-owner" and "unconfirmed" in outcome.reason
     # and the REAL receipt, arriving after, resolves exactly it
-    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a", text="add logging")
     assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
 
 
@@ -800,14 +806,14 @@ def test_follow_up_endpoint_serializes_live_steers(ui_server, tmp_path, monkeypa
     _settled_mission_with_session(state_dir, tmp_path)
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
     monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "add logging"})
     assert status == 409 and "awaiting its provider receipt" in body["error"], body
     # once the receipt lands, the next steer is accepted
-    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a", text="add logging")
     monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "add logging"})
@@ -879,7 +885,7 @@ def test_unrelated_step_activity_never_releases_a_marker(ui_server, tmp_path,
     monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
     journal = _journal(state_dir)
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent", run_instance="run-a")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
     (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
         json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
@@ -887,8 +893,8 @@ def test_unrelated_step_activity_never_releases_a_marker(ui_server, tmp_path,
     # another step's terminal + ack, plus a dev ack for DIFFERENT text: none resolve f1
     journal.append("qa", "settled", status="done", reason="", output="x",
                    gates=[], worker_job="", role="reviewer")
-    journal.append("qa", "worker-progress", kind="steer-ack", text="add logging")
-    journal.append("dev", "worker-progress", kind="steer-ack", text="different text")
+    journal.append("qa", "worker-progress", kind="steer-ack", run_instance="run-a", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-ack", run_instance="run-a", text="different text")
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "more work"})
     assert status == 409 and "awaiting its provider receipt" in body["error"]
@@ -919,24 +925,32 @@ def test_failed_steer_never_deletes_a_reclaimed_marker(ui_server, tmp_path,
 
 def test_delayed_prior_generation_receipt_never_releases_claim(ui_server, tmp_path,
                                                                 monkeypatch):
-    # A same-text ack journaled AFTER a newer dispatch belongs to the old process's
-    # generation: it must not release the new claim.
+    # The exact probe scenario: normal marker key, a new run dispatched, the current
+    # intent stamped with the new run's identity - then a DELAYED same-text ack from
+    # the old run's process lands AFTER them. No newer dispatch sits between intent
+    # and ack, so position alone cannot reject it: only the run-instance identity
+    # stamped by the actual writer can.
     url, state_dir = ui_server
     _settled_mission_with_session(state_dir, tmp_path)
-    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    monkeypatch.setattr(ui, "_live_missions",
+                        {"m1": {"running": True, "run_instance": "222:run-new"}})
     journal = _journal(state_dir)
+    journal.append("dev", "dispatched", fingerprint="fp1",
+                   run_instance="222:run-new")
     journal.append("dev", "follow-up", follow_id="f1", text="add logging",
-                   delivery="steered-live", state="intent")
+                   delivery="steered-live", state="intent",
+                   run_instance="222:run-new")
     journal.append("dev", "follow-up-submitted", follow_id="f1")
-    journal.append("dev", "dispatched", fingerprint="fp1")  # a NEWER generation began
-    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging",
+                   run_instance="111:run-old")  # delayed ack from the PRIOR process
     (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
         json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
-                    "run_key": "m1:dev", "created": time.time()}))
+                    "run_key": "m1:dev", "run_instance": "222:run-new",
+                    "created": time.time()}))
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "add logging"})
     assert status == 409, body
-    # engine side: same boundary - the scan must still call f1 unconfirmed
+    # engine side: same identity boundary - the scan must still call f1 unconfirmed
     mission = _mission(tmp_path, _one_step())
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
     assert outcome.status == "needs-owner", outcome.status
@@ -1010,3 +1024,80 @@ def test_other_followups_undelivered_does_not_clear_claim(ui_server, tmp_path,
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "more"})
     assert status == 409 and "awaiting its provider receipt" in body["error"]
+
+
+def test_same_generation_receipt_releases_claim_and_next_steer_accepted(
+        ui_server, tmp_path, monkeypatch):
+    # Positive control for identity matching: an ack stamped with the SAME run
+    # instance as the intent resolves the claim and the next steer proceeds.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions",
+                        {"m1": {"running": True, "run_instance": "111:run-new"}})
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent",
+                   run_instance="111:run-new")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
+        json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
+                    "run_key": "m1:dev", "run_instance": "111:run-new",
+                    "created": time.time()}))
+    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging",
+                   run_instance="111:run-new")
+    monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "more work"})
+    assert status == 200 and body["delivery"] == "submitted", body
+    # and the NEW intent carries the live run's identity
+    new_intent = next(e for e in journal.entries()
+                      if e.get("event") == "follow-up"
+                      and e.get("follow_id") not in (None, "f1"))
+    assert new_intent.get("run_instance") == "111:run-new"
+
+
+def test_legacy_unstamped_records_never_resolve_a_claim(ui_server, tmp_path,
+                                                        monkeypatch, fake_path):
+    # Records with no stamped run identity (written before this contract, or by an
+    # unknown writer) can never prove their generation: BOTH the server walk and
+    # the engine scan fail closed even when position and text line up.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    journal.append("dev", "worker-progress", kind="steer-ack", text="add logging")
+    (state_dir / "missions" / "m1" / "steer-pending-dev").write_text(
+        json.dumps({"follow_id": "f1", "owner_pid": os.getpid(),
+                    "run_key": "m1:dev", "created": time.time()}))
+    monkeypatch.setattr("skye.adapters.base.steer_live", lambda *a: "steered")
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "more work"})
+    assert status == 409, body
+    # engine side: same fail-closed posture
+    mission = _mission(tmp_path, _one_step())
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner", outcome.status
+
+
+def test_engine_stamps_run_instance_on_its_own_records(fake_path, tmp_path):
+    # The engine's own records carry the run identity - passed in for
+    # server-managed runs, minted (pid:token) otherwise.
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir,
+                       run_instance="999:passed-in").status == "done"
+    dispatched = [e for e in _journal(state_dir).entries()
+                  if e.get("event") == "dispatched"]
+    assert dispatched and all(e.get("run_instance") == "999:passed-in"
+                              for e in dispatched)
+
+    state_dir2 = tmp_path / "st2"
+    assert run_mission(mission, _policy(), state_dir=state_dir2).status == "done"
+    dispatched2 = [e for e in _journal(state_dir2).entries()
+                   if e.get("event") == "dispatched"]
+    assert dispatched2 and all(
+        isinstance(e.get("run_instance"), str) and ":" in e["run_instance"]
+        for e in dispatched2)
