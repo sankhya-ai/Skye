@@ -65,6 +65,23 @@ def default_state_dir() -> str:
     return os.environ.get("SKYE_STATE_DIR", "").strip() or ".skye"
 
 
+def _resolve_repo(mission: dict[str, Any], repo_field: str) -> str:
+    """Resolve a step's repo reference to an actual path. With a repos map, a bare name (no
+    path separator) must be one of the declared names - an unknown bare name is a mission
+    authoring error, never a silent path. A field containing a separator stays a literal
+    path, exactly as before. repos_resolved (set when workspaces rewrote the paths) wins over
+    the declared map so steps land in the mission's worktrees."""
+    field = str(repo_field or "").strip()
+    resolved = mission.get("repos_resolved") or mission.get("repos") or {}
+    if field and "/" not in field and "\\" not in field:
+        if field in resolved:
+            return str(resolved[field])
+        if resolved:
+            raise MissionError(
+                f"unknown repo name '{field}'; declared repos: {', '.join(sorted(resolved))}")
+    return field or str((resolved or {}).get("default") or mission.get("repo") or "")
+
+
 def load_mission(path: str | Path) -> dict[str, Any]:
     """Read and validate a mission file. Steps are contracts minus repo (the mission's top-level
     repo applies unless a step overrides); needs must point at EARLIER steps, keeping execution a
@@ -100,7 +117,7 @@ def load_mission(path: str | Path) -> dict[str, Any]:
                     or when.get("status") not in ("done", "failed", "gate-failed", "skipped")):
                 raise MissionError(
                     f"step '{step_id}': when must name an earlier step and a settled status")
-        candidate = {**step, "repo": step.get("repo") or raw.get("repo", "")}
+        candidate = {**step, "repo": _resolve_repo(raw, step.get("repo") or raw.get("repo", ""))}
         try:
             validate(candidate)
         except ContractError as error:
@@ -111,10 +128,18 @@ def load_mission(path: str | Path) -> dict[str, Any]:
     if max_rounds is not None and (not isinstance(max_rounds, int)
                                    or not 0 <= max_rounds <= 8):
         raise MissionError("max_review_rounds must be an integer 0-8")
-    return {"id": mission_id, "goal": str(raw.get("goal") or "").strip(),
-            "repo": str(raw.get("repo") or "").strip(), "steps": steps,
-            "project": str(raw.get("project") or "").strip(),
-            "max_review_rounds": max_rounds}
+    repos = raw.get("repos")
+    if repos is not None:
+        if (not isinstance(repos, dict) or not repos
+                or any(not str(n).strip() or not str(p).strip() for n, p in repos.items())):
+            raise MissionError("repos must be a non-empty object of name -> path")
+    mission = {"id": mission_id, "goal": str(raw.get("goal") or "").strip(),
+               "repo": str(raw.get("repo") or "").strip(), "steps": steps,
+               "project": str(raw.get("project") or "").strip(),
+               "max_review_rounds": max_rounds}
+    if repos is not None:
+        mission["repos"] = {str(n): str(p) for n, p in repos.items()}
+    return mission
 
 
 class Journal:
@@ -304,7 +329,7 @@ def _step_contract(mission: dict[str, Any], step: dict[str, Any],
                    discussion_tail: str = "",
                    unacked: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     contract = {k: step[k] for k in ("goal", "role", "adapter") }
-    contract["repo"] = step.get("repo") or mission["repo"]
+    contract["repo"] = _resolve_repo(mission, step.get("repo") or mission.get("repo", ""))
     for optional in ("gates", "budget", "branch", "contract_keys", "claims"):
         if optional in step:
             contract[optional] = step[optional]
@@ -362,12 +387,27 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     # changes from earlier attempts). The end snapshot lands when the mission settles done, so
     # the UI can show what the team actually changed, derived from the tree itself.
     artifacts_path = mission_dir / "artifacts.json"
-    if mission.get("repo") and not artifacts_path.exists():
+    _resolved_repos = mission.get("repos_resolved") or {}
+    if (mission.get("repo") or _resolved_repos) and not artifacts_path.exists():
         from .journey import repo_manifest
-        start_manifest, start_truncated = repo_manifest(mission["repo"])
-        artifacts_path.write_text(json.dumps(
-            {"repo": mission["repo"], "start": start_manifest,
-             "start_truncated": start_truncated}) + "\n", "utf-8")
+        record = {"repo": mission.get("repo", ""), "start": [], "start_truncated": False}
+        if mission.get("repo"):
+            start_manifest, start_truncated = repo_manifest(mission["repo"])
+            record["start"] = start_manifest
+            record["start_truncated"] = start_truncated
+        # Multi-repo missions baseline EVERY resolved repository (its worktree when
+        # workspaces are on): the delivery diff then covers what the team changed in each
+        # repo, not just the default one.
+        resolved = _resolved_repos
+        if resolved:
+            record["repos"] = {}
+            for name, path in resolved.items():
+                if not path:
+                    continue
+                manifest, truncated = repo_manifest(path)
+                record["repos"][name] = {"repo": path, "start": manifest,
+                                         "start_truncated": truncated}
+        artifacts_path.write_text(json.dumps(record) + "\n", "utf-8")
     bridge = bridge if bridge is not None else events.from_env(log_path=mission_dir / "events.jsonl")
     emit = bridge.publish
     context = {"mission": mission["id"]}
@@ -752,12 +792,21 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             if gate.get("gate") == "journey" and gate.get("ok"):
                 journey_ok = True
                 journey_evidence = str(gate.get("evidence") or gate.get("detail") or "")
-    if mission.get("repo") and artifacts_path.exists():
+    if (mission.get("repo") or mission.get("repos_resolved")) and artifacts_path.exists():
         from .journey import repo_manifest
-        end_manifest, end_truncated = repo_manifest(mission["repo"])
         record = json.loads(artifacts_path.read_text("utf-8"))
-        record["end"] = end_manifest
-        record["end_truncated"] = end_truncated
+        if mission.get("repo"):
+            end_manifest, end_truncated = repo_manifest(mission["repo"])
+            record["end"] = end_manifest
+            record["end_truncated"] = end_truncated
+        resolved = mission.get("repos_resolved") or {}
+        if resolved and record.get("repos"):
+            for name, path in resolved.items():
+                if not path or name not in record["repos"]:
+                    continue
+                manifest, truncated = repo_manifest(path)
+                record["repos"][name]["end"] = manifest
+                record["repos"][name]["end_truncated"] = truncated
         artifacts_path.write_text(json.dumps(record) + "\n", "utf-8")
     backlog.mark_delivered(mission["id"], journey_ok=journey_ok, evidence=journey_evidence)
     # The ticket is the permanent home: the mission's team-line discussion folds into its
@@ -815,7 +864,7 @@ def reset_mission(mission: dict[str, Any], state_dir: str | Path | None = None) 
     mission_dir = state_dir / "missions" / mission["id"]
     from . import workspaces
     record = workspaces.read_record(mission_dir)
-    if record and record.get("worktree"):
+    if record and (record.get("worktree") or record.get("repos")):
         workspaces.release(record)  # removes the worktree only when clean; the branch stays
     journal = mission_dir / "journal.jsonl"
     if not journal.exists():

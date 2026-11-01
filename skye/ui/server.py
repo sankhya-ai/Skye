@@ -170,13 +170,23 @@ def workspace_payload(mission_dir: Path) -> dict:
         return {"mode": "shared", "reason": "no workspace record", "branch": "",
                 "recovery_pending": False, "recovery_acknowledged": None}
     pending = bool(record.get("uncommitted_lost")) and not record.get("recovery_acknowledged")
-    return {"mode": "worktree" if record.get("worktree") else "shared",
+    payload = {"mode": "worktree" if record.get("worktree") else "shared",
             "reason": record.get("reason", ""),
             "branch": record.get("branch", ""),
             "base_rev": record.get("base_rev", ""),
             "recovered_from_branch": bool(record.get("recovered_from_branch")),
             "recovery_pending": pending,
             "recovery_acknowledged": record.get("recovery_acknowledged")}
+    if record.get("repos"):
+        payload["mode"] = "multi-worktree"
+        payload["repos"] = {
+            name: {"mode": "worktree" if rec.get("worktree") else "shared",
+                   "reason": rec.get("reason", ""), "branch": rec.get("branch", ""),
+                   "base_rev": rec.get("base_rev", ""),
+                   "recovered_from_branch": bool(rec.get("recovered_from_branch")),
+                   "uncommitted_lost": bool(rec.get("uncommitted_lost"))}
+            for name, rec in record["repos"].items()}
+    return payload
 
 
 def missions_overview(state_dir: Path) -> list[dict]:
