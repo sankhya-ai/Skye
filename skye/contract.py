@@ -130,6 +130,17 @@ def load(path: str | Path) -> dict[str, Any]:
     return validate(raw)
 
 
+def claims_conflict_scoped(first: list[str], repo_a: str, second: list[str], repo_b: str
+                           ) -> tuple[str, str] | None:
+    """claims_conflict scoped to the repository each claim set writes. Claims are
+    repo-RELATIVE paths: 'index.ts' in the backend and 'index.ts' in the frontend are
+    different files and must not block each other. A set with no repo recorded (an older
+    slot record) is treated conservatively as potentially any repo - it still conflicts."""
+    if repo_a and repo_b and repo_a != repo_b:
+        return None
+    return claims_conflict(first, second)
+
+
 def claims_conflict(first: list[str], second: list[str]) -> tuple[str, str] | None:
     """The first intersecting claim pair between two claim sets, or None. Prefix semantics:
     "src/api" conflicts with "src/api/routes.py" and with "src/api", not with "src/web".
