@@ -632,3 +632,30 @@ def test_discussion_endpoint_reads_the_team_line_with_acks(ui_server):
     # polling from the cursor returns only newer entries
     code, data = _req(url, f"/api/missions/m-ui/discussion?since={change['seq']}")
     assert [e["kind"] for e in data["entries"]] == ["ack"]
+
+
+def test_discussion_waiting_on_spans_pages(ui_server):
+    """An ack on a LATER page still clears waiting_on for a client paging the change, and an
+    ack on an EARLIER page still clears it when the client polls from a cursor past it."""
+    url, state_dir = ui_server
+    from skye import discuss
+    change = discuss.post(state_dir, "m-page", author="backend-dev", kind="contract-change",
+                          body="api v3", requires_ack=["frontend-dev", "tester"])
+    # the ack for frontend-dev lands BEFORE later filler entries: paging the change with a
+    # small limit must still see it cleared.
+    discuss.ack(state_dir, "m-page", change["id"], author="frontend-dev")
+    for i in range(5):
+        discuss.post(state_dir, "m-page", author="tester", kind="note", body=f"filler {i}")
+    # page containing ONLY the contract-change (limit 1): ack is outside the page entirely.
+    code, data = _req(url, "/api/missions/m-page/discussion?since=0&limit=1")
+    assert code == 200
+    assert [e["kind"] for e in data["entries"]] == ["contract-change"]
+    assert data["entries"][0]["waiting_on"] == ["tester"]
+    # polling from past the ack returns only filler, cursor advances monotonically.
+    code, page2 = _req(url, f"/api/missions/m-page/discussion?since={data['cursor']}&limit=2")
+    assert [e["kind"] for e in page2["entries"]] == ["ack", "note"]
+    assert page2["cursor"] > data["cursor"]
+    # tester acks last; a fresh full read shows the change completely caught up.
+    discuss.ack(state_dir, "m-page", change["id"], author="tester")
+    code, data = _req(url, "/api/missions/m-page/discussion?since=0&limit=1")
+    assert data["entries"][0]["waiting_on"] == []
