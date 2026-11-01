@@ -208,7 +208,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
       {workspace?.mode === "multi-worktree" && workspace.repos ? (
         <div className="text-xs text-muted-foreground">
           <p>
-            Runs in isolated worktrees across{" "}
+            Runs in separate Git worktrees across{" "}
             {Object.keys(workspace.repos).length} repositories:
           </p>
           <ul className="mt-0.5 space-y-0.5">
@@ -232,12 +232,12 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         <p className="text-xs text-muted-foreground">
           {workspace.mode === "worktree" ? (
             <>
-              Runs in an isolated worktree on branch{" "}
+              Runs in a separate Git worktree on branch{" "}
               <span className="font-mono">{workspace.branch || "?"}</span>.
             </>
           ) : (
             <>
-              Runs on the shared tree - not isolated
+              Runs on the shared tree - no separate worktree
               {workspace.reason ? ` (${workspace.reason})` : ""}.
             </>
           )}
