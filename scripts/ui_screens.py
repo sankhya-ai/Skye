@@ -1333,6 +1333,23 @@ with sync_playwright() as pw:
           "PASS" if prog_ok else "FAIL")
     page.wait_for_timeout(300)
     shot(page, out_dir / "ui-lifecycle-progress.png")
+    # Error response says delivery UNKNOWN, never unsent; keep operator input intact.
+    page.get_by_role("button", name="Follow up on the running step", exact=True).click()
+    follow_input = page.get_by_placeholder("Follow up on the running step...")
+    follow_input.fill("preserve this uncertain input")
+    page.route("**/api/missions/lifecycle-probe/follow-up", lambda route: route.fulfill(
+        status=500, content_type="application/json", body=json.dumps({
+            "error": "The follow-up delivery is UNKNOWN. It may or may not have reached the worker. Further input is blocked until resolved; inspect the step.",
+            "preserved_text": "preserve this uncertain input"})))
+    page.get_by_role("button", name="Send to running step", exact=True).click()
+    page.get_by_text("The follow-up delivery is UNKNOWN.", exact=False).wait_for()
+    unknown_ok = (follow_input.input_value() == "preserve this uncertain input"
+                  and page.get_by_role("button", name="Send to running step", exact=True).is_enabled()
+                  and not page.get_by_text("Provider receipt is still unconfirmed.", exact=False).count())
+    print("LIFECYCLE uncertain send shows unknown delivery and retains input:",
+          "PASS" if unknown_ok else "FAIL")
+    shot(page, out_dir / "ui-lifecycle-unknown.png")
+    page.unroute("**/api/missions/lifecycle-probe/follow-up")
     # mid-run follow-up on claude-code: STEERED into the running process's input queue
     # (vendor-queued for the next turn - never claimed consumed by the model)
     import urllib.error
@@ -1359,6 +1376,8 @@ with sync_playwright() as pw:
                and st["followupable"] and st["continuity"] == "fresh")
     print("LIFECYCLE settled step records its vendor session (follow-up eligible):",
           "PASS" if sess_ok else f"FAIL {st}")
+    # Reload clears the deliberately retained error form from the UNKNOWN check.
+    page.reload()
     # the owner follows up on the settled step: same session resumed in a new process
     (demo / "fake-sleep").write_text("2")
     page.wait_for_selector("[data-followup='dev']", timeout=10000)
