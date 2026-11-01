@@ -136,6 +136,8 @@ export function MissionRunTrace({
   onRedispatch: (step: string) => void;
 }) {
   const states = statesFromJournal(detail.journal);
+  const overall = detail.status.status;
+  const liveRunning = Boolean(detail.live?.running);
   const [openOutputs, setOpenOutputs] = useState<Record<string, boolean>>({});
   const authored = detail.mission.steps.map((s) => ({
     id: String(s.id),
@@ -162,6 +164,12 @@ export function MissionRunTrace({
     <div className="space-y-3" data-testid="mission-run-trace">
       {steps.map((step) => {
         const st = states.get(step.id) ?? { state: "pending" };
+        // A dispatch recorded before the mission stopped can never settle: show the
+        // mission's outcome on the step instead of a spinner that implies live work.
+        // The journal keeps the raw dispatch record; this is display-only.
+        const staleDispatch =
+          st.state === "dispatched" && !liveRunning && (overall === "interrupted" || overall === "failed");
+        const display = staleDispatch ? overall : st.state;
         const pending = pendingByStep.get(step.id);
         const open = openOutputs[step.id] ?? false;
         return (
@@ -172,7 +180,7 @@ export function MissionRunTrace({
             data-state={st.state}
           >
             <div className="flex items-start gap-3">
-              <StepIcon state={st.state} />
+              <StepIcon state={display} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-sm">{step.id}</span>
@@ -184,11 +192,16 @@ export function MissionRunTrace({
                   <span className="text-xs text-muted-foreground">
                     {step.role} · {step.adapter}
                   </span>
-                  {stateBadge(st.state, detail.approved)}
+                  {stateBadge(display, detail.approved)}
                   {st.at ? (
                     <span className="text-xs text-muted-foreground">{formatRelative(st.at)}</span>
                   ) : null}
                 </div>
+                {staleDispatch ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Dispatched but never settled - the mission stopped first.
+                  </p>
+                ) : null}
                 {st.state === "needs-owner" && detail.approved ? (
                   <div
                     className="mt-2 rounded-lg border border-success/30 bg-success/5 p-3"

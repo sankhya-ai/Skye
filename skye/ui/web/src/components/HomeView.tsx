@@ -2,6 +2,7 @@
 // clock in the display face, a muted greeting, and one centered pill composer
 // (berd's chat-composer token: translucent muted surface, 40px radius, backdrop blur).
 import { ArrowUp } from "lucide-react";
+import { humanError } from "../lib";
 import { Spinner } from "./ui/Spinner";
 import { useEffect, useState } from "react";
 import { createMission, getBacklog, type FeatureRow, type MissionRow, type Project } from "../api";
@@ -123,7 +124,7 @@ export function HomeView({
       });
       onCreated(created.id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, "mission"));
       setBusy(false);
     }
   };
@@ -151,7 +152,7 @@ export function HomeView({
             }}
             placeholder="Describe the goal..."
             rows={3}
-            className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+            className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed text-foreground outline-none"
           />
           <div className="flex items-center justify-between pt-2">
             {projects.length > 0 ? (

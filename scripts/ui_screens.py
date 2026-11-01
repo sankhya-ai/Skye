@@ -320,14 +320,85 @@ with sync_playwright() as pw:
         page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
         print("INTERRUPTED capture: taken but state was", st, "- inspect")
 
-    # --- server down: what the user sees with the server unreachable ---
+    # --- outage states, in honest order ---
+
+    # (a) first-load failure: the app loads but every API call fails. Simulated by
+    # aborting /api/ requests while the server is up - a genuinely unreachable
+    # server cannot serve the SPA at all, so interception is the honest way to
+    # render this state.
+    page.route("**/api/**", lambda route: route.abort())
+    page.goto("about:blank")
+    page.goto(ui_url + "#/missions")
+    page.wait_for_timeout(6000)  # one failed refresh cycle + render
+    banner = page.locator("text=Can't reach the local server").count()
+    skeleton = page.locator('[aria-label="loading missions"]').count()
+    empty = page.locator("text=No missions yet").count()
+    print("FIRST-LOAD failure: banner", "PASS" if banner else "FAIL",
+          "| skeleton gone", "PASS" if not skeleton else "FAIL",
+          "| empty state", "PASS" if empty else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-server-down-first-load.png"), full_page=True)
+    page.unroute("**/api/**")
+
+    # (b) app open WITH data when the server dies: stale view + banner
+    page.goto(ui_url + "#/missions")
+    page.wait_for_timeout(4000)  # successful refresh fills the list
     ui_proc.terminate()
     ui_proc.wait(timeout=10)
-    page.goto(ui_url + "#/missions")
-    page.wait_for_timeout(7000)  # one failed refresh cycle + render
+    page.wait_for_timeout(5000)  # a refresh cycle fails against the dead server
     banner = page.locator("text=Can't reach the local server").count()
-    print("SERVER-DOWN banner visible:", "PASS" if banner else "FAIL")
+    rows = page.locator("text=Weekly sales report").count()
+    print("SERVER-DOWN stale: banner", "PASS" if banner else "FAIL",
+          "| last data kept", "PASS" if rows else "FAIL")
     page.screenshot(path=str(out_dir / "ui-server-down.png"), full_page=True)
+
+    # (c) Home composer: submitting during the outage shows a human error, not a hang
+    page.goto(ui_url + "#/")
+    page.wait_for_timeout(1500)
+    page.fill('textarea[placeholder="Describe the goal..."]', "Ship the weekly report")
+    page.click('button[aria-label="Start mission"]')
+    page.wait_for_timeout(3000)
+    composer_err = page.locator("text=Connection lost").count()
+    print("COMPOSER outage error:", "PASS" if composer_err else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-home-composer-error.png"), full_page=True)
+
+    # (d) Sidebar add-project during the outage: inline error, form stays put
+    page.click('[aria-label="New project"]')
+    page.fill('input[placeholder="project name"]', "Tmp")
+    page.fill('input[placeholder="repo path (must exist)"]', "/tmp")
+    page.click('button:has-text("Add project")')
+    page.wait_for_timeout(3000)
+    add_err = page.locator("text=Connection lost").count()
+    print("ADD-PROJECT outage error:", "PASS" if add_err else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-sidebar-addproject-error.png"), full_page=True)
+
+    # (e) reconnect: server returns, the banner clears and data comes back
+    old_token = token
+    ui_proc = subprocess.Popen([sys.executable, "-m", "skye.cli", "ui", "--port", str(ui_port),
+                                "--state-dir", str(state_dir)], cwd=demo, env=env)
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        new_tok = (state_dir / "ui-token").read_text().strip()
+        if new_tok != old_token:
+            token = new_tok
+            break
+        time.sleep(0.1)
+    ui_url = f"http://127.0.0.1:{ui_port}/?token={token}"
+    deadline = time.monotonic() + 20
+    while ui_proc.poll() is None and time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{ui_port}/api/missions",
+                headers={"X-Skye-Token": token}), timeout=2)
+            break
+        except Exception:
+            time.sleep(0.2)
+    page.goto(ui_url + "#/missions")  # fresh load against the revived server
+    page.wait_for_timeout(5000)  # at least one successful 3s refresh cycle
+    banner = page.locator("text=Can't reach the local server").count()
+    rows = page.locator("text=Weekly sales report").count()
+    print("RECONNECT banner cleared:", "PASS" if not banner else "FAIL",
+          "| data back:", "PASS" if rows else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-server-recovered.png"), full_page=True)
     browser.close()
 
 print("mission:", mission_id, final)

@@ -91,6 +91,14 @@
   --radius-composer: 40px;
 }
 
+/* Placeholders default to a 50% mix that fails WCAG AA (impeccable low-contrast
+   findings). #595959 keeps AA on both white cards (7.0:1) and the composer's
+   #f1f1f1 muted surface (~4.7:1). */
+::placeholder {
+  color: #595959;
+  opacity: 1;
+}
+
 body {
   background: var(--canvas-base);
   color: var(--foreground);

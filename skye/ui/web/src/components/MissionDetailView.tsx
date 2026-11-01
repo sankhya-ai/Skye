@@ -77,6 +77,14 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
 
   const live = Boolean(detail.live?.running);
   const resumable = !live && ["needs-owner", "interrupted", "failed"].includes(detail.status.status);
+  // Backlog-started missions compose the goal as "Title: brief". Split that
+  // composition into a kicker + heading so the title isn't repeated into one
+  // long sentence. Direct goals without a title-like prefix render whole.
+  const goal = detail.mission.goal;
+  const splitAt = goal.indexOf(": ");
+  const prefix = splitAt > 0 ? goal.slice(0, splitAt) : "";
+  const hasTitle =
+    splitAt > 0 && prefix.length <= 60 && prefix.split(" ").length <= 8 && !/[.!?]$/.test(prefix);
   const steps = detail.status.steps ?? [];
   const settled = steps.filter((s) => s.state === "settled" && s.status === "done").length;
 
@@ -103,8 +111,13 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
       </div>
       {/* product-first: the goal is the headline; activity reads as relative time */}
       <div>
+        {hasTitle ? (
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {prefix}
+          </p>
+        ) : null}
         <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-          {detail.mission.goal}
+          {hasTitle ? goal.slice(splitAt + 2) : goal}
         </h2>
         <p className="mt-1 text-xs text-muted-foreground/70">
           {detail.journal.length > 0

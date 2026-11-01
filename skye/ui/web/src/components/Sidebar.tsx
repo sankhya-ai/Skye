@@ -6,7 +6,7 @@
 import { Folder, Home, ListTodo, MessageSquare, Plus, Settings, Users, Workflow } from "lucide-react";
 import { useState } from "react";
 import { createProject, type MissionRow, type Project } from "../api";
-import { humanError } from "../lib";
+import { formatRelative, humanError } from "../lib";
 import { Button } from "./ui/Button";
 
 const NAV = [
@@ -58,6 +58,22 @@ function NavRow({
       )}
     </div>
   );
+}
+
+function chatStatus(mission: MissionRow): string {
+  if (mission.live) return "running";
+  if (mission.needs_owner || mission.overall === "needs-owner")
+    return mission.approved ? "approved" : "needs you";
+  switch (mission.overall) {
+    case "done":
+      return "done";
+    case "interrupted":
+      return "interrupted";
+    case "failed":
+      return "failed";
+    default:
+      return mission.overall;
+  }
 }
 
 function SectionLabel({ children }: { children: string }) {
@@ -176,12 +192,21 @@ export function Sidebar({
       <SectionLabel>Chats</SectionLabel>
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pb-2">
         {chats.map((mission) => (
-          <NavRow
-            key={mission.id}
-            label={mission.goal || mission.id}
-            icon={MessageSquare}
-            href={`#/mission/${encodeURIComponent(mission.id)}`}
-          />
+          <div className="mx-1.5" key={mission.id}>
+            <a
+              href={`#/mission/${encodeURIComponent(mission.id)}`}
+              className="flex w-full items-start gap-2 rounded-sm px-3 py-1.5 text-sm font-normal leading-normal text-foreground/80 transition-[background-color,color] duration-200 hover:text-foreground"
+            >
+              <MessageSquare className="mt-0.5 size-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{mission.goal || mission.id}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {chatStatus(mission)}
+                  {mission.last_activity ? ` · ${formatRelative(mission.last_activity)}` : ""}
+                </span>
+              </span>
+            </a>
+          </div>
         ))}
         {chats.length === 0 ? (
           <p className="px-3 text-xs text-muted-foreground">
