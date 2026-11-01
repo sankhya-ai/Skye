@@ -82,7 +82,8 @@ def test_rate_limit_is_a_visible_fact(store):
 def test_private_or_missing_repo_says_so(store):
     def missing(request, timeout=0):
         raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
-    with pytest.raises(intake_github.IntakeError, match="private repository needs GITHUB_TOKEN"):
+    with pytest.raises(intake_github.IntakeError,
+                   match="not found or inaccessible.*may require GITHUB_TOKEN"):
         intake_github.fetch("acme/secret", opener=missing)
 
 
@@ -96,3 +97,37 @@ def test_token_used_only_when_provided(store, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "tok123")
     intake_github.fetch("acme/app", opener=observing)
     assert seen[1] == "Bearer tok123"
+
+
+def test_changed_source_content_flags_approval_binds_earlier_snapshot(store):
+    intake_github.import_issues("acme/app", opener=fake_opener)
+    edited = [dict(ISSUES[0], body="EDITED: totally different request"),
+              dict(ISSUES[1])]
+    def opener2(request, timeout=0):
+        return FakeResponse(edited)
+    result = intake_github.import_issues("acme/app", opener=opener2)
+    assert len(result["content_changed"]) == 1
+    assert len(result["already_known"]) == 1  # unchanged issue stays known
+    feature = backlog.list_features()[0]
+    notes = [e for e in feature.get("thread", []) if e.get("actor") == "intake"]
+    assert notes and "earlier" in notes[0]["body"] and "snapshot" in notes[0]["body"]
+
+
+def test_coverage_states_page_facts(store):
+    full = [dict(ISSUES[0], number=i, title=f"issue {i}") for i in range(30)]
+    def full_opener(request, timeout=0):
+        return FakeResponse(full)
+    result = intake_github.import_issues("acme/big", opener=full_opener)
+    assert result["rate"]["page_full"] is True
+    assert "later pages may exist" in result["coverage"]
+    assert result["fetched"] == 30
+    small = intake_github.import_issues("acme/app", opener=fake_opener)
+    assert small["rate"]["page_full"] is False
+    assert "fewer than" in small["coverage"]
+
+
+def test_proposal_brief_binds_content_digest(store):
+    intake_github.import_issues("acme/app", opener=fake_opener)
+    feature = backlog.list_features()[0]
+    assert "Source content digest:" in feature["brief"]
+    assert "approval binds this snapshot" in feature["brief"]
