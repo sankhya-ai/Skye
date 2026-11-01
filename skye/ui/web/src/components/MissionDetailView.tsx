@@ -21,11 +21,17 @@ export function overallBadge(overall: string, live?: boolean, approved?: boolean
     case "done":
       return <Badge variant="success">done</Badge>;
     case "needs-owner":
-      return <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-700">needs owner</Badge>;
+      return <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-700">needs you</Badge>;
     case "interrupted":
       return <Badge variant="destructive">interrupted</Badge>;
+    case "failed":
+    case "gate-failed":
+      return <Badge variant="destructive">failed</Badge>;
+    case "not-started":
+      return <Badge variant="secondary">not started</Badge>;
     default:
-      return <Badge variant="secondary">{overall}</Badge>;
+      // An unrecognized status is unknown, not a raw enum.
+      return <Badge variant="outline">unknown</Badge>;
   }
 }
 

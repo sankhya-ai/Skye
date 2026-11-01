@@ -30,7 +30,7 @@ export function ApprovalCard({
     >
       <p className="mb-2 text-sm font-medium">Approval required</p>
       <p className="mb-1 text-xs text-muted-foreground">
-        Step <span className="font-mono">{step}</span> is paused for the owner.
+        Step <span className="font-mono">{step}</span> is waiting on your approval.
       </p>
       {contract.goal ? (
         <p className="mb-1 text-xs font-medium text-foreground">{String(contract.goal)}</p>
@@ -62,7 +62,7 @@ export function ApprovalCard({
         ) : null}
       </details>
       <p className="mb-2 text-xs text-muted-foreground">
-        Approving runs this step once. Policy unchanged.
+        Allows one attempt. Resume to start. Policy unchanged.
       </p>
       {error ? <p className="mb-2 text-xs text-destructive">{error}</p> : null}
       <Button

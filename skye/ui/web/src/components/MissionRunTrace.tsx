@@ -225,8 +225,8 @@ export function MissionRunTrace({
                 {staleDispatch ? (
                   <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                     <p className="mb-2 text-xs text-muted-foreground">
-                      Running it again re-runs exactly this step; resetting the mission
-                      starts clean.
+                      Running it again re-runs exactly this step. Resetting starts the
+                      mission over - changes already made to files stay as they are.
                     </p>
                     <Button
                       variant="danger-outline"

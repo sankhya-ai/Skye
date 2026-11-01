@@ -418,6 +418,25 @@ with sync_playwright() as pw:
         # the copy above it must not promise zero side effects
         note = page.locator("text=partially applied").count()
         print("INTERRUPTED partial-effects note:", "PASS" if note else "FAIL missing")
+        # exercise the action itself against the scripted runtime: the step really re-runs.
+        again.first.click()
+        settled = None
+        for _ in range(16):
+            time.sleep(0.5)
+            st2 = json.loads(urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{ui_port}/api/missions/{interrupt_mission}",
+                headers={"X-Skye-Token": token}), timeout=30).read())
+            if st2["status"]["status"] != "interrupted":
+                settled = st2
+                break
+        evs = [(e.get("step"), e.get("event")) for e in (settled or st2)["journal"]]
+        rerun_ev = [e for e in (settled or st2)["journal"]
+                    if e.get("event") in ("redispatch", "reattached", "dispatched")]
+        print("INTERRUPTED re-run leaves interrupted:", "PASS" if settled else "FAIL still interrupted")
+        print("INTERRUPTED re-run journaled:", "PASS" if rerun_ev else "FAIL no re-run events",
+              "| journal:", evs)
+        page.wait_for_timeout(1000)
+        page.screenshot(path=str(out_dir / "ui-mission-rerun.png"), full_page=True)
     else:
         page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
         print("INTERRUPTED capture: taken but state was", st, "- inspect")
