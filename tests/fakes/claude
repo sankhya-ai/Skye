@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""Fake `claude` CLI for adapter protocol tests: speaks stream-json NDJSON, records every
+invocation to $FAKE_LOG as one JSON line, honors --resume, and can sleep (FAKE_SLEEP) so
+cancel/timeout tests have a live process to stop. No network, no model."""
+import json, os, sys, time
+
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_LOG")
+if log:
+    with open(log, "a") as handle:
+        handle.write(json.dumps(argv) + "\n")
+
+resume = None
+if "--resume" in argv:
+    resume = argv[argv.index("--resume") + 1]
+if resume == "bad-session":
+    sys.stderr.write(f"Error: No conversation found with session ID: {resume}\n")
+    sys.exit(1)
+
+session_id = resume or "sess-new-1"
+print(json.dumps({"type": "system", "subtype": "init", "session_id": session_id}), flush=True)
+
+sleep = float(os.environ.get("FAKE_SLEEP", "0"))
+if sleep:
+    time.sleep(sleep)   # cancel/timeout must interrupt this
+
+print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+    {"type": "text", "text": "I worked on the task."},
+    {"type": "tool_use", "name": "Read", "input": {"file_path": "a.py"}}]}}), flush=True)
+print(json.dumps({"type": "result", "subtype": "success", "session_id": session_id,
+                  "total_cost_usd": 0.01, "num_turns": 1, "duration_ms": 5}), flush=True)
+if os.environ.get("FAKE_MARK"):
+    open(os.environ["FAKE_MARK"], "w").write("completed")

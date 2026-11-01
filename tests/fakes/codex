@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""Fake `codex` CLI: emits --json ThreadEvent NDJSON (thread.started/item.completed/
+turn.completed), records argv to $FAKE_LOG, honors `exec ... resume <id>`; FAKE_SLEEP for
+cancel tests."""
+import json, os, sys, time
+
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_LOG")
+if log:
+    with open(log, "a") as handle:
+        handle.write(json.dumps(argv) + "\n")
+
+thread_id = "thr-new-1"
+if "resume" in argv:
+    thread_id = argv[argv.index("resume") + 1]
+    if thread_id == "bad-session":
+        sys.stderr.write(f"ERROR: no rollout found for session {thread_id}\n")
+        sys.exit(1)
+
+print(json.dumps({"type": "thread.started", "thread_id": thread_id}), flush=True)
+sleep = float(os.environ.get("FAKE_SLEEP", "0"))
+if sleep:
+    time.sleep(sleep)
+print(json.dumps({"type": "item.completed", "item": {"id": "i1", "type": "agent_message",
+                  "text": "codex did the work"}}), flush=True)
+print(json.dumps({"type": "item.completed", "item": {"id": "i2", "type": "command_execution",
+                  "command": "pytest -q", "aggregated_output": "ok", "exit_code": 0,
+                  "status": "completed"}}), flush=True)
+print(json.dumps({"type": "turn.completed",
+                  "usage": {"input_tokens": 10, "cached_input_tokens": 0,
+                            "output_tokens": 5}}), flush=True)
+if os.environ.get("FAKE_MARK"):
+    open(os.environ["FAKE_MARK"], "w").write("completed")
