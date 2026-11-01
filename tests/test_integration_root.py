@@ -135,3 +135,83 @@ def test_a_worker_that_breaks_its_contract_fails_the_dispatch(root_server, tmp_p
     assert outcome.status == "failed" and "contract" in outcome.worker_output
     # The tests gate never ran: the worker failing ends the dispatch before gates.
     assert outcome.gates == []
+
+
+@requires_runtime
+def test_review_sendback_repairs_and_passes_through_real_root(root_server, tmp_path, monkeypatch):
+    """The PM review loop for real, no mock runner: an implementation step dispatched to the
+    vendored Root; a REAL reviewer job (second Root process) requests changes; the SAME step is
+    redispatched with the feedback in its brief; the repair lands; a second real reviewer passes.
+    The scripted model is re-scripted per job from the test seam (the model is scaffolding);
+    everything else - contracts, gates, journal, Root's job machinery - is the real path."""
+    import skye.dispatcher as dispatcher
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+
+    scripts = {
+        ("developer", 1): [tool_call("w1", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items)\n"}),
+                            text('done {"summary": "cart total, v1"}')],
+        ("developer", 2): [tool_call("w2", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items) if items else 0\n"}),
+                            text('fixed {"summary": "empty cart returns 0"}')],
+        ("reviewer", 1): [text('Reviewed. {"verdict": "request-changes", "feedback": ["empty cart must return 0"]}')],
+        ("reviewer", 2): [text('Reviewed again. {"verdict": "pass"}')],
+    }
+    calls: dict[str, int] = {"developer": 0, "reviewer": 0}
+
+    def write_script(role: str) -> None:
+        calls[role] += 1
+        path = tmp_path / f"script-{role}-{calls[role]}.json"
+        path.write_text(json.dumps(scripts[(role, calls[role])]))
+        monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(path))
+
+    real_dispatch = dispatcher.dispatch
+
+    def per_job_scripting(contract, *args, **kwargs):
+        write_script(contract["role"])  # swap the script BEFORE Root launches this job
+        return real_dispatch(contract, *args, **kwargs)
+
+    # Both dispatch entry points route through the seam: mission's bound name (worker jobs)
+    # and dispatcher's module global (the review gate's reviewer jobs).
+    monkeypatch.setattr(mission_mod, "dispatch", per_job_scripting)
+    monkeypatch.setattr(dispatcher, "dispatch", per_job_scripting)
+
+    mission_path = tmp_path / "mission.json"
+    mission_path.write_text(json.dumps({
+        "id": "m-review", "goal": "cart totals", "repo": str(repo),
+        "max_review_rounds": 3,
+        "steps": [{"id": "build", "role": "developer", "adapter": "root",
+                   "goal": "write cart.py with a total()", "gates": ["review"],
+                   "contract_keys": ["summary"], "budget": {"max_steps": 6}}]}))
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}],
+                     "review_role": "reviewer"})
+    state_dir = tmp_path / ".skye"
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert calls == {"developer": 2, "reviewer": 2}
+
+    # Four real Root jobs ran: two implementations, two reviews.
+    jobs = [json.loads(p.read_text()) for p in (home / "jobs").glob("*.json")]
+    dev_jobs = sorted((j for j in jobs if j["role"] == "developer"), key=lambda j: j["started"])
+    review_jobs = sorted((j for j in jobs if j["role"] == "reviewer"), key=lambda j: j["started"])
+    assert len(dev_jobs) == 2 and len(review_jobs) == 2
+    # The redo's brief really carried the reviewer's feedback into the worker's job.
+    assert "empty cart must return 0" in dev_jobs[1]["goal"]
+    # The repaired file is what the reviewer approved.
+    assert "else 0" in (repo / "cart.py").read_text()
+    # The loop is journaled: one review-round with feedback, then a settled done.
+    journal = [json.loads(line)
+               for line in (state_dir / "missions/m-review/journal.jsonl").read_text().splitlines()]
+    kinds = [(e["step"], e["event"]) for e in journal]
+    assert ("build", "review-round") in kinds
+    assert kinds[-1] == ("build", "settled")
+    assert journal[-1]["status"] == "done"

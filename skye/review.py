@@ -8,9 +8,10 @@ contract check where the adapter has one AND parsed here for every adapter. Only
 the gate. A cleanly exiting reviewer that says "block" - or says nothing parseable - FAILS the
 gate. That is the whole point of a gate: silence is not consent.
 
-For the Root adapter the generated review contract also sets contract_keys=["verdict"], so
-Root's own output-contract check rejects a verdict-less or malformed review before this parsing
-even runs.
+The review contract does NOT use contract_keys=["verdict"]: Root's native contract check
+accepts only pass/block and would reject a well-formed "request-changes" verdict before Skye
+could parse it. Verdict enforcement therefore lives here in parse_verdict for every adapter,
+and it fails closed: no parseable verdict, no gate pass.
 """
 
 from __future__ import annotations
@@ -65,8 +66,9 @@ def parse_verdict(output: str) -> tuple[str | None, str]:
 
 def build_review_contract(spec: dict[str, Any], review_role: str) -> dict[str, Any]:
     """The reviewer contract dispatched by the review gate: a second worker, read-only role from
-    the team policy, judging the diff against the original goal. contract_keys asks enforcing
-    adapters (Root) to require a well-formed verdict block in the output."""
+    the team policy, judging the diff against the original goal. No contract_keys: the verdict
+    vocabulary (pass / request-changes / block) is wider than Root's native check, so verdict
+    enforcement is Skye-side in parse_verdict, which fails closed on a missing verdict."""
     return {
         "goal": f"Review the changes in {spec['repo']} for the job: {spec['goal']}",
         "repo": spec["repo"],
@@ -76,5 +78,4 @@ def build_review_contract(spec: dict[str, Any], review_role: str) -> dict[str, A
         "brief": (f"You are reviewing another worker's changes in {spec['repo']} for this job: "
                   f"{spec['goal']}. Read the actual changes, judge them against the job, then "
                   f"{VERDICT_INSTRUCTION}"),
-        "contract_keys": ["verdict"],
     }

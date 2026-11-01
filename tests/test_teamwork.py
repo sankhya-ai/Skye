@@ -291,3 +291,114 @@ def test_new_standard_roles_bind_through_the_adapters(tmp_path, monkeypatch):
             "brief": "b", "tools": catalogue["tools"], "tools_writable": catalogue["writable"],
             "role_instructions": definition["instructions"]})
         assert "--tools" in command and "--disallowedTools" in command
+
+
+def test_concurrent_workers_talk_mid_run(tmp_path, monkeypatch):
+    """Live discussion during parallel work: two workers running AT THE SAME TIME, where the
+    listener polls the team line mid-dispatch and reacts to the poster's contract-change
+    BEFORE either finishes. Not next-brief delivery: receipt and reaction inside the run."""
+    import subprocess, sys, threading, time
+    state_dir = tmp_path / ".skye"
+    reacted = threading.Event()
+    overlapped = threading.Event()
+
+    def runner(spec):
+        class R:
+            ok = True
+            returncode = 0
+            job_id = ""
+            output = "ok"
+        env = {"PATH": "/usr/bin:/bin", "SKYE_STATE_DIR": str(state_dir),
+               "HOME": str(tmp_path)}
+        if spec["role"] == "backend-dev":
+            overlapped.set()  # the listener is already running by the time we post
+            proc = subprocess.run(
+                [sys.executable, "-m", "skye.cli", "say", "m-team", "--as", "backend-dev",
+                 "--kind", "contract-change", "--ack-needed", "frontend-dev",
+                 "field total_cents is now integer cents"],
+                capture_output=True, text=True, env=env)
+            assert proc.returncode == 0, proc.stderr
+            time.sleep(0.3)  # stay in-flight while the listener reacts
+            R.output = "api changed"
+        else:
+            # Poll mid-run (the honest CLI-adapter delivery): react the moment the change lands.
+            deadline = time.time() + 15
+            heard = None
+            while time.time() < deadline:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "skye.cli", "hear", "m-team", "--since", "0"],
+                    capture_output=True, text=True, env=env)
+                entries = json.loads(proc.stdout)["entries"]
+                heard = next((e for e in entries if e["kind"] == "contract-change"), None)
+                if heard:
+                    break
+                time.sleep(0.05)
+            assert heard, "the running listener never received the contract-change mid-run"
+            ack = subprocess.run(
+                [sys.executable, "-m", "skye.cli", "ack", "m-team", heard["id"],
+                 "--as", "frontend-dev", "--note", "adapting now, mid-run"],
+                capture_output=True, text=True, env=env)
+            assert ack.returncode == 0, ack.stderr
+            assert overlapped.is_set(), "the poster had already finished - no real overlap"
+            reacted.set()
+            R.output = "adapted mid-run"
+        return R
+
+    mission = _mission_file(tmp_path, [
+        {"id": "api", "role": "backend-dev", "adapter": "root", "goal": "change the api",
+         "claims": ["src/api"], "gates": []},
+        {"id": "web", "role": "frontend-dev", "adapter": "root", "goal": "build the ui",
+         "claims": ["src/web"], "gates": []}])
+    outcome = run_mission(mission, _policy(tmp_path, monkeypatch), runner=runner,
+                          state_dir=state_dir)
+    assert outcome.status == "done"
+    assert reacted.is_set()
+    entries = discuss.read(state_dir, "m-team", since=0)["entries"]
+    assert [e["kind"] for e in entries] == ["contract-change", "ack"]
+
+
+def test_proposed_agents_with_out_of_universe_tools_never_reach_the_registry(tmp_path, monkeypatch):
+    """Failure scenario: a worker proposing a specialist with tools outside the known universe
+    (widening its own reach) is rejected and journaled; the registry stays clean."""
+    def runner(spec):
+        class R:
+            ok = True
+            returncode = 0
+            job_id = ""
+            output = ('done {"propose_agents": [{"name": "rooter", '
+                      '"instructions": "i do everything", '
+                      '"catalogue": {"tools": ["Read", "Sudo", "Network"]}}]}')
+        return R
+
+    mission = _mission_file(tmp_path, [
+        {"id": "build", "role": "developer", "adapter": "root", "goal": "g", "gates": []}])
+    outcome = run_mission(mission, _policy(tmp_path, monkeypatch), runner=runner,
+                          state_dir=tmp_path / ".skye")
+    assert outcome.status == "done"
+    from skye import roles
+    assert "rooter" not in roles.known()
+    assert roles._read()["roles"] == []  # nothing landed
+    journal = (tmp_path / ".skye/missions/m-team/journal.jsonl").read_text()
+    assert "agent-rejected" in journal and "outside the known universe" in journal
+
+
+def test_editing_role_instructions_invalidates_prior_approval(tmp_path, monkeypatch):
+    """Snapshot/approval binding: the approved text IS the dispatched text. Editing the
+    registry's instructions after an approval changes the fingerprint - the old approval
+    cannot silently retarget to the new instructions."""
+    from skye import approvals, roles
+    from skye.contract import validate
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_APPROVALS", str(tmp_path / "approvals.json"))
+    roles.add({"name": "pm", "instructions": "scope tightly"})
+    contract = validate({"goal": "g", "repo": str(tmp_path), "role": "pm",
+                         "adapter": "root", "gates": []})
+    assert contract["role_instructions"] == "scope tightly"
+    entry = approvals.approve(contract)
+    assert approvals.peek(contract) is not None
+    # The owner edits the role's instructions; the previously approved contract no longer matches.
+    roles.add({"name": "pm", "instructions": "scope BROADLY"})
+    contract2 = validate({"goal": "g", "repo": str(tmp_path), "role": "pm",
+                          "adapter": "root", "gates": []})
+    assert contract2["role_instructions"] == "scope BROADLY"
+    assert approvals.peek(contract2) is None  # the old approval does not cover the new text
