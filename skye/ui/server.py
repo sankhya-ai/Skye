@@ -1116,8 +1116,31 @@ class UiHandler(BaseHTTPRequestHandler):
                 if not mission_file.exists():
                     return self._json({"error": "unknown mission"}, 404)
                 if action == "resume":
+                    # A generic resume clears the cancel marker and re-enters the
+                    # engine, but it does NOT restart a step the cancel interrupted:
+                    # that takes the operator's explicit per-step redispatch. Name the
+                    # supported actions so the UI offers them instead of a Resume that
+                    # silently leaves the step needs-owner with no CLI start.
+                    from ..mission import Journal as _Journal
+                    states = _Journal(mission_dir / "journal.jsonl").step_states()
+                    interrupted = sorted(
+                        s for s, st in states.items()
+                        if st.get("event") in ("cancelled", "resume-rejected"))
                     resume_in_thread(self.state_dir, mission_id)
-                    return self._json({"resumed": True})
+                    resp: dict = {"resumed": True}
+                    if interrupted:
+                        resp["interrupted"] = interrupted
+                        resp["supported_actions"] = [
+                            {"action": "redispatch", "step": s, "fresh": False,
+                             "continuity": "resumed-session"} for s in interrupted
+                        ] + [
+                            {"action": "redispatch", "step": s, "fresh": True,
+                             "continuity": "fresh-session"} for s in interrupted]
+                        resp["note"] = (
+                            "these steps were interrupted (e.g. by the operator "
+                            "cancel); a generic resume cannot restart their worker - "
+                            "choose an explicit redispatch per step")
+                    return self._json(resp)
                 if action == "redispatch":
                     step = body.get("step")
                     if not step:

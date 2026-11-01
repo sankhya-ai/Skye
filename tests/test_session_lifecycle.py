@@ -642,11 +642,72 @@ def test_live_steer_submitted_without_receipt_or_settle_pauses(fake_path, tmp_pa
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
     assert outcome.status == "needs-owner" and "submitted but unconfirmed" in outcome.reason
 
-    # a later settle (or steer-ack) for the same step proves the journey - scan clears
+    # a bare terminal entry is NOT a receipt: settling the step afterwards must not
+    # clear the unconfirmed submission
     journal.append("dev", "settled", status="done", reason="", output="tweaked",
                    gates=[], worker_job="", role="developer")
     outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner", outcome.status
+
+    # only the provider-correlated receipt (steer-ack carrying THIS follow-up's text)
+    # proves consumption
+    journal.append("dev", "worker-progress", kind="steer-ack", text="tweak it")
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
     assert outcome.status == "done", outcome.reason
+
+
+def test_one_receipt_never_clears_two_concurrent_submits(fake_path, tmp_path):
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="same words",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    journal.append("dev", "follow-up", follow_id="f2", text="same words",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f2")
+    # ONE provider receipt for that text: it clears the FIRST submission only.
+    journal.append("dev", "worker-progress", kind="steer-ack", text="same words")
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner" and "unconfirmed" in outcome.reason
+    # the second receipt clears the second
+    journal.append("dev", "worker-progress", kind="steer-ack", text="same words")
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+
+
+def test_unrelated_steer_ack_does_not_resolve_a_submission(fake_path, tmp_path):
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    # an ack for DIFFERENT text (unrelated provider activity) must not resolve f1
+    journal.append("dev", "worker-progress", kind="steer-ack",
+                   text="some other echoed message")
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner" and "add logging" in outcome.reason
+
+
+def test_accepted_but_unapplied_steer_pauses_as_not_consumed(fake_path, tmp_path):
+    # The provider ACCEPTED the steer (turn id returned) but the turn ended before the
+    # input was applied: not consumed - pause with the exact reason.
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", follow_id="f1", text="add logging",
+                   delivery="steered-live", state="intent")
+    journal.append("dev", "follow-up-submitted", follow_id="f1")
+    journal.append("dev", "worker-progress", kind="steer-accepted", text="add logging")
+    journal.append("dev", "worker-progress", kind="steer-unapplied", text="add logging")
+    journal.append("dev", "settled", status="done", reason="", output="x",
+                   gates=[], worker_job="", role="developer")
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner"
+    assert "did NOT consume" in outcome.reason and "add logging" in outcome.reason
 
 
 def test_concurrent_cancel_calls_never_crash_and_agree_on_death(fake_path, tmp_path,
@@ -678,3 +739,35 @@ def test_concurrent_cancel_calls_never_crash_and_agree_on_death(fake_path, tmp_p
     assert "stopped" in results or "exiting" in results or "not-live" in results
     # a third cancel after death is honest about it
     assert base.cancel_live("m1:dev") in ("not-live", "exiting")
+
+
+def test_resume_endpoint_names_interrupted_steps_and_supported_actions(ui_server,
+                                                                       tmp_path,
+                                                                       monkeypatch):
+    # After an operator cancel the step's journal state is "cancelled": a generic
+    # resume clears the marker but cannot restart that step's CLI. The endpoint must
+    # say so and name the supported per-step redispatch actions - no silent pretend
+    # continuation.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    journal = _journal(state_dir)
+    (state_dir / "missions" / "m1" / "journal.jsonl").write_text("", "utf-8")
+    journal.append("dev", "dispatched", fingerprint="fp0")
+    journal.append("dev", "cancelled", reason="operator stop", role="developer")
+    resumed = []
+    monkeypatch.setattr(ui, "resume_in_thread",
+                        lambda *a, **kw: resumed.append(True))
+
+    status, body = _req(url, "/api/missions/m1/resume", method="POST", body={})
+    assert status == 200 and body["resumed"] is True
+    assert body["interrupted"] == ["dev"]
+    actions = {(a["action"], a["step"], a["fresh"]) for a in body["supported_actions"]}
+    assert actions == {("redispatch", "dev", False), ("redispatch", "dev", True)}
+    assert len(resumed) == 1
+
+    # no interrupted steps: the plain response, no noise
+    (state_dir / "missions" / "m1" / "journal.jsonl").write_text("", "utf-8")
+    _journal(state_dir).append("dev", "settled", status="done", reason="", output="x",
+                               gates=[], worker_job="", role="developer")
+    status, body = _req(url, "/api/missions/m1/resume", method="POST", body={})
+    assert status == 200 and "interrupted" not in body

@@ -164,7 +164,8 @@ class CodexAdapter(SessionAdapter):
         try:
             try:
                 result = self._app_server_turn(proc, contract, resume_session_id,
-                                               continuity, command, on_event, entry)
+                                               continuity, command, on_event, entry,
+                                               cancel_event)
             finally:
                 if proc.stdin is not None:
                     try:
@@ -183,7 +184,8 @@ class CodexAdapter(SessionAdapter):
             if cancel_event.is_set():
                 return SessionResult(ok=False, cancelled=True, command=command,
                                      returncode=-1, continuity=continuity,
-                                     protocol="app-server")
+                                     output="cancelled before the run started",
+                                     protocol="app-server-jsonrpc;guard=shape-only")
             if on_event is not None:
                 on_event({"kind": "error",
                           "text": f"app-server unusable ({error}); running one-shot exec "
@@ -198,6 +200,9 @@ class CodexAdapter(SessionAdapter):
             result.ok = False
             result.cancelled = True
             result.returncode = returncode
+            if "cancelled by the operator" not in result.output:
+                result.output = ("cancelled by the operator"
+                                 + (f"\n{result.output}" if result.output else ""))
         if state["timed_out"]:
             result.ok = False
             result.timed_out = True
@@ -216,8 +221,14 @@ class CodexAdapter(SessionAdapter):
             if not rpc.get("turn_id"):
                 return "no-active-turn"  # provider requires the active turn id
             rpc["seq"] += 1
+            rid = f"steer-{rpc['seq']}"
+            # Remember WHICH text this request carries: the provider's response only
+            # echoes a turn id, so the receipt must be correlated back to the exact
+            # follow-up through this map (receipts are per-request, never positional
+            # guesses against any later activity).
+            rpc.setdefault("steer_texts", {})[rid] = text
             frame = json.dumps({
-                "jsonrpc": "2.0", "id": f"steer-{rpc['seq']}", "method": "turn/steer",
+                "jsonrpc": "2.0", "id": rid, "method": "turn/steer",
                 "params": {"threadId": rpc["thread_id"],
                            "input": [{"type": "text", "text": text}],
                            "expectedTurnId": rpc["turn_id"]}}) + "\n"
@@ -228,8 +239,18 @@ class CodexAdapter(SessionAdapter):
                 return "exiting"
         return "steered"  # SUBMITTED; the provider's steer response is the receipt
 
+    @staticmethod
+    def _rpc_reply(proc, request_id, result=None, error=None) -> None:
+        frame = {"jsonrpc": "2.0", "id": request_id}
+        frame["error" if error else "result"] = error if error else result
+        try:
+            proc.stdin.write(json.dumps(frame) + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+
     def _app_server_turn(self, proc, contract, resume_session_id, continuity, command,
-                         on_event, entry) -> SessionResult:
+                         on_event, entry, cancel_event=None) -> SessionResult:
         """The full app-server exchange. Protocol-shape failures BEFORE the turn starts
         raise _FallbackToExec (no side effects yet); after turn start they fail closed."""
         rpc = (entry or {}).get("rpc", {"thread_id": "", "turn_id": "", "seq": 0})
@@ -239,6 +260,7 @@ class CodexAdapter(SessionAdapter):
         usage: dict = {}
         turn_started = False
         turn_done = False
+        effect_sent = False  # thread/start or thread/resume went out: effects may exist
         result_ok: "bool | None" = None
         protocol_error = ""
 
@@ -279,6 +301,7 @@ class CodexAdapter(SessionAdapter):
                     else:
                         _send("thread/start", {"cwd": contract["repo"],
                                                "sandbox": sandbox}, "thread")
+                    effect_sent = True
                 elif rid == "thread":
                     if msg.get("error") is not None:
                         if resume_session_id:
@@ -286,7 +309,7 @@ class CodexAdapter(SessionAdapter):
                             return SessionResult(
                                 ok=False, resume_rejected=True, command=command,
                                 returncode=1, continuity=continuity,
-                                protocol="app-server",
+                                protocol="app-server-jsonrpc;guard=shape-only",
                                 session_id=resume_session_id,
                                 output=f"thread/resume rejected: "
                                        f"{str(msg.get('error'))[:300]}")
@@ -295,7 +318,11 @@ class CodexAdapter(SessionAdapter):
                     thread = (msg.get("result") or {}).get("thread") or {}
                     session_id = str(thread.get("id") or "")
                     if not session_id:
-                        raise _FallbackToExec("thread response carried no thread id")
+                        # Ambiguous: the server claimed success but gave no thread id -
+                        # a thread may exist. No exec fallback (duplicate risk).
+                        protocol_error = ("thread/start succeeded without a thread id; "
+                                          "thread state unknown - failing closed")
+                        break
                     rpc["thread_id"] = session_id
                     if on_event is not None:
                         on_event({"kind": "session", "session_id": session_id})
@@ -311,17 +338,63 @@ class CodexAdapter(SessionAdapter):
                     rpc["turn_id"] = str(turn.get("id") or "")
                     turn_started = True
                 elif str(rid).startswith("steer-"):
-                    if on_event is not None:
-                        if msg.get("error") is not None:
+                    steered_text = rpc.get("steer_texts", {}).pop(str(rid), "")
+                    if msg.get("error") is not None:
+                        if on_event is not None:
                             on_event({"kind": "steer-rejected",
-                                      "text": str(msg.get("error"))[:300]})
-                        else:
-                            on_event({"kind": "steer-ack",
-                                      "text": str((msg.get("result") or {})
-                                                  .get("turnId", ""))})
+                                      "text": steered_text,
+                                      "detail": str(msg.get("error"))[:300]})
+                    else:
+                        # ACCEPTED is not CONSUMED: remember it; the receipt is the
+                        # provider echoing the steered input as a userMessage item
+                        # inside the turn (same parity as Claude's replay echo).
+                        rpc.setdefault("steer_accepted", []).append(
+                            {"text": steered_text,
+                             "turn_id": str((msg.get("result") or {})
+                                            .get("turnId", ""))})
+                        if on_event is not None:
+                            on_event({"kind": "steer-accepted",
+                                      "text": steered_text})
                 continue
             method = msg.get("method")
             params = msg.get("params") or {}
+            if method is not None and "id" in msg:
+                # A SERVER->CLIENT request. Skye never approves escalations: known
+                # approval methods get an explicit DECLINE (grounded: v2/item.rs
+                # CommandExecutionApprovalDecision/FileChangeApprovalDecision "decline");
+                # requests for interactive input or dynamic tools cannot be served and
+                # unknown methods fail closed - all with a JSON-RPC error, all journaled.
+                # (approvalPolicy params on thread/turn start are experimental-gated, so
+                # enforcement lives here at the decision point, not in a sent policy.)
+                if method in ("item/commandExecution/requestApproval",
+                              "item/fileChange/requestApproval",
+                              "item/permissions/requestApproval"):
+                    self._rpc_reply(proc, msg["id"],
+                                    result={"decision": "decline"})
+                    if on_event is not None:
+                        on_event({"kind": "approval-declined",
+                                  "text": f"{method}: declined (Skye never "
+                                          "auto-approves)"})
+                elif method in ("item/tool/requestUserInput",
+                                "mcpServer/elicitation/request",
+                                "item/tool/call"):
+                    self._rpc_reply(proc, msg["id"],
+                                    error={"code": -32601,
+                                           "message": "skye serves no interactive "
+                                                      "requests"})
+                    if on_event is not None:
+                        on_event({"kind": "server-request-refused",
+                                  "text": f"{method}: cannot be served by an "
+                                          "unattended run"})
+                else:
+                    self._rpc_reply(proc, msg["id"],
+                                    error={"code": -32601,
+                                           "message": f"unknown server request: "
+                                                      f"{method}"})
+                    if on_event is not None:
+                        on_event({"kind": "server-request-unknown",
+                                  "text": f"{method}: unrecognized - refused"})
+                continue
             if method == "turn/started":
                 turn = params.get("turn") or {}
                 if turn.get("id"):
@@ -330,6 +403,21 @@ class CodexAdapter(SessionAdapter):
             elif method == "item/completed":
                 item = params.get("item") or {}
                 itype = item.get("type")
+                if itype == "userMessage":
+                    # The provider surfaced steered input as a turn item: THAT is the
+                    # consumption receipt for the matching accepted steer.
+                    echoed = " ".join(str(part.get("text") or "")
+                                      for part in item.get("content") or []
+                                      if isinstance(part, dict)).strip()
+                    for accepted in list(rpc.get("steer_accepted", [])):
+                        if accepted["text"].strip() and (
+                                echoed == accepted["text"].strip()):
+                            rpc["steer_accepted"].remove(accepted)
+                            if on_event is not None:
+                                on_event({"kind": "steer-ack",
+                                          "text": accepted["text"],
+                                          "turn_id": accepted["turn_id"]})
+                            break
                 if itype == "agentMessage" and item.get("text"):
                     texts.append(str(item["text"]))
                     if on_event is not None:
@@ -339,6 +427,14 @@ class CodexAdapter(SessionAdapter):
                         on_event({"kind": "tool",
                                   "name": str(item.get("command") or "")[:120]})
             elif method == "turn/completed":
+                # Turn over: any steer the server ACCEPTED but never surfaced as a
+                # userMessage item was NOT applied - say so, never let the acceptance
+                # masquerade as consumption.
+                for accepted in rpc.get("steer_accepted", []):
+                    if on_event is not None:
+                        on_event({"kind": "steer-unapplied",
+                                  "text": accepted["text"]})
+                rpc["steer_accepted"] = []
                 turn = params.get("turn") or {}
                 status = str(turn.get("status") or "")
                 result_ok = status in ("completed", "")
@@ -348,13 +444,28 @@ class CodexAdapter(SessionAdapter):
                         entry["closing"] = True
                 break  # one process per turn: close stdin in the finally, server exits
         if not turn_started and not turn_done and not protocol_error and proc.poll() not in (None, 0):
-            raise _FallbackToExec(f"app-server exited before the turn started "
-                                  f"(exit {proc.poll()})")
+            if cancel_event is not None and cancel_event.is_set():
+                protocol_error = "cancelled by the operator"
+            elif not effect_sent:
+                # Died during the handshake, before any thread/turn effect: the proven
+                # exec path is a safe, journaled fallback.
+                raise _FallbackToExec(f"app-server exited (exit {proc.poll()}) during "
+                                      "the handshake")
+            else:
+                # Effects may exist server-side: retrying under exec could duplicate
+                # them. Fail closed with the truthful state.
+                protocol_error = (f"app-server exited (exit {proc.poll()}) after "
+                                  "thread/turn effects were sent; thread/turn state "
+                                  "unknown - failing closed")
         ok = bool(turn_done and result_ok and not protocol_error)
-        return SessionResult(ok=ok, output="\n".join(texts)[-8000:], command=command,
+        body = "\n".join(texts)[-8000:]
+        if protocol_error:
+            # the protocol state is the story - never bury it under partial text
+            body = f"{protocol_error}" + (f"\npartial output:\n{body}" if body else "")
+        return SessionResult(ok=ok, output=body, command=command,
                              returncode=0 if ok else 1,
                              session_id=session_id, continuity=continuity,
-                             protocol="app-server",
+                             protocol="app-server-jsonrpc;guard=shape-only",
                              resume_rejected=False, usage=usage)
 
 

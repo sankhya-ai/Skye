@@ -410,7 +410,10 @@ def _progress_journaler(journal: "Journal", emit, context: dict[str, Any],
     the live event bridge as they arrive - the UI's progress view reads both."""
     def on_progress(event: dict[str, Any]) -> None:
         fields = {"kind": event["kind"]}
-        if event["kind"] in ("message", "error", "steer-ack", "steer-rejected"):
+        if event["kind"] in ("message", "error", "steer-ack", "steer-rejected",
+                             "steer-accepted", "steer-unapplied",
+                             "approval-declined", "server-request-refused",
+                             "server-request-unknown"):
             fields["text"] = str(event.get("text", ""))[:300]
         elif event["kind"] == "tool":
             fields["text"] = str(event.get("name", ""))[:120]
@@ -611,6 +614,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     # terminal step record, is delivery-UNKNOWN: pause for the operator with the text
     # preserved - never silently treat it as delivered or dropped.
     live_entries = journal.entries()
+    _used_receipts: "set[int]" = set()
+    # Receipts pair with submissions EXACTLY, FIFO per step: a steer-ack whose
+    # provider-correlated text matches the follow-up's own text, positioned after that
+    # follow-up's submitted entry, consumed by no earlier pending follow-up. A generic
+    # terminal entry or an ack for different text NEVER clears a submission (one receipt
+    # cannot clear two concurrent submits). steer-rejected/steer-unapplied are negative
+    # receipts: the provider said no - pause with that reason, never "consumed".
     for i, entry in enumerate(live_entries):
         if not (entry.get("event") == "follow-up"
                 and entry.get("delivery") == "steered-live"
@@ -619,18 +629,49 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         fid = entry["follow_id"]
         step_id = str(entry.get("step") or "")
         later = live_entries[i + 1:]
-        resolved = any(e.get("step") == step_id and e.get("event") in (
-            "cancelled", "resume-rejected", "redispatch", "follow-up-undelivered")
-            for e in later)
-        submitted = any(e.get("event") == "follow-up-submitted"
-                        and e.get("follow_id") == fid for e in later)
-        settled_after = any(e.get("step") == step_id and e.get("event") == "settled"
-                            for e in later)
-        acked = any(e.get("step") == step_id and e.get("event") == "worker-progress"
-                    and e.get("kind") in ("steer-ack", "steer-rejected") for e in later)
-        if resolved or (submitted and (acked or settled_after)):
+        if any(e.get("step") == step_id and e.get("event") in (
+                "cancelled", "resume-rejected", "redispatch", "follow-up-undelivered")
+                for e in later):
+            continue  # operator action or a known non-delivery resolved this follow-up
+        sub_pos = next((i + 1 + j for j, e in enumerate(later)
+                        if e.get("event") == "follow-up-submitted"
+                        and e.get("follow_id") == fid), None)
+        if sub_pos is None:
+            state, receipt = "submission unknown", None
+        else:
+            state = "submitted but unconfirmed"
+            receipt = None
+            negative = None
+            text = str(entry.get("text") or "")[:300]
+            for pos in range(sub_pos + 1, len(live_entries)):
+                e = live_entries[pos]
+                if e.get("step") != step_id or e.get("event") != "worker-progress":
+                    continue
+                kind = e.get("kind")
+                if kind == "steer-ack" and pos not in _used_receipts \
+                        and str(e.get("text") or "")[:300] == text:
+                    receipt = pos
+                    break
+                if kind in ("steer-rejected", "steer-unapplied") \
+                        and pos not in _used_receipts \
+                        and str(e.get("text") or "")[:300] == text:
+                    negative = kind
+                    _used_receipts.add(pos)
+                    break
+            if receipt is not None:
+                _used_receipts.add(receipt)
+                continue
+            if negative:
+                reason = (f"a live follow-up on step '{step_id}' was submitted but the "
+                          f"provider did NOT consume it ({negative.replace('-', ' ')}; "
+                          f"text preserved: '{str(entry.get('text') or '')[:120]}'). "
+                          "Redispatch the step (resume or --fresh) to deliver it.")
+                emit(events.make_event("mission", {}, status="needs-owner",
+                                       reason=reason, **context))
+                return MissionOutcome(status="needs-owner",
+                                      mission_id=mission["id"], reason=reason, steps={})
+        if receipt is not None:
             continue
-        state = "submitted but unconfirmed" if submitted else "submission unknown"
         reason = (f"a live follow-up on step '{step_id}' is {state} (the server may "
                   f"have died mid-submit; text preserved: "
                   f"'{str(entry.get('text') or '')[:120]}'). Skye will not guess - "

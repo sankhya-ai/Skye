@@ -89,11 +89,21 @@ if argv and argv[0] == "app-server":
             else:
                 reply({"turnId": active_turn})
                 text = (params.get("input") or [{}])[0].get("text", "")
-                notify("item/completed",
-                       {"threadId": params.get("threadId", "thr-new-1"),
-                        "turnId": active_turn, "completedAtMs": 1,
-                        "item": {"id": "i9", "type": "agentMessage",
-                                 "text": f"Follow-up received: {text}"}})
+                if not os.environ.get("FAKE_ACCEPT_THEN_END"):
+                    # Normal path: the steered input surfaces as a userMessage item in
+                    # the turn (the consumption receipt), then work continues.
+                    notify("item/completed",
+                           {"threadId": params.get("threadId", "thr-new-1"),
+                            "turnId": active_turn, "completedAtMs": 1,
+                            "item": {"id": "i8", "type": "userMessage",
+                                     "content": [{"type": "text", "text": text}]}})
+                    notify("item/completed",
+                           {"threadId": params.get("threadId", "thr-new-1"),
+                            "turnId": active_turn, "completedAtMs": 1,
+                            "item": {"id": "i9", "type": "agentMessage",
+                                     "text": f"Follow-up received: {text}"}})
+                # FAKE_ACCEPT_THEN_END: accept the steer, then end the turn WITHOUT
+                # surfacing the input - accepted but never applied.
                 notify("turn/completed",
                        {"threadId": params.get("threadId", "thr-new-1"),
                         "turn": {"id": active_turn, "status": "completed"}})

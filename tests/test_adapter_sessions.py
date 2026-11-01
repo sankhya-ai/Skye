@@ -246,3 +246,18 @@ def test_codex_app_server_mid_turn_steer_reaches_the_turn(fake_path, tmp_path,
     rpcs = [json.loads(line)["rpc"] for line in fake_path.read_text().splitlines()
             if '"rpc"' in line]
     assert "turn/steer" in rpcs
+
+
+def test_codex_cancel_during_handshake_fallback_returns_truthful_result(
+        fake_path, tmp_path, monkeypatch):
+    # Regression: the cancel-during-fallback path must return a truthful cancelled
+    # SessionResult - never crash the constructor (a leaked TypeError would replace the
+    # honest protocol state).
+    import threading as _t
+    monkeypatch.delenv("CODEX_PROTOCOL", raising=False)
+    monkeypatch.setenv("FAKE_BAD_HANDSHAKE", "1")
+    cancel = _t.Event()
+    cancel.set()
+    result = CodexAdapter().run_session(_contract(tmp_path), cancel_event=cancel)
+    assert result.cancelled and not result.ok
+    assert result.output and "cancelled" in result.output

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import shutil
 import signal
 import subprocess
@@ -106,17 +107,40 @@ def steer_live(run_key: str, text: str) -> str:
     return adapter.steer_into(entry, text)
 
 
+_IDENTITY_PLATFORM = sys.platform  # where the identity story below was verified
+
+
 def _pid_identity(pid: int) -> "tuple[str, int] | None":
-    """(start-time token, process-group id) for a live pid, from /proc - a pid alone is
-    not an identity (PIDs get reused). None when the process is gone or unreadable; the
-    caller treats None as unverifiable, i.e. fail-closed."""
+    """(start-time token, process-group id) for a live pid - a pid alone is not an
+    identity (PIDs get reused). The start-time token comes from /proc, which is
+    LINUX-ONLY and the only platform this guard is verified on. Elsewhere (e.g. the
+    owner's Mac) the token is "" and the pgid comes from the portable os.getpgid: the
+    record then honestly cannot distinguish a live worker from a reused pid, and every
+    consumer fails closed on that ("unverifiable"), never guesses. None when the process
+    is gone or unreadable; the caller treats None as unverifiable, i.e. fail-closed."""
+    starttime = ""
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
         # fields after the (comm) parens: state ppid pgrp session ... starttime(field 22)
         tail = stat[stat.rindex(")") + 2:].split()
-        return (tail[19], int(tail[2]))  # starttime, pgrp
+        starttime = tail[19]
     except (OSError, ValueError, IndexError):
-        return None
+        pass  # no /proc (non-Linux) or pid raced away: pgid alone, honestly partial
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        return None  # process gone
+    if not starttime and _IDENTITY_PLATFORM.startswith("linux"):
+        return None  # Linux with /proc but unreadable: genuinely unverifiable
+    return (starttime, pgid)
+
+
+def _identity_platform_note() -> str:
+    if _IDENTITY_PLATFORM.startswith("linux"):
+        return ""
+    return (f" (process start-time is not verifiable on {_IDENTITY_PLATFORM} - "
+            f"Skye is conservatively treating the live pid as possibly its own worker; "
+            f"the Linux-verified identity check does not apply here)")
 
 
 def _pid_alive(pid: int) -> bool:
@@ -178,7 +202,8 @@ def live_claim(live_file: "str | Path | None", command: list, run_key: "str | No
                 reason = f"pid {prior_pid} is alive but its identity cannot be verified"
             elif not prior.get("starttime") or not prior.get("pgid"):
                 reason = (f"pid {prior_pid} is alive but the live record carries no "
-                          "start-time/process-group identity to check against")
+                          "start-time/process-group identity to check against"
+                          + _identity_platform_note())
             elif identity == (str(prior.get("starttime")), int(prior.get("pgid"))):
                 reason = f"worker pid {prior_pid} is still running"
             else:
@@ -220,6 +245,7 @@ def live_record(live_file: "str | Path | None", proc: "subprocess.Popen",
         Path(live_file).write_text(json.dumps(
             {"pid": proc.pid, "starttime": identity[0], "pgid": identity[1],
              "run_key": run_key or "", "adapter": adapter_name,
+             "identity_platform": _IDENTITY_PLATFORM,
              "started": time.time()}) + "\n", "utf-8")
     except OSError:
         pass
@@ -372,9 +398,15 @@ class SessionAdapter(Adapter):
                         # An older/foreign record without identity fields: a live pid with
                         # an unverifiable identity - fail closed, never gamble on reuse.
                         reason = (f"pid {prior_pid} is alive but the live record carries "
-                                  "no start-time/process-group identity to check against")
+                                  "no start-time/process-group identity to check against"
+                                  + _identity_platform_note())
                     elif identity == (str(prior.get("starttime")), int(prior.get("pgid"))):
                         reason = f"worker pid {prior_pid} is still running"
+                    elif not identity[0]:
+                        # Non-Linux record and reading: pgid alone cannot prove reuse -
+                        # fail closed (alive pid, unverifiable identity).
+                        reason = (f"pid {prior_pid} is alive but cannot be distinguished "
+                                  "from a reused pid" + _identity_platform_note())
                     else:
                         reason = ""  # pid reused: the recorded worker is verifiably gone
                 if reason:
@@ -415,6 +447,7 @@ class SessionAdapter(Adapter):
                 live_path.write_text(json.dumps(
                     {"pid": proc.pid, "starttime": identity[0], "pgid": identity[1],
                      "run_key": run_key or "", "adapter": self.name,
+                     "identity_platform": _IDENTITY_PLATFORM,
                      "started": time.time()}) + "\n", "utf-8")
             except OSError:
                 pass
