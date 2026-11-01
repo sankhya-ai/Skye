@@ -122,7 +122,7 @@ def test_cancel_live_registry_signals_the_running_step(fake_path, tmp_path, monk
         if live:
             break
         time.sleep(0.05)
-    assert base.cancel_live("m-1:build") == "signalled"
+    assert base.cancel_live("m-1:build") == "stopped"  # exit confirmed, not just signalled
     thread.join(timeout=15)
     assert holder["result"].cancelled
     assert base.cancel_live("m-1:build") == "not-live"  # cleaned up after the run

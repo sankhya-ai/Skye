@@ -34,8 +34,17 @@ def fake_path(monkeypatch, tmp_path):
     return log
 
 
-def _argv_lines(log: Path) -> list[list[str]]:
+def _log_lines(log: Path) -> list:
     return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+def _argv_lines(log: Path) -> list[list[str]]:
+    # argv records are lists; {"stdin": ...} records are framed stdin messages
+    return [line for line in _log_lines(log) if isinstance(line, list)]
+
+
+def _stdin_frames(log: Path) -> list[str]:
+    return [line["stdin"] for line in _log_lines(log) if isinstance(line, dict)]
 
 
 def _policy():
@@ -109,7 +118,8 @@ def test_review_sendback_resumes_the_recorded_session(fake_path, tmp_path, monke
     assert len(calls) == 4  # worker, reviewer(changes), worker redo, reviewer(pass)
     redo = calls[2]
     assert "--resume" in redo and redo[redo.index("--resume") + 1] == "sess-new-1"
-    prompt = redo[redo.index("-p") + 1]
+    assert "--input-format" in redo  # prompts/follow-ups ride stdin frames, not argv
+    prompt = _stdin_frames(fake_path)[2]
     assert "tighten the parser" in prompt  # the reviewer's feedback reaches the redo
 
     entries = _journal(state_dir).entries()
@@ -135,7 +145,7 @@ def test_cancel_signals_the_live_run_and_pauses_needs_owner(fake_path, tmp_path,
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
     assert _wait_for(lambda: "m1:dev" in base._LIVE), "run never registered live"
-    assert base.cancel_live("m1:dev", grace=0.5) == "signalled"
+    assert base.cancel_live("m1:dev", grace=0.5) == "stopped"  # exit confirmed, not assumed
     thread.join(20)
     assert not thread.is_alive()
 
@@ -201,7 +211,7 @@ def test_follow_up_continues_the_recorded_session(fake_path, tmp_path):
     assert len(calls) == 2
     follow = calls[1]
     assert follow[follow.index("--resume") + 1] == "sess-new-1"
-    prompt = follow[follow.index("-p") + 1]
+    prompt = _stdin_frames(fake_path)[1]
     assert "Operator follow-up" in prompt and "also add logging" in prompt
     assert any(e.get("event") == "follow-up" for e in _journal(state_dir).entries())
 
@@ -326,3 +336,264 @@ def test_mission_graph_carries_continuity(ui_server, tmp_path):
     assert status == 200
     node = next(n for n in body["nodes"] if n["id"] == "dev")
     assert node["continuity"] == "fresh" and node["has_session"] is True
+
+
+# ----- live follow-up: steered into the running process as a queued vendor message -----
+
+def test_steer_delivers_follow_up_to_a_live_run(fake_path, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_SLEEP", "1")
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    box: dict = {}
+    thread = threading.Thread(
+        target=lambda: box.__setitem__(
+            "outcome", run_mission(mission, _policy(), state_dir=state_dir)),
+        daemon=True)
+    thread.start()
+    assert _wait_for(lambda: "m1:dev" in base._LIVE), "run never registered live"
+    assert base.steer_live("m1:dev", "also add logging") == "steered"
+    thread.join(20)
+    assert not thread.is_alive()
+    assert box["outcome"].status == "done", box["outcome"].reason
+
+    # one process, two turns: the follow-up ran INSIDE the live session, queued between
+    # turns - no second process, no new session
+    assert len(_argv_lines(fake_path)) == 1
+    assert _stdin_frames(fake_path)[1] == "also add logging"
+    progress = [e.get("text") for e in _journal(state_dir).entries()
+                if e.get("event") == "worker-progress"]
+    assert "Follow-up received: also add logging" in progress
+    settled = next(e for e in _journal(state_dir).entries() if e.get("event") == "settled")
+    assert "Follow-up received: also add logging" in settled["output"]
+
+
+def test_steer_after_the_final_turn_reports_undelivered(fake_path, tmp_path):
+    # No sleep: by the time steer is attempted the run is closing - the honest answer is
+    # not-live/exiting, never a pretend delivery.
+    mission = _mission(tmp_path, _one_step())
+    outcome = run_mission(mission, _policy(), state_dir=tmp_path / "st")
+    assert outcome.status == "done"
+    assert base.steer_live("m1:dev", "too late") == "not-live"
+
+
+def test_codex_exec_reports_live_steer_unsupported(fake_path, tmp_path, monkeypatch):
+    # Grounded in codex-rs/exec (one-shot, no stdin input channel); the vendor's live
+    # input is the separate app-server turn/steer protocol, which Skye does not implement.
+    from skye.adapters.codex import CodexAdapter
+    monkeypatch.setenv("FAKE_SLEEP", "5")
+    adapter = CodexAdapter()
+    box: dict = {}
+    contract = {"repo": str(tmp_path), "goal": "work", "brief": "work"}
+    thread = threading.Thread(
+        target=lambda: box.__setitem__(
+            "result", adapter.run_session(contract, run_key="m1:dev")), daemon=True)
+    thread.start()
+    assert _wait_for(lambda: "m1:dev" in base._LIVE)
+    assert base.steer_live("m1:dev", "ping") == "unsupported"
+    assert base.cancel_live("m1:dev", grace=0.2) == "stopped"
+    thread.join(10)
+    assert box["result"].cancelled is True
+
+
+# ----- cancel: the whole process group dies, and death is confirmed -----
+
+def test_cancel_reaps_descendants_and_confirms_death(fake_path, tmp_path, monkeypatch):
+    child_pid_file = tmp_path / "child.pid"
+    monkeypatch.setenv("FAKE_SLEEP", "30")
+    monkeypatch.setenv("FAKE_SPAWN_CHILD", "1")
+    monkeypatch.setenv("FAKE_CHILD_PID", str(child_pid_file))
+    mission = _mission(tmp_path, _one_step())
+    box: dict = {}
+    thread = threading.Thread(
+        target=lambda: box.__setitem__(
+            "outcome", run_mission(mission, _policy(), state_dir=tmp_path / "st")),
+        daemon=True)
+    thread.start()
+    assert _wait_for(lambda: child_pid_file.exists()), "grandchild never spawned"
+    child_pid = int(child_pid_file.read_text().strip())
+    leader_pid = base._LIVE["m1:dev"]["proc"].pid
+    assert base.cancel_live("m1:dev", grace=0.5) == "stopped"
+    thread.join(20)
+    assert not thread.is_alive()
+    for pid in (leader_pid, child_pid):
+        with pytest.raises(ProcessLookupError):
+            import os
+            os.kill(pid, 0)  # both the CLI and its descendant are verifiably gone
+    assert box["outcome"].status == "needs-owner"
+
+
+# ----- cancel marker: only an explicit owner action clears it -----
+
+def test_cancel_marker_blocks_any_run_until_explicitly_cleared(fake_path, tmp_path):
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    mission_dir = state_dir / "missions" / "m1"
+    mission_dir.mkdir(parents=True)
+    (mission_dir / "cancel-requested").write_text("{}\n", "utf-8")
+
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner" and "explicit resume" in outcome.reason
+    assert (mission_dir / "cancel-requested").exists()  # NOT consumed by the refused run
+    assert not fake_path.exists()  # nothing dispatched
+
+    outcome = run_mission(mission, _policy(), state_dir=state_dir, clear_cancel=True)
+    assert outcome.status == "done", outcome.reason
+    assert not (mission_dir / "cancel-requested").exists()
+    assert any(e.get("event") == "cancel-cleared"
+               for e in _journal(state_dir).entries())
+
+
+# ----- crash windows around the follow-up queue -----
+
+def test_crash_after_intent_before_settle_pauses_without_replay(fake_path, tmp_path):
+    # Window: the follow-up was journaled (intent) and possibly reached the worker, but
+    # no terminal entry landed. Transcript continuation cannot prove what ran, so the
+    # engine fails CLOSED: needs-owner, text preserved, no replayed dispatch.
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    mission_dir = state_dir / "missions" / "m1"
+    (mission_dir / "followups.jsonl").write_text(
+        json.dumps({"step": "dev", "text": "also add logging", "at": 1}) + "\n", "utf-8")
+    _journal(state_dir).append("dev", "follow-up", line=0, text="also add logging")
+
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner"
+    assert "will NOT replay" in outcome.reason and "also add logging" not in outcome.reason
+    assert len(_argv_lines(fake_path)) == 1  # the first run only - no replay
+    # the preserved text stays in the journal for the operator
+    assert any(e.get("event") == "follow-up" and e.get("text") == "also add logging"
+               for e in _journal(state_dir).entries())
+
+    # the documented escape: the operator redispatches the step (a terminal event), and
+    # the offset then heals past the dangling line instead of replaying it
+    outcome = run_mission(mission, _policy(), state_dir=state_dir, redispatch="dev")
+    assert outcome.status == "done", outcome.reason
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "done"
+    assert (mission_dir / "followups.consumed").read_text().strip() == "1"
+    assert len(_argv_lines(fake_path)) == 2  # redispatch ran once; nothing replayed after
+
+
+def test_consumed_offset_self_heals_when_terminal_already_journaled(fake_path, tmp_path):
+    # Window: follow-up ran AND settled, crash hit before the offset write. The journal
+    # proves the terminal, so the offset heals forward - the follow-up is NOT re-run.
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    assert run_mission(mission, _policy(), state_dir=state_dir).status == "done"
+    mission_dir = state_dir / "missions" / "m1"
+    (mission_dir / "followups.jsonl").write_text(
+        json.dumps({"step": "dev", "text": "also add logging", "at": 1}) + "\n", "utf-8")
+    journal = _journal(state_dir)
+    journal.append("dev", "follow-up", line=0, text="also add logging")
+    journal.append("dev", "settled", status="done", reason="", output="with logging",
+                   gates=[], worker_job="", role="developer")
+
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "done"
+    assert len(_argv_lines(fake_path)) == 1  # settled once already - no second dispatch
+    assert (mission_dir / "followups.consumed").read_text().strip() == "1"
+
+
+# ----- crash-surviving worker: never a duplicate process against one session -----
+
+def test_prior_worker_still_alive_blocks_a_duplicate(fake_path, tmp_path):
+    import os
+    import subprocess as sp
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    mission_dir = state_dir / "missions" / "m1"
+    mission_dir.mkdir(parents=True)
+    # Simulate a worker that survived a server crash: live record with a REAL live pid.
+    survivor = sp.Popen(["sleep", "60"])
+    try:
+        (mission_dir / "live-dev.json").write_text(
+            json.dumps({"pid": survivor.pid, "run_key": "m1:dev"}) + "\n", "utf-8")
+        outcome = run_mission(mission, _policy(), state_dir=state_dir)
+        assert outcome.status == "needs-owner"
+        assert "will not start a duplicate" in outcome.reason
+        assert not fake_path.exists()  # nothing spawned
+    finally:
+        survivor.kill()
+        survivor.wait()
+
+    # Once the survivor is verifiably gone, the stale record is cleared and the run goes.
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert len(_argv_lines(fake_path)) == 1
+
+
+def test_unreadable_live_record_fails_closed(fake_path, tmp_path):
+    mission = _mission(tmp_path, _one_step())
+    state_dir = tmp_path / "st"
+    mission_dir = state_dir / "missions" / "m1"
+    mission_dir.mkdir(parents=True)
+    (mission_dir / "live-dev.json").write_text("not json\n", "utf-8")
+    outcome = run_mission(mission, _policy(), state_dir=state_dir)
+    assert outcome.status == "needs-owner" and "unreadable" in outcome.reason
+    assert not fake_path.exists()
+
+
+# ----- display hygiene: session identity never leaks through UI payloads -----
+
+def test_display_payloads_hide_session_id_and_mask_paths(ui_server, tmp_path):
+    url, state_dir = ui_server
+    mission_dir = _settled_mission_with_session(state_dir, tmp_path)
+    journal = _journal(state_dir)
+    journal.append("dev", "worker-session", adapter="claude-code",
+                   session_id="/home/someone/.claude/projects/p/sess.jsonl",
+                   continuity="resumed", cancelled=False, resume_rejected=False)
+
+    status, body = _req(url, "/api/missions/m1")
+    assert status == 200
+    rendered = json.dumps(body)
+    assert ".claude/projects" not in rendered  # path-shaped session id masked
+    assert "sess-new-1" not in json.dumps(body["status"])  # status carries presence, not ids
+    timeline_session = [e for e in body["journal"] if e.get("event") == "worker-session"]
+    assert any("(recorded; path-shaped value masked)" == e.get("session_id")
+               for e in timeline_session)
+
+    status, graph = _req(url, "/api/missions/m1/graph")
+    assert status == 200
+    assert "sess-new-1" not in json.dumps(graph)
+    assert "sess.jsonl" not in json.dumps(graph)
+
+
+# ----- the UI endpoint steers a live run end to end -----
+
+def test_follow_up_endpoint_steers_a_live_run(ui_server, tmp_path, monkeypatch, fake_path):
+    url, state_dir = ui_server
+    monkeypatch.setenv("FAKE_SLEEP", "1")
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps(
+        {"allow_unattended": [{"adapter": "claude-code", "role": "*"}],
+         "test_command": "true"}), "utf-8")
+    monkeypatch.setenv("SKYE_POLICY", str(policy_file))
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    mission_dir = state_dir / "missions" / "m1"
+    mission_dir.mkdir(parents=True)
+    (mission_dir / "mission.json").write_text(json.dumps(
+        {"id": "m1", "goal": "ship it", "repo": str(ws), "steps": _one_step()}), "utf-8")
+
+    status, body = _req(url, "/api/missions/m1/resume", method="POST", body={})
+    assert status == 200 and body["resumed"] is True
+    assert _wait_for(lambda: "m1:dev" in base._LIVE), "run never registered live"
+    status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
+                        body={"step": "dev", "text": "also add logging"})
+    assert status == 200 and body["delivery"] == "steered", body
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        _, detail = _req(url, "/api/missions/m1")
+        if not detail["live"].get("running"):
+            break
+        time.sleep(0.1)
+    _, detail = _req(url, "/api/missions/m1")
+    assert detail["status"]["status"] == "done", detail["status"]
+    follow_ups = [e for e in _journal(state_dir).entries()
+                  if e.get("event") == "follow-up"]
+    assert follow_ups and follow_ups[0]["delivery"] == "steered-live"
+    progress = [e.get("text") for e in _journal(state_dir).entries()
+                if e.get("event") == "worker-progress"]
+    assert "Follow-up received: also add logging" in progress

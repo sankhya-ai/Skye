@@ -41,14 +41,34 @@ class ClaudeCodeAdapter(SessionAdapter):
         return command
 
     # -- Session protocol (stream-json) --------------------------------------------
-    # Grounded in the vendor CLI reference: print mode with --output-format stream-json
-    # emits one JSON object per line (system init carrying the session id, assistant
-    # messages, a final result) and requires --verbose; `claude -p --resume <session-id>`
-    # re-enters a recorded print session with its full conversation context.
+    # Grounded in the vendor CLI reference + Agent SDK docs: print mode with
+    # --output-format stream-json emits one JSON object per line (system init carrying
+    # the session id, assistant messages, a final result) and requires --verbose;
+    # `claude -p --resume <session-id>` re-enters a recorded print session with its full
+    # conversation context. --input-format stream-json takes the prompt - and later
+    # follow-ups - as user-message frames on stdin; the vendor documents queued messages
+    # processing sequentially between turns, which is what makes a LIVE follow-up safe:
+    # it is consumed as the next turn, never injected mid-tool-call. The frame shape is
+    # the Agent SDK's documented SDKUserMessage: {"type": "user", "message": {"role":
+    # "user", "content": <text>}}.
+
+    SUPPORTS_STEER = True
+
+    @staticmethod
+    def _user_frame(text: str) -> str:
+        return json.dumps({"type": "user",
+                           "message": {"role": "user", "content": text}}) + "\n"
+
+    def prompt_via_stdin(self, prompt: str) -> str | None:
+        return self._user_frame(prompt)
+
+    def steer_frame(self, text: str) -> str | None:
+        return self._user_frame(text)
 
     def build_session_command(self, contract: dict, resume_session_id: str | None) -> list[str]:
-        command = [self.binary, "-p", self._prompt(contract),
-                   "--output-format", "stream-json", "--verbose"]
+        command = [self.binary, "-p",
+                   "--output-format", "stream-json", "--verbose",
+                   "--input-format", "stream-json", "--replay-user-messages"]
         tools = (contract.get("tools") or [])
         if tools:
             # The role's gateway catalogue still scopes the session: same flags, same

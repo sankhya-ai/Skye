@@ -12,6 +12,7 @@ diff; Skye itself reads and judges nothing beyond that verdict marker.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -147,11 +148,19 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
             run_key = (f"{context.get('mission', '')}:{context.get('step', '')}"
                        if context.get("mission") and context.get("step") else None)
 
-            def run(s, _adapter=adapter, _key=run_key):
+            # The live-file lets a LATER process tell a still-running worker (a survivor
+            # of a server crash - the registry is in-memory) from a free slot.
+            live_file = None
+            if run_key and state_dir:
+                live_file = (Path(state_dir) / "missions" / str(context["mission"])
+                             / f"live-{re.sub(r'[^A-Za-z0-9_.-]', '_', str(context['step']))}.json")
+
+            def run(s, _adapter=adapter, _key=run_key, _live=live_file):
                 return _adapter.run_session(
                     s, timeout=timeout,
                     resume_session_id=str(s.get("resume_session_id") or "") or None,
-                    run_key=_key, on_event=on_progress, cancel_event=cancel_event)
+                    run_key=_key, on_event=on_progress, cancel_event=cancel_event,
+                    live_file=_live)
         else:
             run = lambda s: adapter.run(s, timeout=timeout)
         try:
@@ -168,6 +177,13 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
                               "cancelled": result.cancelled,
                               "resume_rejected": result.resume_rejected,
                               "usage": result.usage}
+        if getattr(result, "duplicate_live", False):
+            # A worker for this exact step may still be running after a crash: fail
+            # closed, never run two processes into one session/repo.
+            emit("needs-owner", spec, status="needs-owner", reason=result.output,
+                 fingerprint=fp)
+            return Outcome(status="needs-owner", contract=spec, reason=result.output,
+                           fingerprint=fp)
         if getattr(result, "cancelled", False):
             reason = "cancelled by the operator"
             emit("cancelled", spec, status="cancelled", reason=reason, fingerprint=fp)

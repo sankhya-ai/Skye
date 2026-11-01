@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Fake `claude` CLI for adapter protocol tests: speaks stream-json NDJSON, records every
-invocation to $FAKE_LOG as one JSON line, honors --resume, and can sleep (FAKE_SLEEP) so
-cancel/timeout tests have a live process to stop. No network, no model."""
-import json, os, sys, time
+invocation to $FAKE_LOG as one JSON line, honors --resume, can sleep (FAKE_SLEEP) so
+cancel/timeout tests have a live process to stop, and - in --input-format stream-json
+mode - takes the prompt and later follow-ups as stdin user frames, emitting one turn per
+queued message (the real CLI's documented queue-between-turns behavior). FAKE_SPAWN_CHILD
+launches a grandchild so cancel tests prove the whole process group dies. No network, no
+model."""
+import json, os, subprocess, sys, time
 
 argv = sys.argv[1:]
 log = os.environ.get("FAKE_LOG")
@@ -20,16 +24,23 @@ if resume == "bad-session":
 session_id = resume or "sess-new-1"
 print(json.dumps({"type": "system", "subtype": "init", "session_id": session_id}), flush=True)
 
+if os.environ.get("FAKE_SPAWN_CHILD"):
+    # A descendant in the same process group: cancellation must reap it too.
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    pid_file = os.environ.get("FAKE_CHILD_PID")
+    if pid_file:
+        open(pid_file, "w").write(str(child.pid))
+
 sleep = float(os.environ.get("FAKE_SLEEP", "0"))
 if sleep:
     time.sleep(sleep)   # cancel/timeout must interrupt this
 
-# Review verdicts for rework tests: a review brief gets the next verdict from
-# FAKE_VERDICT_SEQUENCE (a counter file in FAKE_COUNTER tracks the round), so one test can
-# script request-changes then pass. Anything else gets the plain worker reply.
-prompt = argv[argv.index("-p") + 1] if "-p" in argv else ""
-text = "I worked on the task."
-if "You are reviewing another worker's changes" in prompt:
+
+def verdict_text(prompt):
+    """Review briefs get the next verdict from FAKE_VERDICT_SEQUENCE (counter file in
+    FAKE_COUNTER); anything else gets the plain worker reply."""
+    if "You are reviewing another worker's changes" not in prompt:
+        return "I worked on the task."
     sequence = [v.strip() for v in os.environ.get("FAKE_VERDICT_SEQUENCE", "pass").split(",")
                 if v.strip()]
     counter_path = os.environ.get("FAKE_COUNTER")
@@ -40,17 +51,52 @@ if "You are reviewing another worker's changes" in prompt:
         open(counter_path, "w").write(str(index + 1))
     verdict = sequence[min(index, len(sequence) - 1)]
     if verdict == "request-changes":
-        text = ('Reviewed the diff. {"verdict": "request-changes", '
+        return ('Reviewed the diff. {"verdict": "request-changes", '
                 '"feedback": ["tighten the parser"]}')
-    elif verdict == "block":
-        text = 'Reviewed the diff. {"verdict": "block", "reasons": ["off brief"]}'
-    else:
-        text = 'Reviewed the diff. {"verdict": "pass"}'
+    if verdict == "block":
+        return 'Reviewed the diff. {"verdict": "block", "reasons": ["off brief"]}'
+    return 'Reviewed the diff. {"verdict": "pass"}'
 
-print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
-    {"type": "text", "text": text},
-    {"type": "tool_use", "name": "Read", "input": {"file_path": "a.py"}}]}}), flush=True)
-print(json.dumps({"type": "result", "subtype": "success", "session_id": session_id,
-                  "total_cost_usd": 0.01, "num_turns": 1, "duration_ms": 5}), flush=True)
+
+def emit_turn(text):
+    print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": text},
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "a.py"}}]}}), flush=True)
+    print(json.dumps({"type": "result", "subtype": "success", "session_id": session_id,
+                      "total_cost_usd": 0.01, "num_turns": 1, "duration_ms": 5}), flush=True)
+
+
+def frame_text(raw):
+    try:
+        message = json.loads(raw)
+        content = (message.get("message") or {}).get("content")
+        return content if isinstance(content, str) else ""
+    except ValueError:
+        return ""
+
+
+stream_input = "--input-format" in argv and argv[argv.index("--input-format") + 1] == "stream-json"
+if stream_input:
+    # Turn 1 from the initial stdin frame; then one turn per queued follow-up frame,
+    # echoing each consumed user message (the --replay-user-messages behavior) until the
+    # driver closes stdin.
+    first = True
+    for line in sys.stdin:
+        text = frame_text(line)
+        if not text:
+            continue
+        if log:
+            with open(log, "a") as handle:
+                handle.write(json.dumps({"stdin": text}) + "\n")
+        if first:
+            emit_turn(verdict_text(text))
+            first = False
+        else:
+            print(line.strip(), flush=True)  # replay echo: consumed, not ignored
+            emit_turn(f"Follow-up received: {text}")
+else:
+    prompt = argv[argv.index("-p") + 1] if "-p" in argv and argv.index("-p") + 1 < len(argv) else ""
+    emit_turn(verdict_text(prompt))
+
 if os.environ.get("FAKE_MARK"):
     open(os.environ["FAKE_MARK"], "w").write("completed")

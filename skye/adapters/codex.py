@@ -15,6 +15,13 @@ class CodexAdapter(SessionAdapter):
     binary = "codex"
     # Only the wall-clock timeout is enforceable here; max_steps/max_cost_usd surface as notes.
     ENFORCED_BUDGET = ("timeout_seconds",)
+    # NO live steering on this protocol: `codex exec` is one-shot - it takes one prompt and
+    # runs it to completion (codex-rs/exec has no stdin input channel). The vendor's live
+    # mid-turn input is `turn/steer` on the separate `codex app-server` JSON-RPC protocol
+    # (codex-rs/app-server-protocol: TurnSteerParams, marked experimental upstream); Skye
+    # does not implement that protocol, so follow-ups on codex are after-turn continuations
+    # via `exec resume`, never live injection. steer_live() reports "unsupported".
+    SUPPORTS_STEER = False
 
     def _prompt(self, contract: dict) -> str:
         prompt = contract.get("brief") or contract["goal"]

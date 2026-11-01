@@ -148,7 +148,8 @@ def _cmd_mission(args: list[str]) -> int:
         redispatch = args[args.index("--step") + 1]
         redispatch_fresh = "--fresh" in args  # --fresh abandons the recorded vendor session
     outcome = run_mission(mission, Policy.load(), approvals_path=approvals.default_path(),
-                          redispatch=redispatch, redispatch_fresh=redispatch_fresh)
+                          redispatch=redispatch, redispatch_fresh=redispatch_fresh,
+                          clear_cancel=True)  # an explicit operator command
     print(json.dumps({"status": outcome.status, "mission": outcome.mission_id,
                       "reason": outcome.reason, "pending_contract": outcome.pending_contract,
                       "steps": {k: {"status": v.get("status"), "reason": v.get("reason", "")}

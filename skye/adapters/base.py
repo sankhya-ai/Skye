@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -7,6 +8,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 class AdapterError(RuntimeError):
@@ -41,30 +43,86 @@ class SessionResult(Result):
     cancelled: bool = False
     timed_out: bool = False
     resume_rejected: bool = False
+    # A live-file check found a still-running (or unverifiable) worker for this exact
+    # step - starting another would run two processes against the same session/repo.
+    duplicate_live: bool = False
     usage: dict = field(default_factory=dict)
 
 
-# Live session processes, so the UI server's cancel endpoint can signal an in-flight run
-# in THIS process. Keyed "<mission-id>:<step-id>". Process-group signalling only - the
-# registry never touches another mission's processes.
+# Live session processes, so the UI server's cancel/follow-up endpoints can reach an
+# in-flight run in THIS process. Keyed "<mission-id>:<step-id>". Process-group signalling
+# and protocol-framed stdin writes only - the registry never touches another mission's
+# processes, and steering uses the vendor's own message frame, never terminal injection.
 _LIVE_LOCK = threading.Lock()
-_LIVE: dict[str, tuple] = {}  # run_key -> (Popen, cancel threading.Event)
+_LIVE: dict[str, dict] = {}  # run_key -> {proc, cancel, adapter, steers, closing, lock}
 
 
 def cancel_live(run_key: str, *, grace: float = 5.0) -> str:
-    """Signal the live run under run_key: SIGTERM to its process group, SIGKILL after the
-    grace period. Returns "signalled", "not-live" (nothing registered - the step may
-    already have settled), or "exiting" (the process was already gone)."""
+    """Stop the live run under run_key and CONFIRM it: SIGTERM to its process group,
+    SIGKILL after the grace period, then wait for actual exit. Accepting the signal is
+    not death, so the return value says what was verified: "stopped" (the process
+    exited), "unkillable" (signals sent but it has not exited - said plainly, never
+    claimed stopped), "not-live" (nothing registered - the step may already have
+    settled), or "exiting" (the process was already gone)."""
     with _LIVE_LOCK:
         entry = _LIVE.get(run_key)
     if entry is None:
         return "not-live"
-    proc, proc_cancel = entry
+    proc, proc_cancel = entry["proc"], entry["cancel"]
     if proc.poll() is not None:
         return "exiting"  # registered but already gone before we could signal
     proc_cancel.set()  # the run records itself as operator-cancelled, not crashed
     _signal_group(proc, grace=grace)
-    return "signalled"
+    try:
+        proc.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        return "unkillable"
+    return "stopped"
+
+
+def steer_live(run_key: str, text: str) -> str:
+    """Deliver an operator follow-up into a LIVE run through the vendor's own input
+    protocol: the CLI queues the message and starts a new turn with it (Claude Code's
+    --input-format stream-json: queued user messages process sequentially between turns).
+    This is never a mid-tool-call injection and never terminal input. Returns "steered",
+    "not-live", "exiting" (the run ended before/while writing - the follow-up was NOT
+    delivered), or "unsupported" (the adapter's protocol has no live-input channel)."""
+    with _LIVE_LOCK:
+        entry = _LIVE.get(run_key)
+    if entry is None:
+        return "not-live"
+    proc = entry["proc"]
+    if proc.poll() is not None:
+        return "exiting"
+    adapter = entry["adapter"]
+    frame = adapter.steer_frame(text) if getattr(adapter, "SUPPORTS_STEER", False) else None
+    if frame is None:
+        return "unsupported"
+    with entry["lock"]:
+        # closing means the final turn's result already landed: a write now would sit in a
+        # pipe nobody consumes - report it undelivered instead of pretending.
+        if entry["closing"] or proc.poll() is not None:
+            return "exiting"
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(frame)
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            return "exiting"
+        entry["steers"] += 1
+    return "steered"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort liveness check, fail-CLOSED: anything but a definitive 'no such
+    process' is treated as alive (an unverifiable pid must block a duplicate spawn)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
 
 
 def _signal_group(proc: "subprocess.Popen", *, grace: float = 5.0) -> None:
@@ -134,11 +192,23 @@ class SessionAdapter(Adapter):
     conversation context is preserved by the CLI, not by a lingering process."""
 
     SUPPORTS_SESSIONS = True
+    #: Whether the vendor protocol accepts follow-up input while a run is live.
+    SUPPORTS_STEER = False
     #: seconds of grace between SIGTERM and SIGKILL on cancel/timeout
     CANCEL_GRACE = 5.0
 
     def build_session_command(self, contract: dict, resume_session_id: str | None) -> list[str]:
         raise NotImplementedError
+
+    def prompt_via_stdin(self, prompt: str) -> "str | None":
+        """The framed initial prompt when the protocol takes input on stdin (Claude
+        stream-json input), newline-terminated; None when the prompt rides argv."""
+        return None
+
+    def steer_frame(self, text: str) -> "str | None":
+        """One framed follow-up message for a live process's stdin, newline-terminated;
+        None when the protocol has no live-input channel."""
+        return None
 
     def parse_stream_line(self, line: str) -> list[dict]:
         """One NDJSON line -> normalized events (possibly several, possibly none).
@@ -150,21 +220,66 @@ class SessionAdapter(Adapter):
                     resume_session_id: str | None = None,
                     run_key: str | None = None,
                     on_event=None,
-                    cancel_event: "threading.Event | None" = None) -> SessionResult:
+                    cancel_event: "threading.Event | None" = None,
+                    live_file: "str | Path | None" = None) -> SessionResult:
         if not self.available():
             raise AdapterError(
                 f"{self.name}: the '{self.binary}' tool is not installed on this machine. "
                 "Install it yourself - Skye uses YOUR coding agent, it does not download one.")
         command = self.build_session_command(contract, resume_session_id)
+        prompt_frame = self.prompt_via_stdin(str(contract.get("brief") or contract["goal"]))
+        live_path = Path(live_file) if live_file else None
+        if live_path is not None and live_path.exists():
+            # Crash-consistency guard: a prior run's worker may STILL be alive (the worker
+            # is its own process group - it survives a server crash). Starting another
+            # process against the same step would run two workers into one session/repo.
+            # Unverifiable means alive: fail closed, never gamble on a duplicate.
+            try:
+                prior_pid = int(json.loads(live_path.read_text("utf-8")).get("pid"))
+            except (OSError, ValueError, TypeError, AttributeError):
+                prior_pid = 0
+            if prior_pid <= 0 or _pid_alive(prior_pid):
+                detail = (f"pid {prior_pid} may still be running" if prior_pid > 0 else
+                          f"the live record {live_path.name} is unreadable")
+                return SessionResult(
+                    ok=False, duplicate_live=True, command=command, returncode=-1,
+                    continuity="resumed" if resume_session_id else "fresh",
+                    output=(f"a previous worker for this step {detail} - Skye will not "
+                            "start a duplicate against the same session. Stop the old "
+                            "process (or confirm it is gone), then resume."))
+            try:
+                live_path.unlink()  # stale: that process is verifiably gone
+            except OSError:
+                pass
         proc = subprocess.Popen(
-            command, cwd=contract["repo"], stdin=subprocess.DEVNULL,
+            command, cwd=contract["repo"],
+            stdin=subprocess.PIPE if prompt_frame is not None or self.SUPPORTS_STEER
+            else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
             start_new_session=True)  # its own process group: cancel/timeout signal the tree
+        if live_path is not None:
+            try:
+                live_path.parent.mkdir(parents=True, exist_ok=True)
+                live_path.write_text(json.dumps(
+                    {"pid": proc.pid, "run_key": run_key or "", "adapter": self.name,
+                     "started": time.time()}) + "\n", "utf-8")
+            except OSError:
+                pass
         if cancel_event is None:
             cancel_event = threading.Event()
+        entry = None
         if run_key:
+            entry = {"proc": proc, "cancel": cancel_event, "adapter": self,
+                     "steers": 0, "closing": False, "lock": threading.Lock()}
             with _LIVE_LOCK:
-                _LIVE[run_key] = (proc, cancel_event)
+                _LIVE[run_key] = entry
+        if prompt_frame is not None:
+            try:
+                assert proc.stdin is not None
+                proc.stdin.write(prompt_frame)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass  # the CLI exits on its own; the read loop sees EOF
         state = {"cancelled": False, "timed_out": False}
         deadline = time.monotonic() + timeout
 
@@ -200,14 +315,43 @@ class SessionAdapter(Adapter):
                             session_id = event["session_id"]
                         if event.get("usage"):
                             usage = event["usage"]
+                        # Turn finished. A steer written during it queues a NEW turn
+                        # (documented stream-json behavior), so one steered message means
+                        # one more result to wait for; with none pending, closing stdin
+                        # ends the run. The closing flag makes a steer racing this point
+                        # report undelivered instead of vanishing into a closing pipe.
+                        finish_turn = True
+                        if entry is not None:
+                            with entry["lock"]:
+                                if entry["steers"] > 0:
+                                    entry["steers"] -= 1
+                                    finish_turn = False
+                                else:
+                                    entry["closing"] = True
+                        if finish_turn and proc.stdin is not None:
+                            try:
+                                proc.stdin.close()  # EOF: the CLI exits after this turn
+                            except OSError:
+                                pass
                     if on_event is not None:
                         on_event(event)
         finally:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
             returncode = proc.wait()
             watcher.join(timeout=self.CANCEL_GRACE + 2)
             if run_key:
                 with _LIVE_LOCK:
                     _LIVE.pop(run_key, None)
+            if live_path is not None:
+                try:
+                    if json.loads(live_path.read_text("utf-8")).get("pid") == proc.pid:
+                        live_path.unlink()
+                except (OSError, ValueError):
+                    pass
         stderr_tail = ""
         try:
             stderr_tail = (proc.stderr.read() if proc.stderr else "")[-2000:]

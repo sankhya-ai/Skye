@@ -239,9 +239,14 @@ def mission_graph(state_dir: Path, mission_id: str) -> dict:
 #: text a worker printed can carry tool output, config dumps or credentials, and a progress
 #: view is not the place that risk belongs. The full verbatim journal stays on the mission
 #: detail route for the owner's deliberate inspection.
+#: Progress vocabulary (kind/text for worker-progress, continuity for worker-session,
+#: delivery for follow-ups) is displayable; session_id deliberately is NOT - the UI learns
+#: a session EXISTS from status/graph (has_session), never its value, so no transcript
+#: path or vendor-internal identifier rides a display payload.
 _TIMELINE_FIELDS = ("ts", "step", "event", "status", "reason", "role", "proposal_id",
                     "round", "feature_id", "title", "agent", "worker_job", "goal",
-                    "from_step", "fingerprint", "authorized_via")
+                    "from_step", "fingerprint", "authorized_via",
+                    "kind", "text", "continuity", "delivery")
 
 
 def _timeline_projection(entries: list[dict]) -> list[dict]:
@@ -259,6 +264,16 @@ def _timeline_projection(entries: list[dict]) -> list[dict]:
                             for g in entry["gates"] if isinstance(g, dict)]
         safe.append(row)
     return safe
+
+
+def _display_journal_entry(entry: dict) -> dict:
+    """Session ids are recovery data, not display data: an opaque vendor id survives as a
+    support reference, but anything path-shaped (a transcript location) is masked so the
+    display never leaks filesystem metadata."""
+    session_id = entry.get("session_id")
+    if isinstance(session_id, str) and ("/" in session_id or session_id.startswith("~")):
+        entry = {**entry, "session_id": "(recorded; path-shaped value masked)"}
+    return entry
 
 
 def mission_payload(state_dir: Path, mission_id: str) -> dict:
@@ -291,7 +306,7 @@ def mission_payload(state_dir: Path, mission_id: str) -> dict:
     return {"mission": redact.redact_value(mission),
             "status": redact.redact_value(status),
             "artifacts": mission_artifacts(mission_dir),
-            "journal": [redact.redact_value(e)
+            "journal": [_display_journal_entry(redact.redact_value(e))
                         for e in _read_jsonl(mission_dir / "journal.jsonl")],
             "dynamic_steps": redact.redact_value(dynamic),
             "pending_contracts": redact.redact_value(pending),
@@ -657,6 +672,8 @@ RUNNER = None
 
 def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = None,
                      redispatch_fresh: bool = False) -> None:
+    # Every caller of this function IS the operator pressing a button, so the engine may
+    # consume a standing cancel marker (clear_cancel=True).
     """Resume a mission in-process from its snapshot; the UI polls the journal for progress.
     ``redispatch`` is the operator's explicit choice to re-run one interrupted step; it
     RESUMES the step's recorded vendor session unless ``redispatch_fresh`` abandons it."""
@@ -675,7 +692,7 @@ def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = 
             run_mission(mission, policy=Policy.load(policy_path_default()),
                         state_dir=state_dir, approvals_path=approvals_path_for(state_dir),
                         redispatch=redispatch, redispatch_fresh=redispatch_fresh,
-                        runner=RUNNER)
+                        clear_cancel=True, runner=RUNNER)
         except Exception as exc:  # surfaced via GET /api/missions/<id> -> live.error
             with _live_lock:
                 _live_missions[mission_id]["error"] = str(exc)
@@ -1111,9 +1128,13 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"redispatched": step, "resumed": True,
                                        "continuity": "fresh" if fresh else "resumed"})
                 if action == "follow-up":
-                    # Continue a SETTLED step in its recorded vendor session. The engine
-                    # consumes the queued follow-up on the next run: validation here is
-                    # fail-fast, the journal remains the record of what actually ran.
+                    # Two honest delivery modes, chosen by what is actually live:
+                    #  - the step is RUNNING and its adapter's protocol takes live input:
+                    #    steer the follow-up into the running process as a queued vendor
+                    #    message (same session, next turn - never mid-tool-call).
+                    #  - the step is SETTLED with a recorded session: queue for an
+                    #    after-turn continuation run that resumes the session.
+                    # Anything else is an explicit error - never a silent fallback.
                     step = str(body.get("step") or "")
                     text = str(body.get("text") or "").strip()
                     if not step or not text:
@@ -1126,23 +1147,44 @@ class UiHandler(BaseHTTPRequestHandler):
                          if s["id"] == step), None)
                     if step_status is None:
                         return self._json({"error": f"unknown step '{step}'"}, 404)
+                    with _live_lock:
+                        running = _live_missions.get(mission_id, {}).get("running")
+                    if running:
+                        from ..adapters import base as _adapter_base
+                        steered = _adapter_base.steer_live(f"{mission_id}:{step}", text)
+                        if steered == "steered":
+                            from ..mission import Journal as _Journal
+                            _Journal(mission_dir / "journal.jsonl").append(
+                                step, "follow-up", text=text[:500],
+                                delivery="steered-live")
+                            return self._json({"accepted": True, "step": step,
+                                               "delivery": "steered",
+                                               "continuity": "same-live-session"})
+                        if steered == "unsupported":
+                            return self._json(
+                                {"error": f"the {step_status['adapter']} exec protocol is "
+                                          "one-shot: it cannot take input mid-run. Live "
+                                          "steering needs the vendor's app-server "
+                                          "turn/steer protocol (experimental upstream), "
+                                          "which Skye does not implement. Retry after the "
+                                          "step settles - the follow-up then resumes the "
+                                          "recorded session."}, 409)
+                        return self._json(
+                            {"error": f"step '{step}' is not taking input right now (the "
+                                      "run may have just finished its turn); retry after "
+                                      "the mission settles"}, 409)
                     if not step_status["followupable"]:
                         return self._json(
                             {"error": f"step '{step}' has no settled vendor session to "
                                       "continue (state: "
                                       f"{step_status['state'] or 'pending'}); follow-ups "
                                       "need a settled step with a recorded session"}, 409)
-                    with _live_lock:
-                        running = _live_missions.get(mission_id, {}).get("running")
-                    if running:
-                        return self._json(
-                            {"error": "mission is running; follow-ups queue for settled "
-                                      "steps between runs"}, 409)
                     with (mission_dir / "followups.jsonl").open("a", encoding="utf-8") as fh:
                         fh.write(json.dumps({"step": step, "text": text,
                                              "at": time.time()}) + "\n")
                     resume_in_thread(self.state_dir, mission_id)
                     return self._json({"accepted": True, "step": step,
+                                       "delivery": "queued",
                                        "continuity": "resumed"})
                 if action == "cancel":
                     # Operator stop: signal every live run of this mission (SIGTERM ->
@@ -1153,16 +1195,20 @@ class UiHandler(BaseHTTPRequestHandler):
                     prefix = f"{mission_id}:"
                     with _adapter_base._LIVE_LOCK:
                         keys = [k for k in _adapter_base._LIVE if k.startswith(prefix)]
-                    signalled = [_adapter_base.cancel_live(k) for k in keys]
+                    outcomes = [_adapter_base.cancel_live(k) for k in keys]
                     with _live_lock:
                         running = _live_missions.get(mission_id, {}).get("running")
                     if not keys and not running:
                         return self._json({"error": "mission is not running"}, 409)
                     (mission_dir / "cancel-requested").write_text(
                         json.dumps({"at": time.time(), "by": "skye ui"}) + "\n", "utf-8")
-                    return self._json({"cancel": "signalled" if keys else "marked",
+                    # Death is reported as verified: "stopped" means the process exited;
+                    # anything else is named plainly, never smoothed into "cancelled".
+                    state = ("stopped" if keys and all(o == "stopped" for o in outcomes)
+                             else "marked" if not keys else "stop-unconfirmed")
+                    return self._json({"cancel": state,
                                        "steps": [k[len(prefix):] for k in keys],
-                                       "outcomes": signalled})
+                                       "outcomes": outcomes})
                 if action == "ack-recovery":
                     from .. import workspaces as workspaces_module
                     record = workspaces_module.acknowledge_recovery(

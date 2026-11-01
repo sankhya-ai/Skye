@@ -449,12 +449,16 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 bridge=None, state_dir: str | Path | None = None,
                 approvals_path: str | Path | None = None,
                 catalogues_dir: str = "catalogues",
-                redispatch: str | None = None, redispatch_fresh: bool = False) -> MissionOutcome:
+                redispatch: str | None = None, redispatch_fresh: bool = False,
+                clear_cancel: bool = False) -> MissionOutcome:
     """``redispatch`` names an interrupted step the OPERATOR explicitly chose to re-run
     (skye mission redispatch <file> --step <id>). Without it, an interrupted step that cannot
     reattach pauses the mission instead of blindly repeating work with unknown partial effects."""
     """Run or resume a mission. The journal decides what already happened; settled-done steps are
-    skipped with their recorded outcomes carried into later briefs."""
+    skipped with their recorded outcomes carried into later briefs. ``clear_cancel`` is the
+    operator's explicit "run again" after an operator cancel (the UI resume/redispatch
+    endpoints and the CLI pass it); any other caller finds the cancel marker still standing
+    and pauses needs-owner instead of silently overriding the operator's stop."""
     policy = policy or Policy.load()
     state_dir = Path(state_dir or default_state_dir())
     mission_dir = state_dir / "missions" / mission["id"]
@@ -481,9 +485,6 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     for entry in journal.entries():
         if entry.get("event") == "worker-session" and entry.get("session_id"):
             sessions[str(entry.get("step") or "")] = entry
-    # A cancel marker from a previous run was consumed by that run's stop; it must not
-    # cancel THIS run. Cancels for this run land after this point and are honored.
-    (mission_dir / "cancel-requested").unlink(missing_ok=True)
     if (workspace_record.get("uncommitted_lost")
             and not workspace_record.get("recovery_acknowledged")):
         # Lost-tree recovery is ambiguous: the branch carries the committed work, but the
@@ -548,6 +549,20 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     bridge = bridge if bridge is not None else events.from_env(log_path=mission_dir / "events.jsonl")
     emit = bridge.publish
     context = {"mission": mission["id"]}
+    # The cancel marker is the operator's stop order. It is consumed ONLY by an explicit
+    # owner action (clear_cancel from the resume/redispatch endpoints or the CLI) - an
+    # automatic restart (auto-pickup, a stray invocation) must not talk itself past it.
+    cancel_marker = mission_dir / "cancel-requested"
+    if cancel_marker.exists():
+        if not clear_cancel:
+            reason = ("cancelled by the operator; running again takes an explicit resume "
+                      "or redispatch (skye mission run/redispatch, or the UI buttons).")
+            emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
+                                   mission=mission["id"]))
+            return MissionOutcome(status="needs-owner", mission_id=mission["id"],
+                                  reason=reason, steps={})
+        cancel_marker.unlink()
+        journal.append("", "cancel-cleared", reason="operator explicitly resumed the mission")
     states = journal.step_states()
     outcomes: dict[str, dict[str, Any]] = {}
     worklist = list(mission["steps"]) + journal.accepted_steps()  # authored, then dynamic (journaled)
@@ -560,6 +575,14 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         kind = state.get("event", "")
         if kind == "settled":
             if state.get("status") == "done":
+                if redispatch == step_id:
+                    # The operator re-runs a SETTLED step in its recorded session - the
+                    # escape hatch a dangling follow-up names. Journaled as their decision
+                    # (a terminal event for the follow-up ledger), never implied.
+                    journal.append(step_id, "redispatch",
+                                   reason="operator explicitly re-runs the settled step")
+                    pending[step_id] = step
+                    continue
                 outcomes[step_id] = state  # the recorded outcome feeds later briefs
                 continue
             reason = (f"step '{step_id}' previously settled as {state.get('status')}: "
@@ -592,22 +615,59 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
         followup_lines = followups_path.read_text("utf-8").splitlines()
     except OSError:
         followup_lines = []
+    # Crash windows, handled line by line. The journal is the truth: a "follow-up" INTENT
+    # entry (carrying its queue line number) lands BEFORE the dispatch it authorizes, and
+    # the consumed offset advances only AFTER a terminal entry (settled / cancelled /
+    # resume-rejected / redispatch) proves how that dispatch ended. A crash before the
+    # intent replays the line harmlessly; a crash between intent and terminal leaves a
+    # DANGLING intent - the follow-up may already have taken effect inside the vendor
+    # session, and transcript continuation alone cannot prove what ran, so the engine
+    # fails closed (needs-owner, no replay) until the operator redispatches the step.
     if len(followup_lines) > consumed:
-        consumed_path.write_text(str(len(followup_lines)), "utf-8")
-        for raw in followup_lines[consumed:]:
+        journal_entries = journal.entries()
+        for line_no in range(consumed, len(followup_lines)):
+            raw = followup_lines[line_no]
+            intent_at = next((i for i, e in enumerate(journal_entries)
+                              if e.get("event") == "follow-up" and e.get("line") == line_no),
+                             None)
+            if intent_at is not None:
+                try:
+                    prior = json.loads(raw)
+                    prior_step = str(prior.get("step") or "")
+                except ValueError:
+                    prior_step = ""
+                terminal = any(e.get("step") == prior_step and e.get("event") in (
+                    "settled", "cancelled", "resume-rejected", "redispatch")
+                    for e in journal_entries[intent_at + 1:])
+                if not terminal:
+                    reason = (f"follow-up line {line_no + 1} on step '{prior_step}' was "
+                              "dispatched but has no terminal journal record (a crash between "
+                              "effect and settle). Skye will NOT replay it - the session may "
+                              "already carry its effects. Redispatch the step (resume or "
+                              "--fresh) once you have checked the work.")
+                    emit(events.make_event("mission", {}, status="needs-owner",
+                                           reason=reason, **context))
+                    return MissionOutcome(status="needs-owner", mission_id=mission["id"],
+                                          reason=reason, steps=outcomes)
+                consumed_path.write_text(str(line_no + 1), "utf-8")  # self-heal the offset
+                continue
             try:
                 follow = json.loads(raw)
             except ValueError:
-                journal.append("", "follow-up-rejected", reason="malformed follow-up entry")
+                journal.append("", "follow-up-rejected", line=line_no,
+                               reason="malformed follow-up entry")
+                consumed_path.write_text(str(line_no + 1), "utf-8")
                 continue
             target = str(follow.get("step") or "")
             text = str(follow.get("text") or "").strip()
             step = next((s for s in worklist if s["id"] == target), None)
             if step is None or target not in outcomes or not text:
-                journal.append(target, "follow-up-rejected",
+                journal.append(target, "follow-up-rejected", line=line_no,
                                reason="a follow-up needs a settled step and non-empty text")
+                consumed_path.write_text(str(line_no + 1), "utf-8")
                 continue
-            journal.append(target, "follow-up", text=text[:500])
+            journal.append(target, "follow-up", line=line_no, text=text[:500])
+            journal_entries = journal.entries()
             contract = _step_contract(mission, step, outcomes)
             contract["brief"] = ((contract.get("brief") or contract["goal"])
                                  + "\n\n## Operator follow-up - continue the SAME work\n"
@@ -633,6 +693,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             if outcome.status == "cancelled" or outcome.resume_rejected:
                 event = "cancelled" if outcome.status == "cancelled" else "resume-rejected"
                 journal.append(target, event, reason=outcome.reason, role=step["role"])
+                consumed_path.write_text(str(line_no + 1), "utf-8")
                 reason = (f"follow-up on step '{target}': {outcome.reason}")
                 emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
                                        **context))
@@ -641,6 +702,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             journal.append(target, "settled", status=outcome.status, reason=outcome.reason,
                            output=outcome.worker_output[-4000:], gates=outcome.gates,
                            worker_job=outcome.worker_job, role=step["role"])
+            consumed_path.write_text(str(line_no + 1), "utf-8")
             outcomes[target] = {"status": outcome.status, "reason": outcome.reason,
                                 "role": step["role"], "output": outcome.worker_output[-4000:],
                                 "gates": outcome.gates}
@@ -665,8 +727,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     while pending:
         if (mission_dir / "cancel-requested").exists():
             # Operator cancel between waves: no new dispatches. In-flight steps were already
-            # signalled through the live-run registry (or settle cancelled below).
-            (mission_dir / "cancel-requested").unlink(missing_ok=True)
+            # signalled through the live-run registry (or settle cancelled below). The
+            # marker stays standing: only an explicit owner resume clears it.
             reason = ("cancelled by the operator before the remaining steps were "
                       "dispatched; resume the mission to continue.")
             emit(events.make_event("mission", {}, status="cancelled", reason=reason, **context))
@@ -702,7 +764,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 prior_job = states.get(step_id, {}).get("worker_job", "")
                 if redispatch == step_id:
                     # The operator's explicit choice beats reattach, even with a prior job id
-                    # on record: they inspected and chose a FRESH run. Journaled as their
+                    # on record: they inspected and chose the re-run (resuming the recorded
+                    # vendor session, fresh only with --fresh). Journaled as their
                     # decision (with the superseded job id), never as a reattach, and no
                     # resume_jobs entry - the stale job must not be polled as if it were
                     # this attempt.
