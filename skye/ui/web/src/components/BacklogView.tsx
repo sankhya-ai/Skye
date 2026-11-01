@@ -2,7 +2,7 @@
 // is the owner's explicit go on an APPROVED item, creating a planner mission under its
 // project. Provenance is shown in product terms (which project, from work or from an error
 // signal) - raw ids stay in the API, not on the surface.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   decideFeature,
   reworkFeature,
@@ -19,6 +19,7 @@ import {
   type MissionRow,
   type Project,
 } from "../api";
+import { ScrollArea } from "./ScrollArea";
 import { humanError } from "../lib";
 import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
@@ -101,49 +102,31 @@ function threadTime(ts: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-// Chronological history, oldest first. A clipped list must say so: the hint below the
-// scroll area stays until the reader reaches the newest entry.
+// Chronological history, oldest first; the ScrollArea says while unread history exists.
 function ThreadList({ thread }: { thread: ThreadEntry[] }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [moreBelow, setMoreBelow] = useState(false);
-  const check = useCallback(() => {
-    const el = ref.current;
-    if (el) setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
-  }, []);
-  useEffect(() => {
-    check();
-  }, [thread.length, check]);
   return (
-    <div className="mt-1">
-      <div
-        ref={ref}
-        onScroll={check}
-        className="max-h-44 space-y-2 overflow-y-auto pr-1 text-xs"
-      >
-        {thread.map((entry, i) => {
-          const { chip, body } = threadLabel(entry);
-          return (
-            <div key={i} className="border-l-2 border-border/70 pl-2">
-              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
-                <span className="font-medium text-foreground/80">{entry.actor}</span>
-                {chip ? (
-                  <span className="rounded-xs border border-border px-1 py-px text-[10px] leading-tight text-muted-foreground">
-                    {chip}
-                  </span>
-                ) : null}
-                <span className="ml-auto tabular-nums">{threadTime(entry.ts)}</span>
-              </p>
-              <p className="mt-0.5 leading-relaxed text-foreground/80">{body}</p>
-            </div>
-          );
-        })}
-      </div>
-      {moreBelow ? (
-        <p className="mt-0.5 text-[11px] text-muted-foreground/60">
-          more history below - scroll
-        </p>
-      ) : null}
-    </div>
+    <ScrollArea
+      className="mt-1 max-h-44 space-y-2 overflow-y-auto pr-1 text-xs"
+      hint="more history below - scroll"
+    >
+      {thread.map((entry, i) => {
+        const { chip, body } = threadLabel(entry);
+        return (
+          <div key={i} className="border-l-2 border-border/70 pl-2">
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+              <span className="font-medium text-foreground/80">{entry.actor}</span>
+              {chip ? (
+                <span className="rounded-xs border border-border px-1 py-px text-[10px] leading-tight text-muted-foreground">
+                  {chip}
+                </span>
+              ) : null}
+              <span className="ml-auto tabular-nums">{threadTime(entry.ts)}</span>
+            </p>
+            <p className="mt-0.5 leading-relaxed text-foreground/80">{body}</p>
+          </div>
+        );
+      })}
+    </ScrollArea>
   );
 }
 

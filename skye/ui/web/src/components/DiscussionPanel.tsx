@@ -3,6 +3,7 @@
 // a failed read is "unavailable", never "empty".
 import { useEffect, useRef, useState } from "react";
 import { getDiscussion, type DiscussionEntry } from "../api";
+import { ScrollArea } from "./ScrollArea";
 import { formatRelative } from "../lib";
 
 const KIND_LABEL: Record<string, string> = {
@@ -94,7 +95,8 @@ export function DiscussionPanel({ missionId }: { missionId: string }) {
       <summary className="cursor-pointer text-sm font-medium text-foreground">
         Team discussion{ordered.length > 0 ? ` (${ordered.length})` : ""}
       </summary>
-      <div className="mt-3 max-h-64 space-y-0.5 overflow-auto">
+      <ScrollArea className="mt-3 max-h-64 space-y-0.5 overflow-y-auto" pinned
+                  hint="new entries below - scroll">
         {view.map((entry) => (
           <Entry key={entry.seq} entry={entry} />
         ))}
@@ -111,7 +113,7 @@ export function DiscussionPanel({ missionId }: { missionId: string }) {
             Updates paused - retrying in the background.
           </p>
         ) : null}
-      </div>
+      </ScrollArea>
     </details>
   );
 }
