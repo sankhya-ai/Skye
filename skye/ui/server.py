@@ -627,6 +627,54 @@ class UiHandler(BaseHTTPRequestHandler):
                 path = policy_path_default()
                 path.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
                 return self._json({"saved": True, "path": str(path.resolve())})
+            if url.path == "/api/policy/auto_pickup":
+                # The toggle's safe mutation: ONLY the auto_pickup block changes, under a
+                # lock, with strict validation, and a current file we cannot parse fails
+                # closed instead of being overwritten. Unrelated policy values are read
+                # from disk and written back untouched - no client merge, no lost updates.
+                from .. import pickup as pickup_module
+                block = body.get("auto_pickup")
+                if not isinstance(block, dict):
+                    return self._json({"error": "auto_pickup must be a JSON object"}, 400)
+                allowed = {"enabled", "include_reopened", "max_missions"}
+                unknown = set(block) - allowed
+                if unknown:
+                    return self._json(
+                        {"error": f"unknown auto_pickup keys: {sorted(unknown)}"}, 400)
+                for key in ("enabled", "include_reopened"):
+                    if key in block and not isinstance(block[key], bool):
+                        return self._json({"error": f"{key} must be a boolean"}, 400)
+                if "max_missions" in block:
+                    try:
+                        if int(block["max_missions"]) < 1:
+                            raise ValueError
+                    except (TypeError, ValueError):
+                        return self._json({"error": "max_missions must be a positive integer"},
+                                          400)
+                path = policy_path_default()
+                lock_path = path.with_suffix(path.suffix + ".lock")
+                import fcntl
+                with open(lock_path, "a+") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    try:
+                        current = json.loads(path.read_text("utf-8")) if path.exists() else {}
+                    except ValueError:
+                        return self._json(
+                            {"error": f"current policy file {path} is not valid JSON; "
+                                      "refusing to rewrite it"}, 409)
+                    if not isinstance(current, dict):
+                        return self._json(
+                            {"error": f"current policy file {path} is not a JSON object; "
+                                      "refusing to rewrite it"}, 409)
+                    current["auto_pickup"] = block
+                    try:
+                        policy = Policy(current)
+                    except Exception as error:
+                        return self._json({"error": f"resulting policy is invalid: {error}"},
+                                          400)
+                    path.write_text(json.dumps(current, indent=2) + "\n", "utf-8")
+                return self._json({"saved": True, "path": str(path.resolve()),
+                                   "auto_pickup": pickup_module.config(policy)})
             if url.path == "/api/missions":
                 mission_id = create_mission(self.state_dir, body)
                 if body.get("run"):
