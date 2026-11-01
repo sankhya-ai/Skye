@@ -327,6 +327,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     state_dir = Path(state_dir or default_state_dir())
     mission_dir = state_dir / "missions" / mission["id"]
     mission_dir.mkdir(parents=True, exist_ok=True)
+    # Workspace hook: with policy.workspaces enabled, the mission runs against its own git
+    # worktree (branch skye/<mission-id>) instead of the owner's checkout. prepare() is
+    # idempotent, so a resume reuses the same tree and branch; everything downstream
+    # (baseline, dispatch, review, journey replay, artifact diff) sees the worktree path.
+    from . import workspaces
+    workspace_record = workspaces.prepare(mission, state_dir=state_dir, policy=policy)
+    mission = workspaces.apply(mission, workspace_record)
     # Snapshot the mission source next to the journal: the UI and later resumes read the exact
     # definition this run used, not whatever the file says after later edits.
     snapshot = mission_dir / "mission.json"
@@ -789,7 +796,12 @@ def reset_mission(mission: dict[str, Any], state_dir: str | Path | None = None) 
     """Archive the journal so the mission starts clean. The old journal is kept (renamed), never
     deleted: what happened stays on the record."""
     state_dir = Path(state_dir or default_state_dir())
-    journal = state_dir / "missions" / mission["id"] / "journal.jsonl"
+    mission_dir = state_dir / "missions" / mission["id"]
+    from . import workspaces
+    record = workspaces.read_record(mission_dir)
+    if record and record.get("worktree"):
+        workspaces.release(record)  # removes the worktree only when clean; the branch stays
+    journal = mission_dir / "journal.jsonl"
     if not journal.exists():
         return ""
     archived = journal.with_name(f"journal.{int(time.time())}.jsonl")

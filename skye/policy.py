@@ -37,6 +37,8 @@ class Policy:
         # enabling it automates the intake click only - step contracts still pass the normal
         # approval gate at dispatch.
         self.auto_pickup: dict[str, Any] = data.get("auto_pickup") if isinstance(data.get("auto_pickup"), dict) else {}
+        # Per-mission workspaces (skye/workspaces.py): absent = off = shared-tree behavior.
+        self.workspaces: dict[str, Any] = data.get("workspaces") if isinstance(data.get("workspaces"), dict) else {}
 
     @classmethod
     def load(cls, path: str | Path = DEFAULT_PATH) -> "Policy":
