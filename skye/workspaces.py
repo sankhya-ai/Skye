@@ -88,6 +88,25 @@ def repo_map(mission: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def _rebuild_from_branch(repo: Path, worktree: Path, branch: str) -> None:
+    """Recreate a lost worktree from its surviving branch. A directory deleted out from under
+    git (raw rmtree, not `git worktree remove`) leaves a stale registration that makes a
+    plain `worktree add` fail with 'already registered'. Prune first: prune only drops
+    registrations whose directories are GONE (locked ones are skipped), so other missions'
+    live worktrees and workers are untouched - the bounded safe cleanup for this exact case.
+    """
+    _git(repo, "worktree", "prune")
+    if worktree.is_dir():
+        if not (worktree / ".git").exists():
+            raise WorkspaceError(
+                f"{worktree} exists but is not a git worktree; not deleting someone else's "
+                "directory to make room - move it aside or remove it deliberately")
+        _git(repo, "worktree", "remove", "--force", str(worktree))
+    result = _git(repo, "worktree", "add", str(worktree), branch)
+    if result.returncode != 0:
+        raise WorkspaceError(f"git worktree add failed: {result.stderr.strip()}")
+
+
 def prepare(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> dict[str, Any]:
     """Idempotently prepare the mission's workspace. Returns the record; record["worktree"]
     is the path steps should run against, or '' when the mission stays on the shared tree.
@@ -130,7 +149,7 @@ def prepare(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> dict[st
 
     branch = f"skye/{mission['id']}"
     worktree = Path(state_dir) / "worktrees" / mission["id"]
-    if worktree.is_dir():
+    if worktree.is_dir() and (worktree / ".git").exists():
         # reuse: same branch, same repo - a resume keeps its earlier work
         existing = existing or {}
         existing.update({"worktree": str(worktree), "repo": str(repo), "branch": branch,
@@ -147,15 +166,15 @@ def prepare(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> dict[st
     base_rev = _git(repo, "rev-parse", "HEAD").stdout.strip()
     worktree.parent.mkdir(parents=True, exist_ok=True)
     if branch_exists:
-        # worktree lost (e.g. state dir moved) but the branch holds worker commits: rebuild
-        # from the branch, not from HEAD. This recovers COMMITTED work only - anything the
-        # worker left uncommitted in the lost tree is gone, and the record must say so
-        # instead of reading as a full recovery.
-        result = _git(repo, "worktree", "add", str(worktree), branch)
+        # worktree lost (deleted directory, moved state dir) but the branch holds worker
+        # commits: rebuild from the branch, not from HEAD. This recovers COMMITTED work
+        # only - anything the worker left uncommitted in the lost tree is gone, and the
+        # record must say so instead of reading as a full recovery.
+        _rebuild_from_branch(repo, worktree, branch)
     else:
         result = _git(repo, "worktree", "add", "-b", branch, str(worktree), "HEAD")
-    if result.returncode != 0:
-        raise WorkspaceError(f"git worktree add failed: {result.stderr.strip()}")
+        if result.returncode != 0:
+            raise WorkspaceError(f"git worktree add failed: {result.stderr.strip()}")
     record = {"worktree": str(worktree), "repo": str(repo), "branch": branch,
               "base_rev": base_rev, "created_at": time.time(), "reused": branch_exists,
               "dirty_at_start": [line[3:] for line in dirty][:100]}
@@ -259,14 +278,14 @@ def _prepare_multi(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> 
         for name, rec in records.items():
             if not rec.get("worktree"):
                 continue
-            if Path(rec["worktree"]).is_dir():
+            if Path(rec["worktree"]).is_dir() and (Path(rec["worktree"]) / ".git").exists():
                 continue
             repo = Path(rec["repo"])
             if _git(repo, "rev-parse", "--verify", rec["branch"]).returncode == 0:
-                result = _git(repo, "worktree", "add", rec["worktree"], rec["branch"])
-                if result.returncode != 0:
-                    raise WorkspaceError(f"git worktree add failed for {name}: "
-                                         f"{result.stderr.strip()}")
+                try:
+                    _rebuild_from_branch(repo, Path(rec["worktree"]), rec["branch"])
+                except WorkspaceError as error:
+                    raise WorkspaceError(f"repo {name}: {error}") from error
                 rec["recovered_from_branch"] = True
                 rec["uncommitted_lost"] = True
                 rec["recovery_note"] = ("the previous worktree was lost; committed work "

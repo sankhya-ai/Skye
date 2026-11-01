@@ -302,6 +302,43 @@ proposals wait for the owner's approval before any work starts.
 """
 
 
+MISSION_SETUP: dict = {
+    # The composer contract the UI builds against - no guessed paths, no implied fields.
+    "fields": {
+        "goal": {"type": "string", "required": True},
+        "id": {"type": "string", "required": False, "note": "generated when absent"},
+        "project": {"type": "string", "required": False,
+                    "note": "existing project id; supplies the default repo when repo is absent"},
+        "repo": {"type": "string", "required": False,
+                 "note": "default repo path; steps without a repo use it. Absent repo + "
+                         "present repos means every step must name a repo."},
+        "repos": {"type": "object", "required": False,
+                  "note": "name -> absolute path for multi-repo missions. Names are plain "
+                          "labels (letters, digits, . _ -). Steps reference a repo by name; "
+                          "a step repo containing a slash is a literal path (explicit "
+                          "override). Duplicate realpaths, symlink aliases, and subdirectories "
+                          "of one git repository are rejected - declare a monorepo once and "
+                          "scope steps with claims."},
+        "steps": {"type": "list", "required": "unless plan is true",
+                  "step_fields": {"id": "string, unique", "role": "string",
+                                  "adapter": "string", "goal": "string",
+                                  "repo": "repo name or literal path (optional)",
+                                  "needs": "list of earlier step ids (optional)",
+                                  "claims": "repo-relative write paths (optional)",
+                                  "gates": "list (optional)"}},
+        "plan": {"type": "boolean", "required": False,
+                 "note": "start with a single planner step that proposes the workflow"},
+        "run": {"type": "boolean", "required": False,
+                "note": "start the mission immediately after creation"},
+    },
+    "workspaces": {
+        "note": "with policy.workspaces enabled each repo runs in its own worktree on "
+                "branch skye/<mission-id>; owner trees are never written directly",
+        "payload": "GET /api/missions/<id> .workspace reports mode/reason/branch per repo",
+    },
+}
+
+
 def create_mission(state_dir: Path, spec: dict) -> str:
     """Validate a UI-authored mission exactly like a mission file, then snapshot it so
     resume/run read the recorded definition. With {"plan": true} the mission starts as a
@@ -323,9 +360,18 @@ def create_mission(state_dir: Path, spec: dict) -> str:
         if project is None:
             raise MissionError(f"unknown project '{project_id}'")
         repo = repo or project["repo"]
+    repos = spec.get("repos")
+    if repos is not None and not isinstance(repos, dict):
+        raise MissionError("repos must be an object of name -> absolute path")
     mission_id = str(spec.get("id") or "").strip() or f"mission-{secrets.token_hex(4)}"
-    mission = {"id": mission_id, "goal": goal, "repo": repo or os.getcwd(),
-               "steps": steps}
+    # With a repos map and no default repo, every step must name one of the declared repos;
+    # load_mission enforces that and rejects bad names/duplicates/aliasing - the same
+    # validation a mission file gets. Without repos, the default falls back to the cwd as
+    # before.
+    default_repo = repo or ("" if repos else os.getcwd())
+    mission = {"id": mission_id, "goal": goal, "repo": default_repo, "steps": steps}
+    if repos:
+        mission["repos"] = {str(n): str(p) for n, p in repos.items()}
     if project_id:
         mission["project"] = project_id
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
@@ -364,8 +410,12 @@ def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = 
     def _run() -> None:
         try:
             mission = load_mission(mission_dir / "mission.json")
-            run_mission(mission, state_dir=state_dir, approvals_path=approvals_path_for(state_dir),
-                          redispatch=redispatch, runner=RUNNER)
+            # The server-managed policy file governs server-started runs too: without this the
+            # engine fell back to ./skye.policy.json in whatever cwd the server happened to
+            # have, silently ignoring the policy the Settings screen edits.
+            run_mission(mission, policy=Policy.load(policy_path_default()),
+                        state_dir=state_dir, approvals_path=approvals_path_for(state_dir),
+                        redispatch=redispatch, runner=RUNNER)
         except Exception as exc:  # surfaced via GET /api/missions/<id> -> live.error
             with _live_lock:
                 _live_missions[mission_id]["error"] = str(exc)
@@ -464,6 +514,8 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"projects": projects.list_projects()})
                 if url.path == "/api/roles":
                     return self._json(roles_payload(self.state_dir))
+                if url.path == "/api/mission-setup":
+                    return self._json(MISSION_SETUP)
                 if url.path == "/api/policy":
                     path = policy_path_default()
                     raw = json.loads(path.read_text("utf-8")) if path.exists() else {}
