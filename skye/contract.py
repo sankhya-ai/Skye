@@ -35,8 +35,10 @@ def validate(contract: dict[str, Any]) -> dict[str, Any]:
         raise ContractError("repo is required: the path the worker operates on")
     out["repo"] = repo
     role = str(out.get("role") or "developer").strip()
-    if role not in ROLES:
-        raise ContractError(f"unknown role '{role}': one of {', '.join(ROLES)}")
+    from .roles import known as known_roles  # late import: roles.py reads this module's ROLES
+    known_roles_ = known_roles()
+    if role not in known_roles_:
+        raise ContractError(f"unknown role '{role}': one of {', '.join(known_roles_)}")
     out["role"] = role
     adapter = str(out.get("adapter") or "").strip()
     if adapter not in ADAPTERS:

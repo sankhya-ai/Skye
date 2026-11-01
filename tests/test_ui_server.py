@@ -208,3 +208,35 @@ def test_overview_counts_settled_steps_and_marks_approved(ui_server, tmp_path, m
     assert row["needs_owner"] is False and row["approved"] is True
     _, detail = _req(url, "/api/missions/m2")
     assert detail["approved"] is True and detail["pending_contracts"] == []
+
+
+def test_roles_api_lists_and_creates_dynamic_roles(ui_server, tmp_path, monkeypatch):
+    """The Agents surface is backed by the real registry: GET shows builtins with their tool
+    catalogues; POST creates an owner-defined specialist that then validates in contracts."""
+    url, state_dir = ui_server
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "skye.roles.json"))
+
+    status, payload = _req(url, "/api/roles")
+    assert status == 200
+    by_name = {r["name"]: r for r in payload["roles"]}
+    assert by_name["developer"]["catalogue"]["writable"] is True
+    assert by_name["explorer"]["source"] == "builtin"
+
+    status, payload = _req(url, "/api/roles", method="POST", body={
+        "role": {"name": "security-auditor", "description": "audits for vulnerabilities",
+                 "catalogue": {"tools": ["Read", "Grep"], "writable": False}}})
+    assert status == 200, payload
+    assert payload["saved"] is True
+
+    status, payload = _req(url, "/api/roles")
+    created = {r["name"]: r for r in payload["roles"]}["security-auditor"]
+    assert created["source"] == "registry"
+    assert created["catalogue"] == {"tools": ["Read", "Grep"], "writable": False}
+
+    from skye.contract import validate
+    assert validate({"goal": "audit", "repo": "/tmp/x", "role": "security-auditor",
+                     "adapter": "root"})["role"] == "security-auditor"
+
+    status, payload = _req(url, "/api/roles", method="POST",
+                           body={"role": {"name": "NO SPACES"}})
+    assert status == 400 and "role name" in payload["error"]

@@ -25,9 +25,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from skye import __version__
-from skye import approvals
+from skye import approvals, gateway, roles
+from skye.contract import ADAPTERS, ROLES
 from skye.mission import (Journal, MissionError, default_state_dir, load_mission,
                           mission_status, reset_mission, run_mission)
+from skye.policy import Policy
 
 DIST = Path(__file__).resolve().parent / "dist"
 
@@ -109,6 +111,62 @@ def missions_overview(state_dir: Path) -> list[dict]:
                          "live": _live_missions.get(mission_dir.name, {}).get("running", False)})
     rows.sort(key=lambda r: r["last_activity"] or "", reverse=True)
     return rows
+
+
+def roles_payload(state_dir: Path) -> dict:
+    """Skye's real dynamic roles: builtins plus the owner's registry specialists, each with its
+    tool catalogue and observed usage from mission journals. No decorative personas - every
+    role listed here can actually be dispatched, and a role added here really validates and
+    runs (skye/roles.py)."""
+    described = roles.describe()
+    usage: dict[str, dict] = {row["name"]: {"steps": 0, "done": 0, "failed": 0}
+                              for row in described}
+    missions_root = state_dir / "missions"
+    if missions_root.exists():
+        for journal_path in missions_root.glob("*/journal.jsonl"):
+            for entry in _read_jsonl(journal_path):
+                role = entry.get("role")
+                if role in usage and entry.get("event") == "settled":
+                    usage[role]["steps"] += 1
+                    if entry.get("status") == "done":
+                        usage[role]["done"] += 1
+                    else:
+                        usage[role]["failed"] += 1
+    rows = []
+    for row in described:
+        catalogue = roles.catalogue_for(row["name"]) if row["source"] != "builtin" else None
+        rows.append({**row, **usage[row["name"]],
+                     "catalogue": catalogue or {k: gateway.BUILTIN[row["name"]][k]
+                                                for k in ("tools", "writable")}})
+    return {"roles": rows, "adapters": list(ADAPTERS)}
+
+
+def policy_path_default() -> Path:
+    return Path(os.environ.get("SKYE_POLICY", "").strip() or "skye.policy.json")
+
+
+def create_mission(state_dir: Path, spec: dict) -> str:
+    """Validate a UI-authored mission exactly like a mission file, then snapshot it so
+    resume/run read the recorded definition. Returns the mission id."""
+    import tempfile
+    mission_id = str(spec.get("id") or "").strip() or f"mission-{secrets.token_hex(4)}"
+    mission = {"id": mission_id, "goal": str(spec.get("goal") or "").strip(),
+               "repo": str(spec.get("repo") or "").strip() or os.getcwd(),
+               "steps": spec.get("steps") or []}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(mission, handle)
+        temp_path = handle.name
+    try:
+        validated = load_mission(temp_path)  # the same validation `skye mission run` applies
+    finally:
+        os.unlink(temp_path)
+    mission_dir = state_dir / "missions" / mission_id
+    if mission_dir.exists():
+        raise MissionError(f"mission {mission_id} already exists")
+    mission_dir.mkdir(parents=True)
+    (mission_dir / "mission.json").write_text(
+        json.dumps(validated, indent=2, sort_keys=True) + "\n", "utf-8")
+    return mission_id
 
 
 _live_missions: dict[str, dict] = {}
@@ -223,6 +281,14 @@ class UiHandler(BaseHTTPRequestHandler):
                                        "live": {k: v for k, v in _live_missions.items()}})
                 if url.path == "/api/approvals":
                     return self._json({"approvals": approvals.pending(self.approvals_path)})
+                if url.path == "/api/roles":
+                    return self._json(roles_payload(self.state_dir))
+                if url.path == "/api/policy":
+                    path = policy_path_default()
+                    raw = json.loads(path.read_text("utf-8")) if path.exists() else {}
+                    policy = Policy.load(path)
+                    return self._json({"raw": raw, "path": str(path.resolve()),
+                                       "max_concurrent": policy.max_concurrent})
                 if url.path.startswith("/api/missions/"):
                     mission_id = url.path.rsplit("/", 1)[-1]
                     payload = mission_payload(self.state_dir, mission_id)
@@ -252,6 +318,28 @@ class UiHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._json({"error": "invalid JSON body"}, 400)
         try:
+            if url.path == "/api/roles":
+                record = body.get("role")
+                if not isinstance(record, dict):
+                    return self._json({"error": "role must be a JSON object"}, 400)
+                try:
+                    saved = roles.add(record)  # validated; a bad role fails before any worker sees it
+                except roles.RoleError as error:
+                    return self._json({"error": str(error)}, 400)
+                return self._json({"saved": True, "role": saved})
+            if url.path == "/api/policy":
+                data = body.get("policy")
+                if not isinstance(data, dict):
+                    return self._json({"error": "policy must be a JSON object"}, 400)
+                Policy(data)  # validate before touching disk
+                path = policy_path_default()
+                path.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
+                return self._json({"saved": True, "path": str(path.resolve())})
+            if url.path == "/api/missions":
+                mission_id = create_mission(self.state_dir, body)
+                if body.get("run"):
+                    resume_in_thread(self.state_dir, mission_id)
+                return self._json({"id": mission_id, "running": bool(body.get("run"))})
             if url.path == "/api/approve":
                 mission_id, step = body.get("mission"), body.get("step")
                 if not mission_id or not step:

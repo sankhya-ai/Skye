@@ -144,3 +144,63 @@ def test_the_review_gate_requires_a_real_verdict_from_a_real_reviewer_job(root_s
     blocked = run_with_verdict('Not good enough. {"verdict": "block", "reasons": ["no docstring"]}')
     assert blocked.status == "gate-failed"
     assert "blocked" in blocked.reason and "no docstring" in blocked.reason
+
+
+@requires_runtime
+def test_parallel_wave_of_real_root_jobs_then_an_owner_gated_step(root_server, tmp_path):
+    """Concurrent fan-out, for real: two Root jobs dispatched in the SAME wave (both dispatched
+    before either settles, two live jobs on the server), then a step the policy did NOT
+    pre-approve pauses for the owner while its siblings' results stand. After the owner approves
+    the exact pending contract, resume runs only that step. Proves: real parallel overlap and an
+    approval ACROSS concurrent jobs - not only unit-test barriers."""
+    from skye import approvals
+    from skye.events import FileBridge
+    from skye.mission import Journal, load_mission, mission_status, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    mission_file = tmp_path / "mission.json"
+    mission_file.write_text(json.dumps({
+        "id": "fanout", "goal": "build api+ui in parallel, then verify with the owner's ok",
+        "repo": str(repo),
+        "steps": [
+            {"id": "api", "role": "developer", "adapter": "root", "goal": "write api piece",
+             "gates": [], "budget": {"max_steps": 8}},
+            {"id": "ui", "role": "developer", "adapter": "root", "goal": "write ui piece",
+             "gates": [], "budget": {"max_steps": 8}},
+            {"id": "deploy", "role": "tester", "adapter": "root", "goal": "verify the build",
+             "needs": ["api", "ui"], "gates": [], "budget": {"max_steps": 8}}]}))
+    mission = load_mission(mission_file)
+    # developers may run unattended; testers may not. Two concurrent slots.
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "developer"}],
+                     "max_concurrent": 2})
+    state = tmp_path / "st"
+    store = tmp_path / "approvals.json"
+    outcome = run_mission(mission, policy, bridge=FileBridge(tmp_path / "events.jsonl"),
+                          state_dir=state, approvals_path=store)
+    assert outcome.status == "needs-owner", outcome.reason
+    assert "deploy" in outcome.reason
+
+    journal = Journal(state / "missions" / "fanout" / "journal.jsonl")
+    events = [(e["step"], e["event"]) for e in journal.entries()]
+    api_disp = events.index(("api", "dispatched"))
+    ui_disp = events.index(("ui", "dispatched"))
+    first_settle = min(i for i, (s, e) in enumerate(events)
+                       if e == "settled" and s in ("api", "ui"))
+    assert max(api_disp, ui_disp) < first_settle  # real fan-out, not a chain
+    # Two REAL Root jobs ran the wave; deploy never started without the owner.
+    assert len(list((home / "jobs").glob("*.json"))) == 2
+
+    # The owner approves EXACTLY the contract Skye wrote out for review.
+    pending_path = state / "missions" / "fanout" / "pending-deploy.json"
+    approvals.approve(json.loads(pending_path.read_text()), store, note="ship it")
+    outcome = run_mission(mission, policy, bridge=FileBridge(tmp_path / "events.jsonl"),
+                          state_dir=state, approvals_path=store)
+    assert outcome.status == "done", outcome.reason
+    # Resume dispatched only the deploy step: three jobs total, and api/ui were never re-run.
+    assert len(list((home / "jobs").glob("*.json"))) == 3
+    states = Journal(state / "missions" / "fanout" / "journal.jsonl").step_states()
+    assert [states[s]["status"] for s in ("api", "ui", "deploy")] == ["done"] * 3
+    assert mission_status(mission, state)["status"] == "done"

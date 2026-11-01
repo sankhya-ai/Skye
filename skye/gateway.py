@@ -29,6 +29,10 @@ def resolve(role: str, catalogues_dir: str | Path = "catalogues") -> dict[str, A
     if path.exists():
         data = json.loads(path.read_text("utf-8"))
         return {"tools": list(data.get("tools") or []), "writable": bool(data.get("writable")), "source": str(path)}
+    from .roles import catalogue_for
+    registry = catalogue_for(role)
+    if registry is not None:
+        return {**registry, "source": "roles-registry"}
     if role in BUILTIN:
         return {**BUILTIN[role], "source": "builtin"}
     raise KeyError(f"no tool catalogue for role '{role}' (neither {path} nor a builtin)")
