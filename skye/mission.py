@@ -235,11 +235,11 @@ class MissionOutcome:
     pending_contract: str = ""  # written for `skye approve` when status is needs-owner
 
 
-def extract_proposals(output: str) -> list[dict[str, Any]]:
-    """A worker's proposed follow-up steps: the last JSON object in its output carrying a
-    "propose_steps" list. Handles the Root adapter's JSON envelope (the model's reply is a string
-    field inside the result JSON) as well as raw stdout. Proposals are DATA - each is validated
-    like an authored contract step before it may join the workflow; nothing in them executes."""
+def _extract_structured(output: str, key: str) -> list[dict[str, Any]]:
+    """The last JSON object in a worker's output carrying a list under `key`, as a list of dict
+    entries. Handles the Root adapter's JSON envelope (the model's reply is a string field
+    inside the result JSON) as well as raw stdout. Entries are DATA - nothing in them executes;
+    every consumer validates before acting."""
     texts = [output or ""]
     try:
         data = json.loads(output or "")
@@ -257,11 +257,24 @@ def extract_proposals(output: str) -> list[dict[str, Any]]:
                 parsed, _end = decoder.raw_decode(text, index)
             except ValueError:
                 continue
-            if isinstance(parsed, dict) and isinstance(parsed.get("propose_steps"), list):
+            if isinstance(parsed, dict) and isinstance(parsed.get(key), list):
                 found = parsed  # the last such block wins
         if found is not None:
-            return [item for item in found["propose_steps"] if isinstance(item, dict)]
+            return [item for item in found[key] if isinstance(item, dict)]
     return []
+
+
+def extract_proposals(output: str) -> list[dict[str, Any]]:
+    """A worker's proposed follow-up steps ("propose_steps"). Each is validated like an
+    authored contract step before it may join the workflow."""
+    return _extract_structured(output, "propose_steps")
+
+
+def extract_deferred(output: str) -> list[dict[str, Any]]:
+    """Work the planner deliberately left UNROUTED ("deferred": [{"goal", "reason"}]). Not a
+    silent omission: each entry goes to the owner's backlog queue and the mission pauses
+    needs-owner instead of reporting done with work missing."""
+    return _extract_structured(output, "deferred")
 
 
 def extract_feature_proposals(output: str) -> list[dict[str, Any]]:
@@ -311,6 +324,15 @@ def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[
         # declared repository scope.
         return (f"proposed step '{step_id}' names a literal repo path; proposals may only "
                 "target the mission's declared repos (by name) or the default")
+    if mission.get("repos") or mission.get("repos_resolved"):
+        reason_text = str(step.get("repo_reason") or "").strip()
+        if not reason_text:
+            return (f"proposed step '{step_id}' needs a repo_reason: in a multi-repo mission "
+                    "routing is the planner's call, and the one-line rationale is the owner's "
+                    "audit trail for it")
+        if reason_text.lower() == str(step.get("repo") or "").strip().lower():
+            return (f"proposed step '{step_id}': repo_reason must say why the work belongs "
+                    "there, not restate the repo name")
     try:
         validate({**step, "repo": _resolve_repo(mission, repo_field)})
     except (ContractError, MissionError) as error:
@@ -807,6 +829,28 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 emit(events.make_event("mission-step", spec, status="step-accepted", **context))
                 worklist.append(spec)
                 pending[spec["id"]] = spec
+            # Deliberately unrouted work ("deferred"): journaled and queued for the owner's
+            # decision, never silently dropped - the mission pauses needs-owner below instead
+            # of reporting done with work missing.
+            raw_deferred = extract_deferred(outcome.worker_output)
+            valid_deferred = [d for d in raw_deferred
+                              if str(d.get("goal") or "").strip()
+                              and str(d.get("reason") or "").strip()]
+            if len(raw_deferred) != len(valid_deferred):
+                journal.append(step_id, "deferred-rejected",
+                               reason=f"{len(raw_deferred) - len(valid_deferred)} deferred "
+                                      "entr(ies) missing a goal or reason")
+            for item in valid_deferred:
+                goal_text = str(item["goal"]).strip()
+                reason_text = str(item["reason"]).strip()
+                features = backlog.propose(
+                    [{"title": goal_text[:120],
+                      "brief": f"Deferred by the planner during mission {mission['id']} "
+                               f"(step '{step_id}'): {reason_text}"}],
+                    project=mission.get("project", ""), mission=mission["id"])
+                journal.append("", "work-deferred", goal=goal_text[:200],
+                               reason=reason_text[:400], from_step=step_id,
+                               feature_id=features[0]["id"] if features else "")
         if wave_needs_owner is not None:
             step_id, outcome = wave_needs_owner
             pending_path = mission_dir / f"pending-{step_id}.json"
@@ -821,6 +865,15 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    reason=f"step '{step_id}': {outcome.reason}", **context))
             return MissionOutcome(status=outcome.status, mission_id=mission["id"],
                                   reason=f"step '{step_id}': {outcome.reason}", steps=outcomes)
+    deferred_open = _unresolved_deferred(journal)
+    if deferred_open:
+        goals = "; ".join(str(d.get("goal", ""))[:60] for d in deferred_open[:5])
+        reason = (f"{len(deferred_open)} piece(s) of work were deliberately left unrouted "
+                  f"({goals}). They wait in the owner backlog - approve or reject them there; "
+                  "this mission does not report done with work missing.")
+        emit(events.make_event("mission", {}, status="needs-owner", reason=reason, **context))
+        return MissionOutcome(status="needs-owner", mission_id=mission["id"], reason=reason,
+                              steps=outcomes)
     emit(events.make_event("mission", {}, status="done", **context))
     from . import backlog
     # Delivery needs journey evidence: scan the journaled gates for a passed user-journey
@@ -861,6 +914,19 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 
 
+def _unresolved_deferred(journal: "Journal") -> list[dict[str, Any]]:
+    """Deferred work still waiting on the owner: work-deferred journal records whose linked
+    backlog feature is still pending (or which never got one). An owner decision on the
+    feature - either way - resolves the blocker; the journal record stays as history."""
+    deferred = [e for e in journal.entries() if e.get("event") == "work-deferred"]
+    if not deferred:
+        return []
+    from . import backlog
+    open_features = {f.get("id") for f in backlog.list_features()
+                     if f.get("status") in ("pending", "reopened")}
+    return [e for e in deferred if not e.get("feature_id") or e["feature_id"] in open_features]
+
+
 def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None) -> dict[str, Any]:
     """Read-only: per-step last state from the journal plus the overall mission state."""
     state_dir = Path(state_dir or default_state_dir())
@@ -894,7 +960,17 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
             overall = "done"  # everything terminal, nothing failed
         else:
             overall = "running"
-    return {"mission": mission["id"], "status": overall, "steps": steps}
+    deferred_open = _unresolved_deferred(journal)
+    if deferred_open and overall in ("done", "running"):
+        # All steps may be settled, but deliberately unrouted work is still the owner's call:
+        # that is a pause, not a completion.
+        overall = "needs-owner"
+    result = {"mission": mission["id"], "status": overall, "steps": steps}
+    if deferred_open:
+        result["deferred"] = [{"goal": str(e.get("goal", "")), "reason": str(e.get("reason", "")),
+                               "feature_id": e.get("feature_id", "")}
+                              for e in deferred_open]
+    return result
 
 
 def reset_mission(mission: dict[str, Any], state_dir: str | Path | None = None) -> str:

@@ -99,7 +99,7 @@ def test_worker_proposal_cannot_escape_declared_repos(tmp_path):
          "gates": []},
         {"id": "ui2", "role": "developer", "adapter": "claude-code",
          "goal": "follow-up in the frontend", "repo": "frontend", "needs": ["pm"],
-         "gates": []}]})
+         "repo_reason": "the follow-up is frontend work", "gates": []}]})
     outputs = iter([proposals, "done"])
     ran = []
     def runner(spec):

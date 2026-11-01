@@ -65,32 +65,56 @@ def repo_digests(repos: dict[str, str], *, max_entries: int = 40,
 
 
 def format_for_brief(digests: dict[str, dict], *, max_chars: int = 3000) -> str:
-    """The repositories section for the planner's brief: compact lines, total size capped and
-    the cap stated when it bites. This is the planner's ONLY per-repo context - it must be
-    honest about what it leaves out."""
+    """The repositories section for the planner's brief. Every declared repo gets an equal
+    share of the budget, so a fat early repo can never starve a later one out of the brief:
+    each line is trimmed to its own share with the trim marked, and the rare whole-section
+    overflow says exactly what happened. This is the planner's ONLY per-repo context - it
+    must be honest about what it leaves out."""
+    names = list(digests)
+    share = max(160, max_chars // max(1, len(names)))
     lines = []
-    for name, digest in digests.items():
+    for name in names:
+        digest = digests[name]
         if not digest.get("exists"):
-            lines.append(f"- {name}: {digest['path']} - {digest.get('error', 'unavailable')}")
-            continue
-        parts = [f"- {name}: {digest['path']}"]
-        if digest.get("package_name"):
-            parts.append(f"package '{digest['package_name']}'")
-        if digest.get("manifests"):
-            parts.append("manifests: " + ", ".join(digest["manifests"]))
-        top = digest.get("top") or []
-        listing = ", ".join(top[:12])
-        if len(top) > 12 or digest.get("overflow"):
-            listing += f", ... ({digest.get('overflow', 0) + max(0, len(top) - 12)} more)"
-        if listing:
-            parts.append("top level: " + listing)
-        if digest.get("readme"):
-            first_lines = " / ".join(
-                ln.strip() for ln in digest["readme"].splitlines()[:3] if ln.strip())[:300]
-            if first_lines:
-                parts.append("readme: " + first_lines)
-        lines.append("; ".join(parts))
+            line = f"- {name}: {digest['path']} - {digest.get('error', 'unavailable')}"
+        else:
+            parts = [f"- {name}: {digest['path']}"]
+            if digest.get("package_name"):
+                parts.append(f"package '{digest['package_name']}'")
+            if digest.get("manifests"):
+                parts.append("manifests: " + ", ".join(digest["manifests"]))
+            top = digest.get("top") or []
+            listing = ", ".join(top[:12])
+            if len(top) > 12 or digest.get("overflow"):
+                listing += f", ... ({digest.get('overflow', 0) + max(0, len(top) - 12)} more)"
+            if listing:
+                parts.append("top level: " + listing)
+            if digest.get("readme"):
+                first_lines = " / ".join(
+                    ln.strip() for ln in digest["readme"].splitlines()[:3] if ln.strip())[:300]
+                if first_lines:
+                    parts.append("readme: " + first_lines)
+            line = "; ".join(parts)
+        if len(line) > share:
+            line = line[:share - 26] + f" ... (+{len(line) - share + 26} chars trimmed)"
+        lines.append(line)
     text = "\n".join(lines)
     if len(text) > max_chars:
-        text = text[:max_chars] + f"\n(trimmed to {max_chars} chars - digests, not full trees)"
+        # Second pass, name-level: every repo stays visible, detail goes.
+        lines = [f"- {name}: {digests[name]['path']} "
+                 f"({digests[name].get('error') or 'details trimmed to fit the budget'})"
+                 for name in names]
+        text = "\n".join(lines)
+    if len(text) > max_chars:
+        # Last resort: even names don't fit. Dropped repos are NAMED, never vanished.
+        kept, dropped, used = [], [], 0
+        for line in lines:
+            if used + len(line) + 1 <= max(0, max_chars - 120):
+                kept.append(line)
+                used += len(line) + 1
+            else:
+                dropped.append(line.split(":", 1)[0].lstrip("- "))
+        text = ("\n".join(kept)
+                + f"\n(budget {max_chars} chars; detail cut to fit; repos left out of this "
+                  f"briefing and needing the owner's own words: {', '.join(dropped)})")
     return text

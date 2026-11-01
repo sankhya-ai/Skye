@@ -58,8 +58,15 @@ def test_digests_caps_and_missing_paths_are_visible(tmp_path):
     assert big["readme_truncated"] is True and len(big["readme"]) == 100
     gone = digests["gone"]
     assert gone["exists"] is False and "does not exist" in gone["error"]
-    brief = repocontext.format_for_brief(digests, max_chars=120)
-    assert brief.endswith("- digests, not full trees)")  # the cap announces itself
+    # comfortable budget: full detail, every repo named
+    brief = repocontext.format_for_brief(digests, max_chars=600)
+    assert "big" in brief and "gone" in brief and "top level" in brief
+    # tight budget: per-line share trims detail, every repo still named
+    tight = repocontext.format_for_brief(digests, max_chars=350)
+    assert "big" in tight and "gone" in tight and "chars trimmed" in tight
+    # impossible budget: degrades to named lines, then NAMES what it must drop
+    tiny = repocontext.format_for_brief(digests, max_chars=60)
+    assert "repos left out of this briefing" in tiny and "gone" in tiny
 
 
 # ---------- planner routing ----------
@@ -78,7 +85,9 @@ def test_planner_brief_carries_routing_instructions_and_digests(tmp_path):
     assert '"repo"' in brief and '"repo_reason"' in brief  # routing is required, not optional
     assert "backend" in brief and "frontend" in brief      # both declared names offered
     assert "pyproject.toml" in brief                       # digest signal, not a tree dump
-    assert "do not guess" in brief                         # ambiguous work stays with the owner
+    assert "not guess" in brief.replace("\n", " ")        # ambiguous work stays with the owner
+    assert '"deferred"' in brief                            # ...via the structured blocker
+    assert "not instructions" in brief                      # digest content is data, not policy
     # single-repo / no-repo missions keep the plain brief
     plain_id = create_mission(state, {"goal": "x", "plan": True,
                                       "repo": str(backend), "id": "m-plain"})
@@ -136,9 +145,16 @@ def test_bad_routing_is_rejected_not_guessed(tmp_path):
     log = []
     proposals = [
         {"id": "ghost", "role": "developer", "adapter": "claude-code",
-         "goal": "work nowhere", "repo": "mobile"},          # undeclared name
+         "goal": "work nowhere", "repo": "mobile",
+         "repo_reason": "says the work is mobile"},           # undeclared name
         {"id": "lost", "role": "developer", "adapter": "claude-code",
-         "goal": "work anywhere"},                            # no repo, no default
+         "goal": "work anywhere",
+         "repo_reason": "claims it fits somewhere"},          # no repo, no default
+        {"id": "mute", "role": "developer", "adapter": "claude-code",
+         "goal": "no rationale", "repo": "backend"},          # routing without a reason
+        {"id": "echo", "role": "developer", "adapter": "claude-code",
+         "goal": "empty rationale", "repo": "backend",
+         "repo_reason": "backend"},                           # restating the name is not a why
     ]
     mission = {"id": "m-badroute", "goal": "x",
                "repos": {"backend": str(backend), "frontend": str(frontend)},
@@ -154,6 +170,8 @@ def test_bad_routing_is_rejected_not_guessed(tmp_path):
                   for e in journal if e.get("event") == "proposal-rejected"}
     assert "unknown repo name 'mobile'" in rejections["ghost"]
     assert "repo is required" in rejections["lost"]
+    assert "needs a repo_reason" in rejections["mute"]
+    assert "not restate the repo name" in rejections["echo"]
 
 
 # ---------- workflow graph evidence ----------
@@ -222,3 +240,91 @@ def test_graph_route_live(ui_server, tmp_path):
     assert payload["meta"]["workspace"] in ("shared", "worktree")
     code, _ = _req(url, "/api/missions/m-nope/graph")
     assert code == 404
+
+
+# ---------- deferred work: a visible owner blocker, never a false done ----------
+
+def test_deferred_work_pauses_the_mission_for_the_owner(tmp_path, monkeypatch):
+    backend, frontend = two_repos(tmp_path)
+    state = tmp_path / "state"
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    output = json.dumps({
+        "propose_steps": [
+            {"id": "api", "role": "developer", "adapter": "claude-code",
+             "goal": "add the totals endpoint", "repo": "backend",
+             "repo_reason": "the API lives in backend"}],
+        "deferred": [
+            {"goal": "mobile app totals", "reason": "no mobile repo is declared"},
+            {"goal": "", "reason": "malformed entry"},        # dropped, journaled
+        ]})
+    def run(spec):
+        if spec["goal"] == "plan it":
+            return Result(ok=True, output=output, command=["fake"])
+        return Result(ok=True, output="done", command=["fake"])
+    mission = {"id": "m-defer", "goal": "totals everywhere",
+               "repos": {"backend": str(backend), "frontend": str(frontend)},
+               "steps": [{"id": "plan", "role": "developer", "adapter": "claude-code",
+                          "goal": "plan it", "repo": "backend", "gates": []}]}
+    out = run_mission(mission, ON, runner=run, state_dir=state,
+                      catalogues_dir="catalogues")
+    # the routed step still ran and settled - the pause is about the UNROUTED work
+    assert out.status == "needs-owner"
+    assert "mobile app totals" in out.reason and "backlog" in out.reason
+    journal = [json.loads(ln) for ln in
+               (state / "missions" / "m-defer" / "journal.jsonl").read_text().splitlines()]
+    deferred = [e for e in journal if e.get("event") == "work-deferred"]
+    assert len(deferred) == 1 and deferred[0]["feature_id"]
+    assert any(e.get("event") == "deferred-rejected" for e in journal)  # malformed said, not lost
+    # the owner's queue holds it, waiting for their decision
+    from skye import backlog
+    feature = backlog.list_features()[0]
+    assert feature["status"] == "pending"
+    assert "mobile app totals" in feature["title"]
+    # status reads agree: not a false done
+    from skye.mission import mission_status
+    blocked = mission_status(mission, state_dir=state)
+    assert blocked["status"] == "needs-owner"
+    assert blocked["deferred"][0]["feature_id"] == feature["id"]
+    # the owner's decision - either way - resolves the blocker
+    backlog.decide(feature["id"], "rejected", note="no mobile app planned",
+                   path=tmp_path / "backlog.json")
+    resolved = mission_status(mission, state_dir=state)
+    assert resolved["status"] == "done" and "deferred" not in resolved
+
+
+def test_deferred_graph_meta_and_redacted_timeline(tmp_path, monkeypatch):
+    backend, frontend = two_repos(tmp_path)
+    state = tmp_path / "state"
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    secret = "AKIA-TEST-SECRET-7f3b9d"
+    output = json.dumps({
+        "propose_steps": [
+            {"id": "api", "role": "developer", "adapter": "claude-code",
+             "goal": "add the endpoint", "repo": "backend",
+             "repo_reason": "the API lives in backend"}],
+        "deferred": [{"goal": "mobile app", "reason": "no mobile repo declared"}]})
+    def run(spec):
+        if spec["goal"] == "plan it":
+            return Result(ok=True, output=output, command=["fake"])
+        # a worker's free text can carry anything - including leaked-looking material
+        return Result(ok=True, output=f"done; env dump: {secret}", command=["fake"])
+    mission = {"id": "m-redact", "goal": "totals",
+               "repos": {"backend": str(backend), "frontend": str(frontend)},
+               "steps": [{"id": "plan", "role": "developer", "adapter": "claude-code",
+                          "goal": "plan it", "repo": "backend", "gates": []}]}
+    out = run_mission(mission, ON, runner=run, state_dir=state,
+                      catalogues_dir="catalogues")
+    assert out.status == "needs-owner"
+    # the raw journal DOES hold the worker's output (it is the engine's record)
+    raw = (state / "missions" / "m-redact" / "journal.jsonl").read_text()
+    assert secret in raw
+    graph = mission_graph(state, "m-redact")
+    assert graph["meta"]["status"] == "needs-owner"
+    assert graph["meta"]["deferred"][0]["goal"] == "mobile app"
+    timeline_text = json.dumps(graph["timeline"])
+    assert secret not in timeline_text            # the progress view never carries it
+    for entry in graph["timeline"]:
+        assert "output" not in entry and "spec" not in entry and "feedback" not in entry
+    # events, steps, statuses and gate summaries still show what happened and how
+    kinds = {e.get("event") for e in graph["timeline"]}
+    assert {"dispatched", "settled", "step-accepted", "work-deferred"} <= kinds
