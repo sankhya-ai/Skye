@@ -455,8 +455,13 @@ class UiHandler(BaseHTTPRequestHandler):
                     from .. import discuss as discuss_module
                     page = discuss_module.read(self.state_dir, mission_id,
                                                since=since, limit=limit)
+                    # waiting_on must come from the FULL discussion history, not this page:
+                    # an ack that landed on a later page still clears the change for every
+                    # reader, and one on an earlier page still clears it here.
+                    full = discuss_module.read(self.state_dir, mission_id, since=0,
+                                               limit=1_000_000)
                     acked = {(e.get("ack_of"), e.get("author"))
-                             for e in page["entries"] if e.get("kind") == "ack"}
+                             for e in full["entries"] if e.get("kind") == "ack"}
                     for entry in page["entries"]:
                         if entry.get("kind") == "contract-change":
                             entry["waiting_on"] = [
