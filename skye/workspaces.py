@@ -44,8 +44,9 @@ class WorkspaceError(ValueError):
 def config(policy: Any) -> dict[str, Any]:
     raw = getattr(policy, "workspaces", None)
     if not isinstance(raw, dict):
-        return {"enabled": False}
-    return {"enabled": bool(raw.get("enabled"))}
+        return {"enabled": False, "allow_shared_fallback": False}
+    return {"enabled": bool(raw.get("enabled")),
+            "allow_shared_fallback": bool(raw.get("allow_shared_fallback"))}
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -75,12 +76,30 @@ def prepare(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> dict[st
     mission_dir.mkdir(parents=True, exist_ok=True)
     repo = Path(mission.get("repo") or "").expanduser()
     existing = read_record(mission_dir)
-    if not config(policy)["enabled"] or not repo or not _is_git_repo(repo):
+    cfg = config(policy)
+    if cfg["enabled"] and (not repo or not _is_git_repo(repo)):
+        # Workspaces are ON but this mission cannot get one. Never quietly launch it on the
+        # shared tree as if it were isolated: either the owner explicitly permits shared mode
+        # (policy.workspaces.allow_shared_fallback) or the mission fails closed, reason on record.
+        reason = ("mission has no repo" if not repo
+                  else "repo is not a git repository")
+        if not cfg["allow_shared_fallback"]:
+            record = {"worktree": "", "repo": str(repo), "created_at": time.time(),
+                      "reason": f"{reason}; workspaces are enabled and shared fallback is not "
+                                "permitted - mission refused"}
+            _record_path(mission_dir).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
+            raise WorkspaceError(
+                f"{reason}; workspaces are enabled, so the mission will not run on the shared "
+                "tree unless policy.workspaces.allow_shared_fallback is set")
+        reason += "; shared fallback explicitly permitted"
+        record = {"worktree": "", "repo": str(repo), "reason": reason,
+                  "created_at": time.time()}
+        _record_path(mission_dir).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
+        return record
+    if not cfg["enabled"]:
         if existing is None:
-            reason = ("workspaces disabled in policy" if not config(policy)["enabled"]
-                      else "mission has no repo" if not repo
-                      else "repo is not a git repository; running on the shared tree")
-            existing = {"worktree": "", "repo": str(repo), "reason": reason,
+            existing = {"worktree": "", "repo": str(repo),
+                        "reason": "workspaces disabled in policy",
                         "created_at": time.time()}
             _record_path(mission_dir).write_text(json.dumps(existing, indent=2) + "\n", "utf-8")
         return existing
@@ -105,7 +124,9 @@ def prepare(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> dict[st
     worktree.parent.mkdir(parents=True, exist_ok=True)
     if branch_exists:
         # worktree lost (e.g. state dir moved) but the branch holds worker commits: rebuild
-        # from the branch, not from HEAD.
+        # from the branch, not from HEAD. This recovers COMMITTED work only - anything the
+        # worker left uncommitted in the lost tree is gone, and the record must say so
+        # instead of reading as a full recovery.
         result = _git(repo, "worktree", "add", str(worktree), branch)
     else:
         result = _git(repo, "worktree", "add", "-b", branch, str(worktree), "HEAD")
@@ -114,6 +135,12 @@ def prepare(mission: dict[str, Any], *, state_dir: Path, policy: Any) -> dict[st
     record = {"worktree": str(worktree), "repo": str(repo), "branch": branch,
               "base_rev": base_rev, "created_at": time.time(), "reused": branch_exists,
               "dirty_at_start": [line[3:] for line in dirty][:100]}
+    if branch_exists:
+        record["recovered_from_branch"] = True
+        record["uncommitted_lost"] = True
+        record["recovery_note"] = ("the previous worktree was lost; committed work survived on "
+                                   "the branch, but any UNCOMMITTED worker changes in the lost "
+                                   "tree are unrecoverable - review before trusting the state")
     _record_path(mission_dir).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
     return record
 

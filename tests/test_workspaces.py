@@ -95,15 +95,22 @@ def test_dirty_base_recorded_and_not_carried(tmp_path):
 
 
 def test_worktree_lost_branch_survives_recreates_from_branch(tmp_path):
+    """Recovery is honest: committed work comes back via the branch; the lost tree's
+    UNCOMMITTED changes are gone and the record says so - never a silent full recovery."""
     repo = make_repo(tmp_path)
     state = tmp_path / "state"
     rec = workspaces.prepare(mission("m-lost", repo), state_dir=state, policy=ON)
     wt = Path(rec["worktree"])
     (wt / "work.txt").write_text("committed worker output")
-    git(wt, "add", "-A"); git(wt, "commit", "-qm", "worker")
-    git(repo, "worktree", "remove", str(wt))  # tree lost, branch kept
+    (wt / "scratch.txt").write_text("uncommitted scratch")
+    git(wt, "add", "work.txt"); git(wt, "commit", "-qm", "worker")
+    git(repo, "worktree", "remove", "--force", str(wt))  # tree lost, branch kept
     rec2 = workspaces.prepare(mission("m-lost", repo), state_dir=state, policy=ON)
-    assert (Path(rec2["worktree"]) / "work.txt").exists()  # recovered from the branch
+    assert (Path(rec2["worktree"]) / "work.txt").exists()  # committed work recovered
+    assert not (Path(rec2["worktree"]) / "scratch.txt").exists()  # uncommitted lost
+    assert rec2["recovered_from_branch"] is True
+    assert rec2["uncommitted_lost"] is True
+    assert "UNCOMMITTED" in rec2["recovery_note"]
 
 
 def test_record_but_tree_and_branch_gone_fails_closed(tmp_path):
@@ -129,10 +136,27 @@ def test_parallel_missions_separate_trees_and_branches(tmp_path):
     assert not (repo / "worker.txt").exists()
 
 
-def test_nongit_repo_falls_back_with_reason(tmp_path):
+def test_nongit_repo_fails_closed_when_workspaces_enabled(tmp_path):
+    """Enabled workspaces + no isolatable repo: refuse rather than quietly run 'isolated'
+    work on the shared tree."""
     plain = tmp_path / "plain"; plain.mkdir()
-    rec = workspaces.prepare(mission("m-plain", plain), state_dir=tmp_path / "state", policy=ON)
-    assert rec["worktree"] == "" and "not a git repository" in rec["reason"]
+    with pytest.raises(workspaces.WorkspaceError, match="allow_shared_fallback"):
+        workspaces.prepare(mission("m-plain", plain), state_dir=tmp_path / "state", policy=ON)
+    rec = json.loads(
+        (tmp_path / "state" / "missions" / "m-plain" / "workspace.json").read_text())
+    assert "mission refused" in rec["reason"]  # the refusal is on record, not silent
+
+
+def test_nongit_fallback_only_with_explicit_permission(tmp_path):
+    plain = tmp_path / "plain"; plain.mkdir()
+    permitted = Policy({"workspaces": {"enabled": True, "allow_shared_fallback": True},
+                        "allow_unattended": [{"adapter": "claude-code", "role": "*"}],
+                        "test_command": "true"})
+    out = run(mission("m-shared", plain), tmp_path / "state", permitted)
+    assert out.status == "done"
+    assert (plain / "worker.txt").exists()
+    rec = workspaces.read_record(tmp_path / "state" / "missions" / "m-shared")
+    assert "shared fallback explicitly permitted" in rec["reason"]
 
 
 def test_reset_removes_clean_worktree_keeps_dirty_and_branch(tmp_path):

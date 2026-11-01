@@ -101,3 +101,68 @@ def test_concurrent_toggles_serialize_no_lost_updates(ui_server, tmp_path, monke
     # the GET endpoint reflects the final toggled state
     _, state = _req(url, "/api/policy")
     assert state["auto_pickup"]["enabled"] == final["auto_pickup"]["enabled"]
+
+
+# ----- whole-file replace: same lock, revision conflict protection -----
+
+def test_get_exposes_revision(ui_server, tmp_path, monkeypatch):
+    url, _ = ui_server
+    policy = tmp_path / "policy.json"
+    monkeypatch.setenv("SKYE_POLICY", str(policy))
+    policy.write_text(json.dumps({"test_command": "true"}))
+    code, data = _req(url, "/api/policy")
+    assert code == 200 and data["revision"]
+    policy.write_text(json.dumps({"test_command": "false"}))
+    _, data2 = _req(url, "/api/policy")
+    assert data2["revision"] != data["revision"]
+
+
+def test_replace_requires_current_base_revision(ui_server, tmp_path, monkeypatch):
+    url, _ = ui_server
+    policy = tmp_path / "policy.json"
+    monkeypatch.setenv("SKYE_POLICY", str(policy))
+    policy.write_text(json.dumps({"test_command": "true"}))
+    # no base_revision at all: rejected, with the current revision handed back
+    code, data = _req(url, "/api/policy", method="POST",
+                      body={"policy": {"test_command": "false"}})
+    assert code == 409 and "base_revision" in data["error"] and data["revision"]
+    assert json.loads(policy.read_text()) == {"test_command": "true"}
+    # stale base_revision: rejected
+    code, data = _req(url, "/api/policy", method="POST",
+                      body={"policy": {"test_command": "false"},
+                            "base_revision": "deadbeefdeadbeef"})
+    assert code == 409 and "changed since" in data["error"]
+    # current base_revision: accepted
+    _, current = _req(url, "/api/policy")
+    code, data = _req(url, "/api/policy", method="POST",
+                      body={"policy": {"test_command": "false"},
+                            "base_revision": current["revision"]})
+    assert code == 200
+    assert json.loads(policy.read_text()) == {"test_command": "false"}
+
+
+def test_stale_settings_save_cannot_wipe_toggle(ui_server, tmp_path, monkeypatch):
+    """The exact race: the Settings form loads the policy, the pickup toggle flips under the
+    narrow endpoint, then the form's stale whole-file Save arrives. The backend rejects it."""
+    url, _ = ui_server
+    policy = tmp_path / "policy.json"
+    monkeypatch.setenv("SKYE_POLICY", str(policy))
+    policy.write_text(json.dumps({"test_command": "true",
+                                  "auto_pickup": {"enabled": False}}))
+    _, loaded = _req(url, "/api/policy")           # form loads at this revision
+    stale_copy = loaded["raw"]
+    _req(url, "/api/policy/auto_pickup", method="POST",
+         body={"auto_pickup": {"enabled": True}})  # toggle lands meanwhile
+    code, data = _req(url, "/api/policy", method="POST",
+                      body={"policy": stale_copy, "base_revision": loaded["revision"]})
+    assert code == 409
+    on_disk = json.loads(policy.read_text())
+    assert on_disk["auto_pickup"]["enabled"] is True  # the toggle survived
+
+
+def test_first_write_needs_no_revision(ui_server, tmp_path, monkeypatch):
+    url, _ = ui_server
+    monkeypatch.setenv("SKYE_POLICY", str(tmp_path / "policy.json"))
+    code, data = _req(url, "/api/policy", method="POST",
+                      body={"policy": {"test_command": "true"}})
+    assert code == 200 and data["revision"]
