@@ -111,7 +111,8 @@ class CodexAdapter(SessionAdapter):
                     run_key: "str | None" = None,
                     on_event=None,
                     cancel_event: "threading.Event | None" = None,
-                    live_file: "str | None" = None) -> SessionResult:
+                    live_file: "str | None" = None,
+                    run_instance: "str | None" = None) -> SessionResult:
         # CODEX_PROTOCOL=exec pins the older exec-JSONL transport for codex builds
         # that predate the app-server; anything else uses the app-server and falls
         # back to exec (loudly, via the protocol field) if the handshake cannot
@@ -120,7 +121,7 @@ class CodexAdapter(SessionAdapter):
             return super().run_session(
                 contract, timeout=timeout, resume_session_id=resume_session_id,
                 run_key=run_key, on_event=on_event, cancel_event=cancel_event,
-                live_file=live_file)
+                live_file=live_file, run_instance=run_instance)
         if not self.available():
             raise AdapterError(
                 f"{self.name}: the '{self.binary}' tool is not installed on this machine. "
@@ -141,6 +142,7 @@ class CodexAdapter(SessionAdapter):
         if run_key:
             entry = {"proc": proc, "cancel": cancel_event, "adapter": self,
                      "steers": 0, "closing": False, "lock": threading.Lock(),
+                     "run_instance": run_instance,
                      "rpc": {"thread_id": "", "turn_id": "", "seq": 0}}
             with _LIVE_LOCK:
                 _LIVE[run_key] = entry
@@ -193,7 +195,7 @@ class CodexAdapter(SessionAdapter):
             result = super().run_session(
                 contract, timeout=timeout, resume_session_id=resume_session_id,
                 run_key=run_key, on_event=on_event, cancel_event=cancel_event,
-                live_file=live_file)
+                live_file=live_file, run_instance=run_instance)
             result.protocol = f"exec-json-fallback: {str(error)[:160]}"
             return result
         if state["cancelled"] or cancel_event.is_set():

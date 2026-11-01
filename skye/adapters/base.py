@@ -84,17 +84,27 @@ def cancel_live(run_key: str, *, grace: float = 5.0) -> str:
     return "stopped"
 
 
-def steer_live(run_key: str, text: str) -> str:
+def steer_live(run_key: str, text: str,
+               expected_run_instance: "str | None" = None) -> str:
     """Deliver an operator follow-up into a LIVE run through the vendor's own input
     protocol: the CLI queues the message and starts a new turn with it (Claude Code's
     --input-format stream-json: queued user messages process sequentially between turns).
     This is never a mid-tool-call injection and never terminal input. Returns "steered",
     "not-live", "exiting" (the run ended before/while writing - the follow-up was NOT
-    delivered), or "unsupported" (the adapter's protocol has no live-input channel)."""
+    delivered), "stale-generation" (the registry slot is held by a DIFFERENT run
+    generation than the caller bound its record to - nothing was sent), or
+    "unsupported" (the adapter's protocol has no live-input channel).
+    ``expected_run_instance`` binds the submission to one registry generation: the
+    identity check and the write below act on the SAME entry object, so a
+    re-registration after the lookup can never retarget the write at a
+    different-generation process (the dead one fails the write loudly instead)."""
     with _LIVE_LOCK:
         entry = _LIVE.get(run_key)
     if entry is None:
         return "not-live"
+    if expected_run_instance is not None \
+            and entry.get("run_instance") != expected_run_instance:
+        return "stale-generation"
     proc = entry["proc"]
     if proc.poll() is not None:
         return "exiting"
@@ -362,7 +372,8 @@ class SessionAdapter(Adapter):
                     run_key: str | None = None,
                     on_event=None,
                     cancel_event: "threading.Event | None" = None,
-                    live_file: "str | Path | None" = None) -> SessionResult:
+                    live_file: "str | Path | None" = None,
+                    run_instance: "str | None" = None) -> SessionResult:
         if not self.available():
             raise AdapterError(
                 f"{self.name}: the '{self.binary}' tool is not installed on this machine. "
@@ -456,7 +467,8 @@ class SessionAdapter(Adapter):
         entry = None
         if run_key:
             entry = {"proc": proc, "cancel": cancel_event, "adapter": self,
-                     "steers": 0, "closing": False, "lock": threading.Lock()}
+                     "steers": 0, "closing": False, "lock": threading.Lock(),
+                     "run_instance": run_instance}
             with _LIVE_LOCK:
                 _LIVE[run_key] = entry
         if prompt_frame is not None:
