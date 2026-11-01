@@ -108,7 +108,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         </h2>
         <p className="mt-1 text-xs text-muted-foreground/70">
           {detail.journal.length > 0
-            ? `active ${formatRelative(detail.journal[detail.journal.length - 1].ts)}`
+            ? `updated ${formatRelative(detail.journal[detail.journal.length - 1].ts)}`
             : `${settled} of ${steps.length} steps settled`}
         </p>
       </div>

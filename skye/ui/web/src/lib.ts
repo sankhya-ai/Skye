@@ -35,7 +35,9 @@ export function formatRelative(value: string | number | null | undefined): strin
 export function humanError(err: unknown, action: string): string {
   const msg = err instanceof Error ? err.message : String(err);
   if (/failed to fetch|networkerror|load failed|connection/i.test(msg)) {
-    return `Couldn't reach the server. ${action} didn't happen - try again.`;
+    // The request may have reached the server before the response dropped - never
+    // assert it didn't happen. Point at reconciliation first, then retry.
+    return `Connection lost. Check whether the ${action} went through before trying again.`;
   }
   return msg;
 }

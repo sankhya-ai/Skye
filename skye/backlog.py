@@ -138,7 +138,10 @@ def mark_delivered(mission_id: str, *, journey_ok: bool = False,
         if feature.get("mission_id") == mission_id and feature.get("status") == "approved":
             feature["status"] = "delivered" if journey_ok else "awaiting-verification"
             previous = feature.get("verification") or {}
-            feature["verification"] = {"journey_passed": bool(journey_ok),
+            # None = "no replay has run yet" - a real False is only ever written by
+            # record_verification after an actual replay failed. The UI relies on this
+            # to tell "needs review" apart from "verification failed".
+            feature["verification"] = {"journey_passed": True if journey_ok else None,
                                        "evidence": evidence[-2000:], "verified_at": time.time(),
                                        "journey_digest": previous.get("journey_digest", "")}
             changed = True

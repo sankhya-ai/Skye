@@ -11,6 +11,8 @@ const VARIANTS: Record<string, string> = {
   outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
   ghost: "hover:bg-accent hover:text-accent-foreground",
   destructive: "bg-destructive text-white hover:bg-destructive/90",
+  warning: "border border-amber-500/40 bg-amber-500/10 text-amber-800 hover:bg-amber-500/20",
+  "danger-outline": "border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20",
   link: "text-primary underline-offset-4 hover:underline",
 };
 

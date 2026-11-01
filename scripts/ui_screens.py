@@ -134,6 +134,7 @@ def post(path, body):
 backlog.decide(fresh["id"], "approved")
 started = post("/api/backlog/start", {"feature": fresh["id"], "adapter": "root", "run": True})
 mission_id = started["id"]
+
 from playwright.sync_api import sync_playwright
 with sync_playwright() as pw:
     browser = pw.chromium.launch()
@@ -150,6 +151,17 @@ with sync_playwright() as pw:
         final = detail["status"]["status"]
         if final in ("done", "failed") and not detail["live"].get("running"):
             break
+    # An approval-pending state: a proposal started with an adapter the policy does not
+    # allow (only root:*). Seeded after the main mission settles so the POLICY RULE, not
+    # the concurrency cap, pauses it. The dispatcher's policy gate fires before any
+    # adapter process launches, so no model process ever starts.
+    approval_feat = backlog.propose(
+        [{"title": "Weekly sales report",
+          "brief": "Compile this week's sales into a summary report."}],
+        project=project["id"])[0]
+    backlog.decide(approval_feat["id"], "approved")
+    approval_mission = post("/api/backlog/start",
+                            {"feature": approval_feat["id"], "adapter": "codex", "run": True})["id"]
     for name, route in [("home", "#/"), ("backlog", "#/backlog"), ("missions", "#/missions"),
                         ("mission-detail", f"#/mission/{mission_id}"), ("agents", "#/agents"),
                         ("settings", "#/settings")]:
@@ -162,6 +174,19 @@ with sync_playwright() as pw:
                 preview.click()
                 page.wait_for_timeout(1500)
         page.screenshot(path=str(out_dir / f"ui-{name}.png"), full_page=True)
+        if name == "mission-detail":
+            # approval states: the codex-adapter mission paused at the policy gate
+            page.goto(ui_url + f"#/mission/{approval_mission}")
+            page.wait_for_timeout(3000)
+            page.screenshot(path=str(out_dir / "ui-approval-pending.png"), full_page=True)
+            approve = page.locator("button", has_text="Approve this step once")
+            if approve.count():
+                approve.click()
+                page.wait_for_timeout(1500)
+                page.screenshot(path=str(out_dir / "ui-approval-approved.png"), full_page=True)
+                print("APPROVAL card flow: captured pending + approved")
+            else:
+                print("APPROVAL card flow: NO approve button found - check seed")
         if name == "backlog":
             # interaction capture + behavior checks: the Reject confirmation dialog
             reject = page.locator("button", has_text="Reject").first

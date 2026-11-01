@@ -27,7 +27,9 @@ const statusLabel = (f: FeatureRow): string => {
     case "approved":
       return "Approved";
     case "awaiting-verification":
-      return f.verification && !f.verification.journey_passed
+      // A real failed replay writes journey_passed false explicitly; null means the
+      // work finished and no replay has run yet.
+      return f.verification?.journey_passed === false
         ? "Verification failed"
         : "Needs review";
     case "delivered":
@@ -91,7 +93,7 @@ export function BacklogView() {
       await fn();
       await refresh();
     } catch (err) {
-      setError(humanError(err, "The action"));
+      setError(humanError(err, "action"));
     } finally {
       setBusy(null);
     }
@@ -220,7 +222,7 @@ export function BacklogView() {
                       >
                         Replay journey
                       </Button>
-                      {f.verification && !f.verification.journey_passed ? (
+                      {f.verification?.journey_passed === false ? (
                         <Button
                           variant="outline"
                           size="sm"
@@ -324,7 +326,21 @@ export function BacklogView() {
                     setRejecting(null);
                     setRejectError(null);
                   } catch (err) {
-                    setRejectError(humanError(err, "The rejection"));
+                    // Reconcile before showing anything: the request may have landed.
+                    let landed = false;
+                    try {
+                      const d = await getBacklog();
+                      landed = d.features.some((x) => x.id === id && x.status === "rejected");
+                    } catch {
+                      // still unreachable - the error copy below already says to check
+                    }
+                    if (landed) {
+                      setRejecting(null);
+                      setRejectError(null);
+                    } else {
+                      setRejectError(humanError(err, "rejection"));
+                    }
+                    await refresh();
                   } finally {
                     setBusy(null);
                   }

@@ -19,6 +19,7 @@ import type { JournalEntry, MissionDetail } from "../api";
 import { cn, formatRelative, formatTime } from "../lib";
 import { ApprovalCard } from "./ApprovalCard";
 import { Badge } from "./ui/Badge";
+import { Button } from "./ui/Button";
 
 type StepState = {
   state: string;
@@ -192,22 +193,28 @@ export function MissionRunTrace({
                     </p>
                   </div>
                 ) : st.reason ? (
-                  <p className="mt-2 text-xs text-muted-foreground">{st.reason}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {st.state === "needs-owner"
+                      ? // The dispatcher appends the contract fingerprint + CLI hint for
+                        // terminal users; the card below carries the action, the journal
+                        // keeps the full text.
+                        st.reason.split(" Contract fingerprint")[0].replace(/^./, (c) => c.toUpperCase())
+                      : st.reason}
+                  </p>
                 ) : null}
                 {st.state === "interrupted" ? (
                   <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                     <p className="mb-2 text-xs text-muted-foreground">
-                      The run stopped mid-step and cannot reattach. Repeating work with unknown
-                      partial effects is your call: redispatch re-runs exactly this step, or reset
-                      the mission to start clean.
+                      Stopped mid-step with unknown partial effects. Redispatch re-runs exactly
+                      this step; resetting the mission starts clean.
                     </p>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1 text-xs font-medium text-red-200 transition hover:bg-destructive/20"
+                    <Button
+                      variant="danger-outline"
+                      size="sm"
                       onClick={() => onRedispatch(step.id)}
                     >
                       <Send className="size-3" /> Redispatch this step
-                    </button>
+                    </Button>
                   </div>
                 ) : null}
                 {st.output ? (

@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { approveStep } from "../api";
 import { humanError } from "../lib";
+import { Button } from "./ui/Button";
 
 export function ApprovalCard({
   missionId,
@@ -36,10 +37,10 @@ export function ApprovalCard({
         Approving runs this contract once. Policy unchanged.
       </p>
       {error ? <p className="mb-2 text-xs text-destructive">{error}</p> : null}
-      <button
-        type="button"
-        disabled={busy}
-        className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-800 transition hover:bg-amber-500/20 disabled:opacity-50"
+      <Button
+        variant="warning"
+        size="sm"
+        loading={busy}
         onClick={async () => {
           setBusy(true);
           setError(null);
@@ -47,14 +48,14 @@ export function ApprovalCard({
             await approveStep(missionId, step);
             onApproved();
           } catch (e) {
-            setError(humanError(e, "The approval"));
+            setError(humanError(e, "approval"));
           } finally {
             setBusy(false);
           }
         }}
       >
-        {busy ? "Approving..." : "Approve this step once"}
-      </button>
+        Approve this step once
+      </Button>
     </div>
   );
 }
