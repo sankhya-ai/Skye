@@ -35,6 +35,15 @@ vendored Python line client (`root/server/tura_code/line`), and the line
 runs on `chamber/relay` (Cloudflare worker, `wrangler dev`; exercised by
 tests/test_line_bridge.py, env-skipped without the relay's npm deps). The
 default sink is the local events.jsonl (FileBridge) - Chamber is never
-required for the engine, the journal, approvals, or the UI. Everything else
-in the vendored chamber/ checkout (board, bin, create.sh, wrangler config
-beyond the relay) is unused by Skye and stays verbatim for provenance.
+required for the engine, the journal, approvals, or the UI.
+
+Dependency footprint, measured: the relay path needs ONLY `chamber/relay`
+(its src, serve.mjs, package.json, wrangler.toml). At the owner's explicit
+direction ("we dont need everything from chamber, just functioning") the
+unused remainder of the upstream checkout was removed: board/, ui/, docs/,
+desktop/, lib/, test/, bin/, scripts/, .github/, Dockerfile, create.sh,
+install.sh, vm.sh, and the root package/docker/git meta files. Kept:
+`chamber/relay/` plus the upstream LICENSE, NOTICE, README.md and
+SECURITY.md for provenance. The full upstream tree remains recoverable from
+sankhya-ai/chamber @ a5e9842 (branch identity-v2) recorded above; this trim
+drops nothing Skye or its tests reference.
