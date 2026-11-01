@@ -110,12 +110,24 @@ def reserve(feature_id: str, *, picker: str, path: str | Path | None = None,
         raise PickupError(f"unknown ticket {feature_id!r}")
 
 
+def _in_flight(data: dict[str, Any]) -> int:
+    """Auto-start cap accounting: tickets with a mission whose work has not settled
+    (status still approved). A crashed or paused mission counts as in-flight until the
+    owner resolves it - the cap fails closed, never silently starts extra work. Manual
+    owner starts are not capped here: the cap binds the automation, not the owner."""
+    return sum(1 for f in data["features"]
+               if f.get("mission_id") and f.get("status") == "approved")
+
+
 def launch(feature_id: str, *, picker: str, path: str | Path | None = None,
-           create_mission: Callable[[dict[str, Any]], str] | None = None) -> dict[str, Any]:
+           create_mission: Callable[[dict[str, Any]], str] | None = None,
+           max_missions: int = 0) -> dict[str, Any]:
     """Re-validate under the lock and attach the new mission. Revocation-safe: if the ticket
     stopped being approved (or changed otherwise) since reserve(), nothing starts and the
     reservation is cleared. create_mission receives the ticket snapshot and must return the
-    new mission id; it runs INSIDE the lock so no second picker can interleave."""
+    new mission id; it runs INSIDE the lock so no second picker can interleave. max_missions
+    (>0) is enforced against in-flight tickets under the SAME lock, so the cap holds across
+    concurrent picker processes, not only within one server's tick."""
     target = Path(path or backlog.default_path())
     with open(_lock_path(target), "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -132,6 +144,13 @@ def launch(feature_id: str, *, picker: str, path: str | Path | None = None,
                 raise PickupError(
                     f"ticket {feature_id} changed before launch "
                     f"(status {feature.get('status')}); start aborted")
+            if max_missions > 0 and _in_flight(data) >= max_missions:
+                feature.pop("pickup", None)
+                backlog._thread(feature, actor="auto-pickup", kind="status",
+                                body=f"automatic start deferred: {_in_flight(data)} mission(s) "
+                                     f"in flight, cap is {max_missions}")
+                backlog._write(target, data)
+                raise PickupError("mission cap reached; reservation cleared")
             snapshot = {"goal": f"{feature['title']}: {feature['brief']}", "plan": True,
                         "project": feature.get("project", "")}
             mission_id = create_mission(snapshot) if create_mission else ""
@@ -196,7 +215,8 @@ def poll_once(*, policy: Any, picker: str, backlog_path: str | Path | None = Non
             continue  # another poller holds it, or it changed; both are fine
         try:
             result = launch(feature["id"], picker=picker, path=backlog_path,
-                            create_mission=create_mission)
+                            create_mission=create_mission,
+                            max_missions=cfg["max_missions"])
         except PickupError:
             continue
         if start_run:

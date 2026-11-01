@@ -671,3 +671,42 @@ def test_policy_endpoint_exposes_auto_pickup_state(ui_server, tmp_path, monkeypa
                                                                  "include_reopened": True}}))
     code, data = _req(url, "/api/policy")
     assert data["auto_pickup"] == {"enabled": True, "include_reopened": True, "max_missions": 1}
+
+
+def test_auto_pickup_through_the_live_server_pauses_for_contract_approval(
+        ui_server, tmp_path, monkeypatch):
+    """End to end: policy enables pickup, an owner-approved ticket waits, one picker tick
+    creates AND starts the mission - and the run still pauses needs-owner, because the
+    ticket's approval is intake authority only, never execution-contract approval."""
+    url, state_dir = ui_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_POLICY", str(tmp_path / "policy.json"))
+    (tmp_path / "backlog.json").write_text(json.dumps({"features": [
+        {"id": "f-1", "title": "cart api", "brief": "add the endpoint",
+         "status": "approved", "project": "", "decided_at": 1, "thread": []}]}))
+    (tmp_path / "policy.json").write_text(json.dumps({"auto_pickup": {"enabled": True}}))
+    monkeypatch.setattr(ui, "RUNNER",
+                        lambda spec: Result(ok=True, output="built", command=["fake"]))
+    from skye import pickup as pickup_module
+    from skye.policy import Policy as _Policy
+    out = pickup_module.poll_once(
+        policy=_Policy.load(tmp_path / "policy.json"), picker="ui-test",
+        backlog_path=tmp_path / "backlog.json",
+        create_mission=lambda spec: ui.create_mission(state_dir, spec),
+        start_run=lambda mid: ui.resume_in_thread(state_dir, mid))
+    assert [s["mission_id"] for s in out["started"]]
+    mission_id = out["started"][0]["mission_id"]
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        _, detail = _req(url, f"/api/missions/{mission_id}")
+        if detail["live"].get("finished"):
+            break
+        time.sleep(0.1)
+    _, detail = _req(url, f"/api/missions/{mission_id}")
+    assert detail["live"].get("error") in (None, ""), detail["live"]
+    assert detail["status"]["status"] == "needs-owner"
+    # the ticket records the automated start with its rule
+    _, tickets = _req(url, "/api/tickets")
+    ticket = next(t for t in tickets["tickets"] if t["id"] == "f-1")
+    assert ticket["mission_id"] == mission_id
+    assert any(e["actor"] == "auto-pickup" for e in ticket["thread"])

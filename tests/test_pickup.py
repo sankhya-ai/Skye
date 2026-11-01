@@ -183,3 +183,45 @@ def test_poll_once_starts_eligible_and_respects_cap_and_reopened(tmp_path):
     out = pickup.poll_once(policy=policy, picker="p", backlog_path=path,
                            create_mission=lambda spec: "m-x", live_count=1)
     assert len(out["started"]) == 0  # f-3 not eligible; cap reached check happens per ticket
+
+
+def test_mission_cap_holds_across_picker_PROCESSES(tmp_path):
+    """Two server processes, one backlog, cap 1, two eligible tickets: exactly one mission is
+    created globally. The cap is enforced inside launch() under the flock, so process-local
+    live maps cannot both pass it."""
+    import subprocess
+    import sys
+    path = tmp_path / "backlog.json"
+    path.write_text(json.dumps({"features": [
+        {"id": f"f-{i}", "title": f"t{i}", "brief": "b", "status": "approved",
+         "decided_at": 1, "thread": []} for i in range(4)]}))
+    script = (
+        "import sys, time; from skye import pickup\n"
+        "from skye.policy import Policy\n"
+        f"out = pickup.poll_once(policy=Policy({{'auto_pickup': {{'enabled': True, 'max_missions': 1}}}}),"
+        f" picker=sys.argv[1], backlog_path=r'{path}',"
+        " create_mission=lambda spec: 'm-' + sys.argv[1])\n"
+        "sys.exit(0 if out['started'] else 3)\n"
+    )
+    procs = [subprocess.Popen([sys.executable, "-c", script, f"srv-{i}"]) for i in range(4)]
+    codes = [p.wait() for p in procs]
+    assert codes.count(0) == 1 and codes.count(3) == 3
+    features = json.loads(path.read_text())["features"]
+    assert sum(1 for f in features if f.get("mission_id")) == 1
+
+
+def test_in_flight_counts_crashed_missions_as_holding_the_cap(tmp_path):
+    path = _feature(tmp_path)
+    other = {"id": "f-2", "title": "x", "brief": "y", "status": "approved",
+             "mission_id": "m-crashed", "thread": []}
+    data = json.loads(path.read_text())
+    data["features"].append(other)
+    path.write_text(json.dumps(data))
+    pickup.reserve("f-1", picker="p", path=path)
+    import pytest as _pt
+    with _pt.raises(pickup.PickupError, match="cap"):
+        pickup.launch("f-1", picker="p", path=path,
+                      create_mission=lambda spec: "m-new", max_missions=1)
+    feature = json.loads(path.read_text())["features"][0]
+    assert not feature.get("mission_id") and "pickup" not in feature
+    assert any("deferred" in e["body"] for e in feature["thread"])
