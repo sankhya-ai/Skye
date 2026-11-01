@@ -161,6 +161,13 @@ def acknowledge_recovery(mission_dir: Path, *, actor: str = "operator") -> dict[
     record = read_record(Path(mission_dir))
     if not record or not record.get("uncommitted_lost"):
         raise WorkspaceError("no lost-tree recovery is pending for this mission")
+    existing = record.get("recovery_acknowledged")
+    if existing:
+        # The first decision is the record. A repeated ack confirms it; it never rewrites
+        # who decided or when - history is not editable by pressing the button twice.
+        record["recovery_ack_repeats"] = int(record.get("recovery_ack_repeats", 0)) + 1
+        _record_path(Path(mission_dir)).write_text(json.dumps(record, indent=2) + "\n", "utf-8")
+        return record
     record["recovery_acknowledged"] = {"at": time.time(), "by": actor,
                                        "base_rev": record.get("base_rev", ""),
                                        "branch": record.get("branch", "")}

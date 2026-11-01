@@ -154,7 +154,29 @@ def mission_payload(state_dir: Path, mission_id: str) -> dict:
     return {"mission": mission, "status": status, "artifacts": mission_artifacts(mission_dir),
             "journal": _read_jsonl(mission_dir / "journal.jsonl"),
             "dynamic_steps": dynamic, "pending_contracts": pending,
-            "approved": approved and not pending}
+            "approved": approved and not pending,
+            "workspace": workspace_payload(mission_dir)}
+
+
+def workspace_payload(mission_dir: Path) -> dict:
+    """The AUTHORITATIVE workspace state for one mission, from workspace.json (the record the
+    engine writes), not derived from journal scans or client-local state. mode tells the UI
+    which tree the mission runs against; recovery_pending is true exactly while a lost-tree
+    rebuild waits on the operator's explicit ack, so a reload after the ack shows resolved,
+    never a stale pending."""
+    from .. import workspaces as workspaces_module
+    record = workspaces_module.read_record(mission_dir)
+    if not record:
+        return {"mode": "shared", "reason": "no workspace record", "branch": "",
+                "recovery_pending": False, "recovery_acknowledged": None}
+    pending = bool(record.get("uncommitted_lost")) and not record.get("recovery_acknowledged")
+    return {"mode": "worktree" if record.get("worktree") else "shared",
+            "reason": record.get("reason", ""),
+            "branch": record.get("branch", ""),
+            "base_rev": record.get("base_rev", ""),
+            "recovered_from_branch": bool(record.get("recovered_from_branch")),
+            "recovery_pending": pending,
+            "recovery_acknowledged": record.get("recovery_acknowledged")}
 
 
 def missions_overview(state_dir: Path) -> list[dict]:

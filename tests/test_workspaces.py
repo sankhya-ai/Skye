@@ -251,3 +251,43 @@ def test_server_ack_recovery_endpoint(tmp_path):
     code, data = _req(url, "/api/missions/m-ui/ack-recovery", method="POST", body={})
     assert code == 200 and data["acknowledged"] is True and data["branch"] == "skye/m-ui"
     httpd.shutdown(); thread.join(5)
+
+
+def test_repeated_ack_preserves_first_decision(tmp_path):
+    repo = make_repo(tmp_path)
+    state = tmp_path / "state"
+    rec = workspaces.prepare(mission("m-ack2", repo), state_dir=state, policy=ON)
+    git(repo, "worktree", "remove", "--force", rec["worktree"])
+    workspaces.prepare(mission("m-ack2", repo), state_dir=state, policy=ON)  # loss flagged
+    first = workspaces.acknowledge_recovery(state / "missions" / "m-ack2", actor="ashish")
+    original = dict(first["recovery_acknowledged"])
+    import time as _t; _t.sleep(0.01)
+    second = workspaces.acknowledge_recovery(state / "missions" / "m-ack2", actor="someone-else")
+    assert second["recovery_acknowledged"] == original  # who/when never rewritten
+    assert second["recovery_ack_repeats"] == 1
+
+
+def test_mission_payload_reports_authoritative_workspace_state(tmp_path):
+    """Reload safety: pending comes from the engine's record, so after the ack a fresh read
+    shows resolved - never a false pending from journal scans or client-local state."""
+    from skye.ui.server import workspace_payload
+    repo = make_repo(tmp_path)
+    state = tmp_path / "state"
+    run(mission("m-pay", repo), state, ON)
+    payload = workspace_payload(state / "missions" / "m-pay")
+    assert payload["mode"] == "worktree" and payload["branch"] == "skye/m-pay"
+    assert payload["recovery_pending"] is False
+
+    rec = workspaces.prepare(mission("m-pay2", repo), state_dir=state, policy=ON)
+    git(repo, "worktree", "remove", "--force", rec["worktree"])
+    workspaces.prepare(mission("m-pay2", repo), state_dir=state, policy=ON)
+    payload = workspace_payload(state / "missions" / "m-pay2")
+    assert payload["recovery_pending"] is True and payload["recovered_from_branch"] is True
+    workspaces.acknowledge_recovery(state / "missions" / "m-pay2", actor="ashish")
+    payload = workspace_payload(state / "missions" / "m-pay2")  # fresh read, as after a reload
+    assert payload["recovery_pending"] is False
+    assert payload["recovery_acknowledged"]["by"] == "ashish"
+
+    off = tmp_path / "state2"
+    run(mission("m-shared", repo), off, OFF)
+    assert workspace_payload(off / "missions" / "m-shared")["mode"] == "shared"
