@@ -4,7 +4,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
-import { getPolicy, savePolicy, type AutoPickup } from "../api";
+import { ApiError, getPolicy, savePolicy, type AutoPickup } from "../api";
 import { humanError } from "../lib";
 
 type Rule = { adapter: string; role: string };
@@ -18,6 +18,10 @@ export function SettingsView() {
   const [raw, setRaw] = useState<Record<string, unknown>>({});
   const [advanced, setAdvanced] = useState("");
   const [autoPickup, setAutoPickup] = useState<AutoPickup | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [revision, setRevision] = useState("");
+  const [conflict, setConflict] = useState(false);
+  const [loadDetail, setLoadDetail] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -39,9 +43,17 @@ export function SettingsView() {
       setMaxConcurrent(Number(data.max_concurrent ?? policy.max_concurrent ?? 1));
       setAdvanced(JSON.stringify(data, null, 2));
       setAutoPickup(policy.auto_pickup ?? null);
+      setRevision(policy.revision ?? "");
       setError(null);
+      setLoadDetail(null);
+      setConflict(false);
+      setLoaded(true);
     } catch (e) {
-      setError(humanError(e, "policy"));
+      // Never let a failed read look like defaults: the controls stay disabled so nothing
+      // can save synthesized values over the owner's real policy.
+      setLoaded(false);
+      setError("The policy file could not be read - controls stay disabled so nothing overwrites it.");
+      setLoadDetail(humanError(e, "policy"));
     }
   }, []);
 
@@ -60,10 +72,13 @@ export function SettingsView() {
     else delete policy.journey_command;
     policy.max_concurrent = Math.max(1, Math.min(4, Math.trunc(maxConcurrent) || 1));
     try {
-      await savePolicy(policy);
+      await savePolicy(policy, revision);
       setMessage("Saved - the next run uses this policy.");
+      await refresh();
     } catch (e) {
-      setError(humanError(e, "policy"));
+      // A 409 here is the server protecting a newer change: show it, never retry silently.
+      if (e instanceof ApiError && e.status === 409) setConflict(true);
+      else setError(humanError(e, "policy"));
     }
   };
 
@@ -78,11 +93,12 @@ export function SettingsView() {
       return;
     }
     try {
-      await savePolicy(parsed);
+      await savePolicy(parsed, revision);
       setMessage("Saved - the next run uses this policy.");
       await refresh();
     } catch (e) {
-      setError(humanError(e, "policy"));
+      if (e instanceof ApiError && e.status === 409) setConflict(true);
+      else setError(humanError(e, "policy"));
     }
   };
 
@@ -94,7 +110,25 @@ export function SettingsView() {
       {error ? (
         <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
           {error}
+          {loadDetail ? (
+            <span className="mt-0.5 block text-destructive/70">{loadDetail}</span>
+          ) : null}
         </p>
+      ) : null}
+      {conflict ? (
+        <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning">
+          <p>
+            The policy changed elsewhere since you loaded it - your edits were not saved.
+            Reload to review the current file before deciding what to keep.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="mt-1.5 underline underline-offset-2 hover:text-foreground"
+          >
+            Reload the current policy
+          </button>
+        </div>
       ) : null}
       {message ? (
         <p className="rounded-md border border-success/30 bg-success/5 p-3 text-xs text-success">
@@ -125,6 +159,7 @@ export function SettingsView() {
         )}
       </section>
 
+      <fieldset disabled={!loaded} className="m-0 min-w-0 space-y-4 border-0 p-0">
       <section className="shadow-card rounded-xl border border-border bg-card p-4">
         <h3 className="text-sm font-medium">May run without asking</h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
@@ -216,11 +251,18 @@ export function SettingsView() {
       >
         Save policy
       </Button>
+      </fieldset>
 
       <details className="shadow-card rounded-xl border border-border bg-card p-4">
         <summary className="cursor-pointer text-xs text-muted-foreground">
           Advanced: raw policy file
         </summary>
+        {!loaded ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            The readable controls are locked until the policy loads. Repair the file here and
+            save it back deliberately.
+          </p>
+        ) : null}
         <textarea
           value={advanced}
           onChange={(e) => setAdvanced(e.target.value)}

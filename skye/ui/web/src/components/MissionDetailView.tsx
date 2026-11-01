@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getMission,
   redispatchStep,
+  ackRecovery,
   resumeMission,
   type MissionDetail,
 } from "../api";
@@ -64,6 +65,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [recoveryAcked, setRecoveryAcked] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -75,6 +77,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   }, [id]);
 
   useEffect(() => {
+    setRecoveryAcked(false);
     refresh();
     const timer = setInterval(refresh, POLL_MS);
     return () => clearInterval(timer);
@@ -109,6 +112,13 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
 
   const live = Boolean(detail.live?.running);
   const resumable = !live && ["needs-owner", "interrupted", "failed"].includes(detail.status.status);
+  // Lost-tree recovery: the journal's sticky needs-owner. The rebuilt workspace must be
+  // explicitly reviewed (loss warning + branch/base context) before any resume - never a
+  // blind Resume through ambiguous state.
+  const recoveryEvent = [...(detail.journal ?? [])]
+    .reverse()
+    .find((e) => e.event === "workspace-recovery-pending");
+  const recoveryPending = Boolean(recoveryEvent) && !recoveryAcked;
   // Backlog-started missions compose the goal as "Title: brief". Split that
   // composition into a kicker + heading so the title isn't repeated into one
   // long sentence. Direct goals without a title-like prefix render whole.
@@ -133,7 +143,8 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         {overallBadge(detail.status.status, live, detail.approved)}
         <span className="flex-1" />
         {resumable ? (
-          <Button size="sm" loading={busy} onClick={() => act(() => resumeMission(id))}>
+          <Button size="sm" loading={busy} disabled={recoveryPending}
+                  onClick={() => act(() => resumeMission(id))}>
             <Play className="size-3" /> Resume
           </Button>
         ) : null}
@@ -141,6 +152,39 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           <RefreshCw className="size-3" /> Refresh
         </Button>
       </div>
+      {recoveryEvent ? (
+        <div className="rounded-md border border-warning/40 bg-warning/5 p-4 text-xs">
+          <p className="font-medium text-foreground">Workspace recovery needs your review</p>
+          <p className="mt-1 text-muted-foreground">
+            The mission's workspace was rebuilt from branch{" "}
+            <span className="font-mono">{String(recoveryEvent.branch || "?")}</span> after its
+            worktree was lost. Committed work survived; uncommitted worker changes are
+            unrecoverable. Review the rebuilt tree before continuing.
+          </p>
+          <p className="mt-1 font-mono text-[11px] text-muted-foreground/70">
+            base {String(recoveryEvent.base_rev || "?")}
+          </p>
+          {recoveryAcked ? (
+            <p className="mt-2 text-muted-foreground">
+              Recovery acknowledged - resume when ready.
+            </p>
+          ) : (
+            <Button
+              size="sm"
+              className="mt-2"
+              loading={busy}
+              onClick={() =>
+                act(async () => {
+                  await ackRecovery(id);
+                  setRecoveryAcked(true);
+                })
+              }
+            >
+              I reviewed the rebuilt workspace - acknowledge
+            </Button>
+          )}
+        </div>
+      ) : null}
       {/* product-first: the goal is the headline; activity reads as relative time */}
       <div>
         {hasTitle ? (

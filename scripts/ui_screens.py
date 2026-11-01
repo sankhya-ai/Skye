@@ -454,10 +454,11 @@ with sync_playwright() as pw:
     page.wait_for_timeout(1800)
     off_line = page.locator("text=Off - approved tickets wait for you").count()
     print("SETTINGS pickup shows recorded off:", "PASS" if off_line else "FAIL")
+    # enable through the REAL scoped endpoint (the contract a future toggle will use)
+    post("/api/policy/auto_pickup", {"auto_pickup": {"enabled": True,
+                                                     "include_reopened": True,
+                                                     "max_missions": 2}})
     policy_data = json.loads((demo / "skye.policy.json").read_text())
-    policy_data["auto_pickup"] = {"enabled": True, "include_reopened": True,
-                                  "max_missions": 2}
-    (demo / "skye.policy.json").write_text(json.dumps(policy_data))
     page.reload()
     page.wait_for_timeout(1800)
     on_line = page.locator("text=On - starts approved tickets").count()
@@ -466,14 +467,51 @@ with sync_playwright() as pw:
     print("SETTINGS pickup shows on with limits:",
           "PASS" if on_line and limit_line and reopened_line else "FAIL")
     page.screenshot(path=str(out_dir / "ui-settings-pickup-on.png"), full_page=True)
+    # a change lands elsewhere AFTER the form loaded: the whole-policy save must conflict,
+    # never silently overwrite it; after an explicit reload the save goes through
+    post("/api/policy/auto_pickup", {"auto_pickup": {"enabled": True,
+                                                     "include_reopened": True,
+                                                     "max_missions": 3}})
+    page.locator("button", has_text="Save policy").first.click()
+    page.wait_for_timeout(900)
+    conflict = page.locator("text=policy changed elsewhere").count()
+    still3 = (json.loads((demo / "skye.policy.json").read_text())
+              .get("auto_pickup", {}).get("max_missions") == 3)
+    print("SETTINGS stale save conflicts, newer change untouched:",
+          "PASS" if conflict and still3 else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-settings-conflict.png"), full_page=True)
+    page.reload()
+    page.wait_for_timeout(1800)
+    page.locator("button", has_text="Save policy").first.click()
+    page.wait_for_timeout(900)
+    saved = page.locator("text=Saved - the next run uses this policy").count()
+    kept = (json.loads((demo / "skye.policy.json").read_text())
+            .get("auto_pickup", {}).get("enabled") is True)
+    print("SETTINGS save after explicit reload keeps the pickup block:",
+          "PASS" if saved and kept else "FAIL")
     # a policy file that cannot be read: pickup state is UNKNOWN, never shown as off
     (demo / "skye.policy.json").write_text("{ not json")
     page.reload()
     page.wait_for_timeout(1800)
+    # the scoped endpoint fails CLOSED on the unreadable file: 409, no rewrite
+    try:
+        post("/api/policy/auto_pickup", {"auto_pickup": {"enabled": False}})
+        toggle_409 = False
+    except Exception:
+        toggle_409 = True
+    print("SETTINGS pickup endpoint refuses an unreadable policy (409):",
+          "PASS" if toggle_409 else "FAIL")
     unknown_line = page.locator("text=Pickup state unavailable").count()
     off_leak = page.locator("text=Off - approved tickets wait for you").count()
     print("SETTINGS pickup unknown distinct from off:",
           "PASS" if unknown_line and not off_leak else "FAIL")
+    # a failed read must not leave a live Save over synthesized defaults, and the banner
+    # must read as an explanation, not a raw parser dump
+    save_btn = page.locator("button", has_text="Save policy").first
+    save_disabled = save_btn.evaluate("el => el.matches(':disabled')") if save_btn.count() else False
+    readable = page.locator("text=policy file could not be read").count()
+    print("SETTINGS failed read locks the form with a readable banner:",
+          "PASS" if save_disabled and readable else "FAIL")
     page.screenshot(path=str(out_dir / "ui-settings-pickup-unavailable.png"), full_page=True)
     (demo / "skye.policy.json").write_text(json.dumps(policy_data))
     browser.close()

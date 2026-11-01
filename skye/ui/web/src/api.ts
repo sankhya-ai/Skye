@@ -74,8 +74,14 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `request failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, body.error ?? `request failed (${res.status})`);
   return body as T;
+}
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
 }
 
 export const getMissions = () =>
@@ -83,6 +89,9 @@ export const getMissions = () =>
 export const getMission = (id: string) => api<MissionDetail>(`/api/missions/${id}`);
 export const approveStep = (mission: string, step: string) =>
   api<{ approved: boolean }>("/api/approve", { method: "POST", body: JSON.stringify({ mission, step }) });
+export const ackRecovery = (id: string) =>
+  api<{ acknowledged: boolean; branch: string; base_rev: string }>(
+    `/api/missions/${encodeURIComponent(id)}/ack-recovery`, { method: "POST", body: "{}" });
 export const resumeMission = (id: string) =>
   api<{ resumed: boolean }>(`/api/missions/${id}/resume`, { method: "POST", body: "{}" });
 export const redispatchStep = (id: string, step: string) =>
@@ -125,9 +134,12 @@ export const createRole = (role: {
 export type AutoPickup = { enabled: boolean; include_reopened: boolean; max_missions: number };
 export const getPolicy = () =>
   api<{ raw: Record<string, unknown>; path: string; max_concurrent: number;
-        auto_pickup: AutoPickup }>("/api/policy");
-export const savePolicy = (policy: Record<string, unknown>) =>
-  api<{ saved: boolean }>("/api/policy", { method: "POST", body: JSON.stringify({ policy }) });
+        auto_pickup: AutoPickup; revision: string }>("/api/policy");
+// Whole-policy replace requires the revision the writer based its edit on; the server
+// rejects stale bases (409) so a loaded form can never silently wipe a newer change.
+export const savePolicy = (policy: Record<string, unknown>, baseRevision: string) =>
+  api<{ saved: boolean; revision: string }>("/api/policy",
+    { method: "POST", body: JSON.stringify({ policy, base_revision: baseRevision }) });
 export const createMission = (spec: {
   goal: string;
   plan?: boolean;
