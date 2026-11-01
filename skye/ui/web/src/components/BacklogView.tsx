@@ -276,7 +276,7 @@ export function BacklogView() {
                     </details>
                   ) : null}
                   {f.verification?.journey_changed ? (
-                    <p className="mt-1 text-xs text-warning">
+                    <p className="mt-1 rounded-sm border border-warning/40 bg-warning/5 p-2 text-xs text-foreground">
                       The journey check changed between replays - review before trusting this
                       result. Keep the check outside the team's repo for hard integrity.
                     </p>

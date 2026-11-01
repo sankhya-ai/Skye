@@ -671,5 +671,191 @@ with sync_playwright() as pw:
     page.screenshot(path=str(out_dir / "ui-server-recovered.png"), full_page=True)
     browser.close()
 
+
+# --- lost-worktree recovery: genuine prepare/loss/rebuild records, then the UI review path ---
+import shutil
+from skye import policy as policy_module
+from skye import workspaces as wsm
+
+repo = demo / "recovery-repo"
+repo.mkdir()
+subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+subprocess.run(["git", "config", "user.email", "suite@example.invalid"], cwd=repo, check=True)
+subprocess.run(["git", "config", "user.name", "Suite"], cwd=repo, check=True)
+(repo / "app.py").write_text("def total(xs):\n    return sum(xs)\n")
+subprocess.run(["git", "add", "."], cwd=repo, check=True)
+subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)
+
+policy_now = json.loads((demo / "skye.policy.json").read_text())
+policy_now["workspaces"] = {"enabled": True}
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+
+post("/api/missions", {"id": "recovery-mission", "goal": "Recovery probe: rebuild after loss",
+                       "repo": str(repo), "run": False,
+                       "steps": [{"id": "build", "role": "developer", "adapter": "root",
+                                  "goal": "extend the totals module", "gates": [],
+                                  "budget": {"max_steps": 4}}]})
+mission_dir = state_dir / "missions" / "recovery-mission"
+mission_def = json.loads((mission_dir / "mission.json").read_text())
+policy_obj = policy_module.Policy.load(demo / "skye.policy.json")
+rec1 = wsm.prepare(mission_def, state_dir=state_dir, policy=policy_obj)
+wt = Path(rec1["worktree"])
+# committed worker output survives on the branch; uncommitted output is what gets lost
+(wt / "feature.py").write_text("def feature():\n    return 42\n")
+subprocess.run(["git", "add", "."], cwd=wt, check=True)
+subprocess.run(["git", "commit", "-qm", "worker: add feature"], cwd=wt, check=True)
+(wt / "scratch.py").write_text("# uncommitted scratch\n")
+# the lost tree (clean unregister+delete; a raw rmtree loss currently leaves a stale git
+# worktree registration that prepare() does not prune - reported to backend as a gap)
+subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo, check=True)
+rec2 = wsm.prepare(mission_def, state_dir=state_dir, policy=policy_obj)
+print("RECOVERY record marks uncommitted loss:",
+      "PASS" if rec2.get("uncommitted_lost") and rec2.get("recovered_from_branch") else "FAIL")
+print("RECOVERY rebuilt tree keeps committed work, scratch gone:",
+      "PASS" if (Path(rec2["worktree"]) / "feature.py").exists()
+      and not (Path(rec2["worktree"]) / "scratch.py").exists() else "FAIL")
+
+post("/api/missions/recovery-mission/resume", {})
+deadline = time.monotonic() + 30
+pending_ev = []
+while time.monotonic() < deadline:
+    detail = json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/missions/recovery-mission",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+    pending_ev = [e for e in detail["journal"] if e.get("event") == "workspace-recovery-pending"]
+    if pending_ev:
+        break
+    time.sleep(0.5)
+print("RECOVERY resume pauses with journaled recovery context:",
+      "PASS" if pending_ev else "FAIL")
+
+policy_now.pop("workspaces")
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+
+with sync_playwright() as pw:
+    browser = pw.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(ui_url + "#/mission/recovery-mission")
+    page.wait_for_timeout(2500)
+    card = page.locator("text=Workspace recovery needs your review").count()
+    loss = page.locator("text=uncommitted worker changes are").count()
+    branch = page.locator("text=skye/recovery-mission").count()
+    resume_btn = page.locator("button", has_text="Resume").first
+    # no blind Resume through ambiguous state: the button is disabled, or withheld entirely
+    # when the mission never dispatched (status not-started is not resumable on its own)
+    gated = (not resume_btn.count()
+             or resume_btn.evaluate("el => el.matches(':disabled')"))
+    print("RECOVERY review card with loss warning + branch context:",
+          "PASS" if card and loss and branch else "FAIL")
+    print("RECOVERY Resume withheld or disabled until acknowledged:", "PASS" if gated else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-recovery-review.png"), full_page=True)
+    page.locator("button", has_text="I reviewed the rebuilt workspace").click()
+    page.wait_for_timeout(1200)
+    acked_rec = json.loads((mission_dir / "workspace.json").read_text())
+    ack_line = page.locator("text=resume when ready").count()
+    enabled = (resume_btn.count()
+               and resume_btn.evaluate("el => !el.matches(':disabled')"))
+    print("RECOVERY acknowledge records who/when + Resume offered:",
+          "PASS" if acked_rec.get("recovery_acknowledged") and ack_line and enabled else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-recovery-acknowledged.png"), full_page=True)
+    page.reload()
+    page.wait_for_timeout(2500)
+    still_pending = page.locator("button", has_text="I reviewed the rebuilt workspace").count()
+    resolved = page.locator("text=resume when ready").count()
+    print("RECOVERY ack->reload resolves pending (authoritative payload):",
+          "PASS" if resolved and not still_pending else "FAIL stale pending after reload")
+    browser.close()
+
+
+# --- multi-repo recovery: two declared repos, one lost worktree, per-repo UI context ---
+from skye.mission import load_mission
+
+def _git_repo(path: Path) -> None:
+    path.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "suite@example.invalid"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Suite"], cwd=path, check=True)
+    (path / "README.md").write_text(f"# {path.name}\n")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=path, check=True)
+
+repo_be = demo / "backend-repo"
+repo_fe = demo / "frontend-repo"
+_git_repo(repo_be)
+_git_repo(repo_fe)
+
+policy_now = json.loads((demo / "skye.policy.json").read_text())
+policy_now["workspaces"] = {"enabled": True}
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+
+multi_spec = demo / "multi-mission.json"
+multi_spec.write_text(json.dumps({
+    "id": "multi-recovery", "goal": "Multi-repo probe: backend + frontend",
+    "repos": {"backend": str(repo_be), "frontend": str(repo_fe)},
+    "steps": [{"id": "build", "role": "developer", "adapter": "root",
+               "goal": "touch both repos", "repo": "frontend",
+               "gates": [], "budget": {"max_steps": 4}}]}))
+multi_def = load_mission(multi_spec)  # the real validation/normalization path
+multi_dir = state_dir / "missions" / "multi-recovery"
+multi_dir.mkdir(parents=True, exist_ok=True)
+(multi_dir / "mission.json").write_text(json.dumps(multi_def, indent=2) + "\n")
+
+policy_obj = policy_module.Policy.load(demo / "skye.policy.json")
+mrec1 = wsm.prepare(multi_def, state_dir=state_dir, policy=policy_obj)
+be_wt = Path(mrec1["repos"]["backend"]["worktree"])
+fe_wt = Path(mrec1["repos"]["frontend"]["worktree"])
+print("MULTI one worktree per repo:",
+      "PASS" if be_wt.is_dir() and fe_wt.is_dir() and be_wt != fe_wt else "FAIL")
+(fe_wt / "widget.ts").write_text("export const widget = 1\n")
+subprocess.run(["git", "add", "."], cwd=fe_wt, check=True)
+subprocess.run(["git", "commit", "-qm", "worker: add widget"], cwd=fe_wt, check=True)
+(fe_wt / "scratch.ts").write_text("// uncommitted\n")
+subprocess.run(["git", "worktree", "remove", "--force", str(fe_wt)], cwd=repo_fe, check=True)
+mrec2 = wsm.prepare(multi_def, state_dir=state_dir, policy=policy_obj)
+print("MULTI lost frontend tree flagged, backend intact:",
+      "PASS" if mrec2["repos"]["frontend"].get("uncommitted_lost")
+      and not mrec2["repos"]["backend"].get("uncommitted_lost") else "FAIL")
+
+post("/api/missions/multi-recovery/resume", {})
+deadline = time.monotonic() + 30
+mpending = []
+while time.monotonic() < deadline:
+    detail = json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/missions/multi-recovery",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+    mpending = [e for e in detail["journal"] if e.get("event") == "workspace-recovery-pending"]
+    if mpending:
+        break
+    time.sleep(0.5)
+print("MULTI any lost tree pauses the mission for the owner:", "PASS" if mpending else "FAIL")
+
+policy_now.pop("workspaces")
+(demo / "skye.policy.json").write_text(json.dumps(policy_now))
+
+with sync_playwright() as pw:
+    browser = pw.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(ui_url + "#/mission/multi-recovery")
+    page.wait_for_timeout(2500)
+    card = page.locator("text=Workspace recovery needs your review").count()
+    fe_lost = page.locator("text=frontend:").count() and page.locator(
+        "text=uncommitted changes lost").count()
+    be_listed = page.locator("text=backend:").count()
+    mode = page.locator("text=across 2 repositories").count()
+    print("MULTI recovery card names the affected repo with per-repo context:",
+          "PASS" if card and fe_lost and be_listed else "FAIL")
+    print("MULTI workspace mode surface lists both repositories:",
+          "PASS" if mode else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-recovery-multi.png"), full_page=True)
+    page.locator("button", has_text="I reviewed the rebuilt workspace").click()
+    page.wait_for_timeout(1200)
+    page.reload()
+    page.wait_for_timeout(2500)
+    still_pending = page.locator("button", has_text="I reviewed the rebuilt workspace").count()
+    resolved = page.locator("text=resume when ready").count()
+    print("MULTI ack->reload resolves pending:", "PASS" if resolved and not still_pending else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-recovery-multi-acked.png"), full_page=True)
+    browser.close()
+
 print("mission:", mission_id, final)
 print("UI SCREENS OK")

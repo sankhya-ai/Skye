@@ -116,7 +116,7 @@ export function SettingsView() {
         </p>
       ) : null}
       {conflict ? (
-        <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning">
+        <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-foreground">
           <p>
             The policy changed elsewhere since you loaded it - your edits were not saved.
             Reload to review the current file before deciding what to keep.
@@ -124,7 +124,7 @@ export function SettingsView() {
           <button
             type="button"
             onClick={() => void refresh()}
-            className="mt-1.5 underline underline-offset-2 hover:text-foreground"
+            className="mt-1.5 font-medium underline underline-offset-2 hover:text-foreground/70"
           >
             Reload the current policy
           </button>

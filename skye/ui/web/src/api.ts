@@ -51,9 +51,31 @@ export type MissionArtifacts = {
   deleted_overflow?: number;
 };
 
+export type RepoWorkspace = {
+  mode: "worktree" | "shared";
+  reason: string;
+  branch: string;
+  base_rev?: string;
+  recovered_from_branch?: boolean;
+  uncommitted_lost?: boolean;
+};
+
+export type WorkspaceInfo = {
+  mode: "worktree" | "shared" | "multi-worktree";
+  repos?: Record<string, RepoWorkspace>;
+  reason: string;
+  branch: string;
+  base_rev?: string;
+  recovered_from_branch?: boolean;
+  recovery_pending: boolean;
+  recovery_acknowledged: { at: number; by: string; base_rev: string; branch: string } | null;
+};
+
 export type MissionDetail = {
   artifacts?: MissionArtifacts;
-  mission: { id: string; goal: string; steps: Array<Record<string, unknown>> };
+  workspace?: WorkspaceInfo;
+  mission: { id: string; goal: string; steps: Array<Record<string, unknown>>;
+             repos?: Record<string, string> };
   status: { mission: string; status: string; steps: StepStatus[] };
   journal: JournalEntry[];
   dynamic_steps: Array<Record<string, unknown>>;

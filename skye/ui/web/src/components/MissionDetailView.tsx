@@ -65,7 +65,6 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [recoveryAcked, setRecoveryAcked] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -77,7 +76,6 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   }, [id]);
 
   useEffect(() => {
-    setRecoveryAcked(false);
     refresh();
     const timer = setInterval(refresh, POLL_MS);
     return () => clearInterval(timer);
@@ -111,14 +109,16 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   }
 
   const live = Boolean(detail.live?.running);
-  const resumable = !live && ["needs-owner", "interrupted", "failed"].includes(detail.status.status);
-  // Lost-tree recovery: the journal's sticky needs-owner. The rebuilt workspace must be
-  // explicitly reviewed (loss warning + branch/base context) before any resume - never a
-  // blind Resume through ambiguous state.
-  const recoveryEvent = [...(detail.journal ?? [])]
-    .reverse()
-    .find((e) => e.event === "workspace-recovery-pending");
-  const recoveryPending = Boolean(recoveryEvent) && !recoveryAcked;
+  // Lost-tree recovery, from the AUTHORITATIVE workspace record in the payload (not journal
+  // scans or client-local state): pending exactly while a lost-tree rebuild waits on the
+  // operator's explicit ack - a reload after acking shows resolved, never a stale pending.
+  const workspace = detail.workspace;
+  const recoveryPending = Boolean(workspace?.recovery_pending);
+  const recoveryAcked = Boolean(workspace?.recovery_acknowledged);
+  // An acknowledged recovery means the operator explicitly chose to continue, so Resume is
+  // offered even when no step ever dispatched (status "not-started").
+  const resumable = !live && (["needs-owner", "interrupted", "failed"].includes(detail.status.status)
+                              || recoveryAcked);
   // Backlog-started missions compose the goal as "Title: brief". Split that
   // composition into a kicker + heading so the title isn't repeated into one
   // long sentence. Direct goals without a title-like prefix render whole.
@@ -152,38 +152,96 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           <RefreshCw className="size-3" /> Refresh
         </Button>
       </div>
-      {recoveryEvent ? (
+      {recoveryPending || recoveryAcked ? (
         <div className="rounded-md border border-warning/40 bg-warning/5 p-4 text-xs">
-          <p className="font-medium text-foreground">Workspace recovery needs your review</p>
-          <p className="mt-1 text-muted-foreground">
-            The mission's workspace was rebuilt from branch{" "}
-            <span className="font-mono">{String(recoveryEvent.branch || "?")}</span> after its
-            worktree was lost. Committed work survived; uncommitted worker changes are
-            unrecoverable. Review the rebuilt tree before continuing.
+          <p className="font-medium text-foreground">
+            {recoveryPending
+              ? "Workspace recovery needs your review"
+              : "Workspace recovery acknowledged"}
           </p>
-          <p className="mt-1 font-mono text-[11px] text-muted-foreground/70">
-            base {String(recoveryEvent.base_rev || "?")}
-          </p>
+          {workspace?.repos ? (
+            <>
+              <p className="mt-1 text-muted-foreground">
+                A worktree was lost and rebuilt from its branch. Committed work survived;
+                uncommitted worker changes are unrecoverable. Review the rebuilt trees before
+                continuing.
+              </p>
+              <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground/70">
+                {Object.entries(workspace.repos).map(([name, r]) => (
+                  <li key={name}>
+                    {name}: {r.branch || "?"} (base {String(r.base_rev || "?").slice(0, 12)})
+                    {r.uncommitted_lost ? " - uncommitted changes lost" : ""}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <>
+              <p className="mt-1 text-muted-foreground">
+                The mission's workspace was rebuilt from branch{" "}
+                <span className="font-mono">{workspace?.branch || "?"}</span> after its
+                worktree was lost. Committed work survived; uncommitted worker changes are
+                unrecoverable. Review the rebuilt tree before continuing.
+              </p>
+              <p className="mt-1 font-mono text-[11px] text-muted-foreground/70">
+                base {String(workspace?.base_rev || "?").slice(0, 12)}
+              </p>
+            </>
+          )}
           {recoveryAcked ? (
             <p className="mt-2 text-muted-foreground">
-              Recovery acknowledged - resume when ready.
+              Recovery acknowledged{workspace?.recovery_acknowledged?.by
+                ? ` by ${workspace.recovery_acknowledged.by}` : ""} - resume when ready.
             </p>
           ) : (
             <Button
               size="sm"
               className="mt-2"
               loading={busy}
-              onClick={() =>
-                act(async () => {
-                  await ackRecovery(id);
-                  setRecoveryAcked(true);
-                })
-              }
+              onClick={() => act(() => ackRecovery(id))}
             >
               I reviewed the rebuilt workspace - acknowledge
             </Button>
           )}
         </div>
+      ) : null}
+      {workspace?.mode === "multi-worktree" && workspace.repos ? (
+        <div className="text-xs text-muted-foreground">
+          <p>
+            Runs in isolated worktrees across{" "}
+            {Object.keys(workspace.repos).length} repositories:
+          </p>
+          <ul className="mt-0.5 space-y-0.5">
+            {Object.entries(workspace.repos).map(([name, r]) => (
+              <li key={name}>
+                <span className="font-medium text-foreground">{name}</span>
+                {detail.mission.repos?.[name] ? (
+                  <span className="font-mono"> {detail.mission.repos[name]}</span>
+                ) : null}
+                {" - "}
+                {r.mode === "worktree" ? (
+                  <>branch <span className="font-mono">{r.branch || "?"}</span></>
+                ) : (
+                  <>shared tree{r.reason ? ` (${r.reason})` : ""}</>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : workspace ? (
+        <p className="text-xs text-muted-foreground">
+          {workspace.mode === "worktree" ? (
+            <>
+              Runs in an isolated worktree on branch{" "}
+              <span className="font-mono">{workspace.branch || "?"}</span>.
+            </>
+          ) : (
+            <>
+              Runs on the shared tree - not isolated
+              {workspace.reason ? ` (${workspace.reason})` : ""}.
+            </>
+          )}
+        </p>
       ) : null}
       {/* product-first: the goal is the headline; activity reads as relative time */}
       <div>
