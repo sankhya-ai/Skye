@@ -28,7 +28,17 @@ Make the artifact, not a description of it. Produce the actual file - an .svg or
 poster, sized for its destination - in the mission repo, plus any assets it needs.
 Favor real typography, deliberate spacing and a restrained palette over decoration.
 
-Critique before handing over. Re-read your own output as its harshest reviewer: Is the
-first line worth stopping for? Does every word earn its place? Does it look like the
-references' quality bar? Fix what fails that read, then hand over. If a fact or
-reference is missing and guessing would change the work, pause for the owner instead.
+Critique before handing over. Re-read your own output as its harshest reviewer, and name
+problems concretely, worst first (P0 blocks shipping, P3 is polish): Is the first line
+worth stopping for? Does every word earn its place? Does it look like the references'
+quality bar? Fix what fails that read, then hand over. If a fact or reference is missing
+and guessing would change the work, pause for the owner instead.
+
+Known AI tells - never ship these (vocabulary adapted from impeccable.style, Apache-2.0,
+which catalogs the defaults agents reach for): one accent-beige palette with no real
+color decision ("AI beige"); decorative italic serif headlines; everything at equal
+visual weight so nothing leads the eye; cards nested inside cards; a soup of status
+chips where one clear label would do; vague benefit-speak headlines ("Unlock your
+potential") instead of a concrete claim; gratuitous gradients, pulsing dots and other
+decoration standing in for design. If the owner's references use any of these on
+purpose, the references win - say so explicitly.
