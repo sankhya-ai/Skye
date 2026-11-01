@@ -836,7 +836,7 @@ with sync_playwright() as pw:
     browser = pw.chromium.launch()
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     page.goto(ui_url + "#/mission/multi-recovery")
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(2000)
     card = page.locator("text=Workspace recovery needs your review").count()
     fe_lost = page.locator("text=frontend:").count() and page.locator(
         "text=uncommitted changes lost").count()
@@ -850,11 +850,29 @@ with sync_playwright() as pw:
     page.locator("button", has_text="I reviewed the rebuilt workspace").click()
     page.wait_for_timeout(1200)
     page.reload()
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(2000)
     still_pending = page.locator("button", has_text="I reviewed the rebuilt workspace").count()
     resolved = page.locator("text=resume when ready").count()
     print("MULTI ack->reload resolves pending:", "PASS" if resolved and not still_pending else "FAIL")
     page.screenshot(path=str(out_dir / "ui-recovery-multi-acked.png"), full_page=True)
+    page.locator("button", has_text="Resume").first.click()
+    deadline = time.monotonic() + 40
+    multi_final = ""
+    while time.monotonic() < deadline:
+        d = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{ui_port}/api/missions/multi-recovery",
+            headers={"X-Skye-Token": token}), timeout=30).read())
+        multi_final = d["status"]["status"]
+        if multi_final in ("done", "failed", "needs-owner", "gate-failed"):
+            break
+        time.sleep(1)
+    fe_written = (Path(mrec2["repos"]["frontend"]["worktree"]) / "docs" / "cart-launch.md").exists()
+    be_untouched = not (Path(mrec2["repos"]["backend"]["worktree"]) / "docs" / "cart-launch.md").exists()
+    print("MULTI named-repo step executes in the frontend worktree only:",
+          "PASS" if multi_final == "done" and fe_written and be_untouched else
+          f"FAIL status={multi_final} fe={fe_written} be_untouched={be_untouched}")
+    page.wait_for_timeout(3500)  # let the detail refresh show the settled run
+    page.screenshot(path=str(out_dir / "ui-recovery-multi-resumed.png"), full_page=True)
     nctx = browser.new_context(viewport={"width": 430, "height": 800})
     npage = nctx.new_page()
     npage.goto(ui_url + "#/mission/multi-recovery")
@@ -887,6 +905,7 @@ with sync_playwright() as pw:
     page.locator('input[placeholder="name (e.g. backend)"]').nth(1).fill("frontend")
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill(str(repo_fe))
     page.select_option("details select", label="backend")
+    page.screenshot(path=str(out_dir / "ui-composer-form.png"), full_page=True)
     # validation is real: a relative path is refused before anything is sent
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill("relative/path")
     page.locator('button[aria-label="Start mission"]').click()
@@ -901,6 +920,10 @@ with sync_playwright() as pw:
     print("COMPOSER multi-repo mission runs with per-repo worktrees shown:",
           "PASS" if mode and names else "FAIL")
     page.screenshot(path=str(out_dir / "ui-composer-multirepo.png"), full_page=True)
+    page.wait_for_timeout(6000)  # two 3s poll cycles: the sidebar must catch up with done
+    stale_running = page.locator("aside >> text=running").count()
+    print("SIDEBAR consistent once the mission settles (no stale running):",
+          "PASS" if not stale_running else "FAIL")
     # adapter availability in Settings: truthful installed/not-installed from the engine probe
     page.goto(ui_url + "#/settings")
     page.wait_for_timeout(2000)

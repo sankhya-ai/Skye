@@ -181,13 +181,13 @@ export function SettingsView() {
         </p>
         <div className="mt-3 space-y-2">
           {rules.map((rule, i) => (
-            <div key={i} className="flex items-center gap-2">
+            <div key={i} className="flex flex-wrap items-center gap-2">
               <select
                 value={rule.adapter}
                 onChange={(e) =>
                   setRules(rules.map((r, j) => (j === i ? { ...r, adapter: e.target.value } : r)))
                 }
-                className="rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
+                className="max-w-full min-w-0 rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
               >
                 {ADAPTERS.map((a) => {
                   const detail = adapters?.find((d) => d.name === a);
@@ -223,7 +223,9 @@ export function SettingsView() {
                   <li key={a.name}>
                     <span className="font-mono">{a.name}</span>
                     {a.available
-                      ? " - installed"
+                      ? a.probe === "local-server"
+                        ? " - reachable"
+                        : " - installed"
                       : ` - not available: ${a.hint}`}
                   </li>
                 ))}
