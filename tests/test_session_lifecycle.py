@@ -811,3 +811,35 @@ def test_follow_up_endpoint_serializes_live_steers(ui_server, tmp_path, monkeypa
     status, body = _req(url, "/api/missions/m1/follow-up", method="POST",
                         body={"step": "dev", "text": "add logging"})
     assert status == 200 and body["delivery"] == "submitted", body
+
+
+def test_two_simultaneous_live_steers_exactly_one_accepted(ui_server, tmp_path,
+                                                           monkeypatch):
+    # Concurrency guard, not button-disable: two HTTP submits racing the same running
+    # step get exactly ONE acceptance; the loser gets 409 with its input preserved.
+    url, state_dir = ui_server
+    _settled_mission_with_session(state_dir, tmp_path)
+    monkeypatch.setattr(ui, "_live_missions", {"m1": {"running": True}})
+    barrier = threading.Barrier(2)
+
+    def _slow_steer(*_a):
+        time.sleep(0.2)  # widen the overlap window: both requests are in flight
+        return "steered"
+
+    monkeypatch.setattr("skye.adapters.base.steer_live", _slow_steer)
+    outcomes: list = []
+
+    def _post():
+        barrier.wait(timeout=10)  # release both HTTP submits at the same instant
+        outcomes.append(_req(url, "/api/missions/m1/follow-up", method="POST",
+                             body={"step": "dev", "text": "also add logging"}))
+
+    threads = [threading.Thread(target=_post), threading.Thread(target=_post)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+    codes = sorted(status for status, _ in outcomes)
+    assert codes == [200, 409], outcomes
+    loser = next(body for status, body in outcomes if status == 409)
+    assert loser["preserved_text"] == "also add logging"

@@ -92,7 +92,8 @@ if stream_input:
             emit_turn(verdict_text(text))
             first = False
         else:
-            print(line.strip(), flush=True)  # replay echo: consumed, not ignored
+            if "--replay-user-messages" in argv:
+                print(line.strip(), flush=True)  # replay echo: consumed, not ignored
             emit_turn(f"Follow-up received: {text}")
 else:
     prompt = argv[argv.index("-p") + 1] if "-p" in argv and argv.index("-p") + 1 < len(argv) else ""
