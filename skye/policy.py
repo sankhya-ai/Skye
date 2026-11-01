@@ -33,6 +33,10 @@ class Policy:
             self.journey_timeout_seconds = 600
         self.max_concurrent: int = int(data.get("max_concurrent") or 1)
         self.review_role: str = str(data.get("review_role") or "reviewer")
+        # Trusted automatic pickup (skye/pickup.py). Absent or malformed means fully OFF;
+        # enabling it automates the intake click only - step contracts still pass the normal
+        # approval gate at dispatch.
+        self.auto_pickup: dict[str, Any] = data.get("auto_pickup") if isinstance(data.get("auto_pickup"), dict) else {}
 
     @classmethod
     def load(cls, path: str | Path = DEFAULT_PATH) -> "Policy":
