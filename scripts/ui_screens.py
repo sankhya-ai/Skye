@@ -54,27 +54,35 @@ project = projects.add({"name": "Shop", "repo": str(ws)})
 (demo / "skye.policy.json").write_text(json.dumps({
     "allow_unattended": [{"adapter": "root", "role": "*"}],
     "test_command": "true", "journey_command": "python3 journey.py"}))
-# a delivered repair with bound verification evidence
+def real_replay(feature_id: str, mission: str) -> dict:
+    """Record a REAL journey replay for the feature: the actual command runs against the
+    actual product files - no hand-written evidence strings."""
+    backlog.mark_started(feature_id, mission)
+    backlog.mark_delivered(mission, journey_ok=False)
+    result = journey.run_journey("python3 journey.py", cwd=str(ws))
+    return backlog.record_verification(
+        feature_id, result["passed"], evidence=result["evidence"],
+        repo_revision=journey.repo_revision(str(ws)),
+        journey_digest=journey.journey_digest("python3 journey.py", str(ws)))
+
+FIXED_APP = (ws / "app.py").read_text()
+# a delivered repair: the real journey replays clean against the fixed product
 issue, _ = issues.report("production-log", "checkout totals wrong in production",
                          detail="order 1042 billed 13.5 instead of 23.5", project=project["id"])
 fixed = backlog.get(issue["feature_id"])
 backlog.decide(fixed["id"], "approved")
-backlog.mark_started(fixed["id"], "m-repair")
-backlog.mark_delivered("m-repair", journey_ok=False)
-backlog.record_verification(fixed["id"], True, evidence="JOURNEY OK: checkout 2x10.0 + 1x3.5 = 23.5; badge 3 items",
-                            repo_revision=journey.repo_revision(str(ws)),
-                            journey_digest=journey.journey_digest("python3 journey.py", str(ws)))
-# an awaiting-verification feature with failing evidence
+recorded = real_replay(fixed["id"], "m-repair")
+assert recorded["status"] == "delivered" and "23.5" in recorded["verification"]["evidence"]
+# an awaiting-verification feature: replay REALLY FAILS while the badge repair is unshipped
+(ws / "app.py").write_text(FIXED_APP.replace('return str(count)', 'return "0"  # repair not shipped'))
 pending_repair = backlog.propose(
     [{"title": "Cart badge count", "brief": "Show the item count on the cart icon."}],
     project=project["id"], mission="seed")[0]
 backlog.decide(pending_repair["id"], "approved")
-backlog.mark_started(pending_repair["id"], "m-badge")
-backlog.mark_delivered("m-badge", journey_ok=False)
-backlog.record_verification(pending_repair["id"], False,
-                            evidence="JOURNEY FAIL: badge shows 0 with 3 items in the cart (totals pass: 23.5)",
-                            repo_revision=journey.repo_revision(str(ws)),
-                            journey_digest=journey.journey_digest("python3 journey.py", str(ws)))
+recorded = real_replay(pending_repair["id"], "m-badge")
+assert recorded["status"] == "awaiting-verification"
+assert "badge shows 0" in recorded["verification"]["evidence"], recorded["verification"]
+(ws / "app.py").write_text(FIXED_APP)  # the repair is still the team's pending work
 # a fresh proposal awaiting the owner + a started mission for the Missions screens
 fresh = backlog.propose([{"title": "Shopping cart", "brief": "Add a cart to the shop."}],
                         project=project["id"], mission="mission-seed")[0]
