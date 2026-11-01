@@ -15,3 +15,8 @@ skye = "skye.cli:main"
 # listed explicitly so a wheel install carries the UI server and adapters, not just the core.
 [tool.setuptools]
 packages = ["skye", "skye.adapters", "skye.ui"]
+
+# The built web bundle the UI server serves (skye/ui/dist) and its attribution NOTICE are
+# data, not code: without this a wheel install has a server with no screens.
+[tool.setuptools.package-data]
+"skye.ui" = ["dist/**/*", "NOTICE"]
