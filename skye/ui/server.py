@@ -743,11 +743,18 @@ class UiHandler(BaseHTTPRequestHandler):
                         return self._json({"error": "step is required"}, 400)
                     resume_in_thread(self.state_dir, mission_id, redispatch=step)
                     return self._json({"redispatched": step, "resumed": True})
+                if action == "ack-recovery":
+                    from .. import workspaces as workspaces_module
+                    record = workspaces_module.acknowledge_recovery(
+                        mission_dir, actor="skye ui")
+                    return self._json({"acknowledged": True,
+                                       "branch": record.get("branch", ""),
+                                       "base_rev": record.get("base_rev", "")})
                 if action == "reset":
                     reset_mission(load_mission(mission_file), state_dir=self.state_dir)
                     return self._json({"reset": True})
                 return self._json({"error": "unknown action"}, 404)
-        except (MissionError, KeyError, FileNotFoundError) as exc:
+        except (MissionError, KeyError, FileNotFoundError, ValueError) as exc:
             return self._json({"error": str(exc)}, 400)
         return self._json({"error": "not found"}, 404)
 

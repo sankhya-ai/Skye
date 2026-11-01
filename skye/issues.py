@@ -24,7 +24,8 @@ from typing import Any
 from . import backlog
 
 DEFAULT_PATH = "skye.issues.json"
-KINDS = ("production-log", "frontend-error", "user-report", "test-failure")
+KINDS = ("production-log", "frontend-error", "user-report", "test-failure",
+         "github-issue")
 
 
 class IssueError(ValueError):
@@ -59,7 +60,7 @@ def list_issues(path: str | Path | None = None, project: str = "") -> list[dict[
 
 
 def report(kind: str, summary: str, *, detail: str = "", project: str = "",
-           source: str = "", path: str | Path | None = None) -> tuple[dict[str, Any], bool]:
+           source: str = "", external: str = "", path: str | Path | None = None) -> tuple[dict[str, Any], bool]:
     """Record one error signal and file a PENDING backlog proposal for it.
 
     Returns (issue, created) - created is False when the same source+summary was already
@@ -73,6 +74,13 @@ def report(kind: str, summary: str, *, detail: str = "", project: str = "",
         raise IssueError("an issue needs a summary")
     target = Path(path or default_path())
     data = _read(target)
+    if external:
+        for issue in data["issues"]:
+            if issue.get("external") == external:
+                issue["occurrences"] = int(issue.get("occurrences", 1)) + 1
+                issue["last_seen"] = time.time()
+                _write(target, data)
+                return issue, False
     key = (project, source, summary.lower())
     for issue in data["issues"]:
         if (issue.get("project"), issue.get("source"), str(issue.get("summary")).lower()) == key:
@@ -83,7 +91,7 @@ def report(kind: str, summary: str, *, detail: str = "", project: str = "",
     issue = {"id": f"issue-{secrets.token_hex(4)}", "kind": kind, "project": project,
              "summary": summary, "detail": str(detail or "")[:4000], "source": source,
              "occurrences": 1, "first_seen": time.time(), "last_seen": time.time(),
-             "feature_id": ""}
+             "external": external, "feature_id": ""}
     # The proposal is the only way an issue reaches work. Title/brief stay factual - the
     # planner decides the actual fix after the owner approves.
     title = summary[:80]
