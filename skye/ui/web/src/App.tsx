@@ -11,7 +11,7 @@ import { MissionsOverview } from "./components/MissionsOverview";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 
-function MissionsView({ missions, projects }: { missions: MissionRow[]; projects: Project[] }) {
+function MissionsView({ missions, projects, loading }: { missions: MissionRow[]; projects: Project[]; loading?: boolean }) {
   const query = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
   const projectFilter = query.get("project");
   const project = projects.find((p) => p.id === projectFilter);
@@ -31,6 +31,7 @@ function MissionsView({ missions, projects }: { missions: MissionRow[]; projects
       </div>
       <MissionsOverview
         missions={rows}
+        loading={loading}
         onOpen={(id) => (window.location.hash = `/mission/${encodeURIComponent(id)}`)}
       />
     </div>
@@ -40,6 +41,7 @@ function MissionsView({ missions, projects }: { missions: MissionRow[]; projects
 export default function App() {
   const [route, setRoute] = useState<string>(() => window.location.hash.slice(1) || "/");
   const [missions, setMissions] = useState<MissionRow[]>([]);
+  const [missionsLoaded, setMissionsLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
@@ -58,6 +60,7 @@ export default function App() {
           live: m.live || Boolean(live[m.id]?.running),
         })),
       );
+      setMissionsLoaded(true);
       setProjects(projectData.projects);
     } catch {
       // the sidebar and views surface their own errors on demand
@@ -91,7 +94,7 @@ export default function App() {
           </div>
         ) : path === "/missions" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
-            <MissionsView missions={missions} projects={projects} />
+            <MissionsView missions={missions} projects={projects} loading={!missionsLoaded} />
           </div>
         ) : path === "/backlog" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">

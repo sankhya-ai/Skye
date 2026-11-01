@@ -15,8 +15,29 @@ import {
   type IssueRow,
   type Project,
 } from "../api";
+import { humanError } from "../lib";
 import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
+
+// User-facing status; the technical enum stays in the API.
+const statusLabel = (f: FeatureRow): string => {
+  switch (f.status) {
+    case "pending":
+      return "Needs decision";
+    case "approved":
+      return "Approved";
+    case "awaiting-verification":
+      return f.verification && !f.verification.journey_passed
+        ? "Verification failed"
+        : "Needs review";
+    case "delivered":
+      return "Delivered";
+    case "rejected":
+      return "Rejected";
+    default:
+      return f.status;
+  }
+};
 
 const BADGE: Record<string, string> = {
   pending: "bg-warning/25 text-foreground",
@@ -70,7 +91,7 @@ export function BacklogView() {
       await fn();
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(humanError(err, "The action"));
     } finally {
       setBusy(null);
     }
@@ -130,14 +151,11 @@ export function BacklogView() {
                     <span
                       className={`rounded-xs px-1.5 py-0.5 text-xs ${BADGE[f.status] ?? "bg-muted text-muted-foreground"}`}
                     >
-                      {f.status}
+                      {statusLabel(f)}
                     </span>
                   </div>
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {f.brief}
-                    {f.status === "awaiting-verification"
-                      ? " Done - awaiting journey replay."
-                      : ""}
                   </p>
                   {f.verification?.journey_changed ? (
                     <p className="mt-1 text-xs text-warning">
@@ -306,7 +324,7 @@ export function BacklogView() {
                     setRejecting(null);
                     setRejectError(null);
                   } catch (err) {
-                    setRejectError(err instanceof Error ? err.message : String(err));
+                    setRejectError(humanError(err, "The rejection"));
                   } finally {
                     setBusy(null);
                   }

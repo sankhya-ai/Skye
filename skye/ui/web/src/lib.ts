@@ -29,3 +29,13 @@ export function formatRelative(value: string | number | null | undefined): strin
   if (days < 7) return `${Math.round(days)} d ago`;
   return d.toLocaleDateString();
 }
+
+// Raw fetch/network messages ("Failed to fetch", "NetworkError ...") are implementation
+// noise. Users get what happened, that nothing changed, and that retry is safe.
+export function humanError(err: unknown, action: string): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/failed to fetch|networkerror|load failed|connection/i.test(msg)) {
+    return `Couldn't reach the server. ${action} didn't happen - try again.`;
+  }
+  return msg;
+}

@@ -2,6 +2,7 @@
 // clock in the display face, a muted greeting, and one centered pill composer
 // (berd's chat-composer token: translucent muted surface, 40px radius, backdrop blur).
 import { ArrowUp } from "lucide-react";
+import { Spinner } from "./ui/Spinner";
 import { useEffect, useState } from "react";
 import { createMission, getBacklog, type FeatureRow, type MissionRow, type Project } from "../api";
 
@@ -176,10 +177,11 @@ export function HomeView({
               type="button"
               onClick={() => void submit()}
               disabled={!goal.trim() || busy}
+              aria-busy={busy || undefined}
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-primary px-4 text-sm text-primary-foreground transition disabled:opacity-30"
               aria-label="Start mission"
             >
-              <ArrowUp className="size-4" />
+              {busy ? <Spinner className="size-4" /> : <ArrowUp className="size-4" />}
             </button>
           </div>
         </div>

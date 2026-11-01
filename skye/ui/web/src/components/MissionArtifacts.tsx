@@ -29,7 +29,14 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
   const toggle = async () => {
     if (!canPreview) return;
     if (open) {
+      // Closing revokes the blob URL: the object never outlives its preview, and the UI
+      // exposes no open-in-tab or download path, so script-capable types (SVG) can never
+      // be navigated to directly (the case scripts/svg_security_probe.py proved unsafe).
       setOpen(false);
+      if (url) {
+        URL.revokeObjectURL(url);
+        setUrl(null);
+      }
       return;
     }
     setLoading(true);

@@ -10,7 +10,7 @@ import { Button } from "./ui/Button";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
 import { MissionRunTrace } from "./MissionRunTrace";
 import { Badge } from "./ui/Badge";
-import { formatTime } from "../lib";
+import { formatTime, formatRelative } from "../lib";
 
 const POLL_MS = 1500;
 
@@ -64,7 +64,16 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   };
 
   if (error) return <p className="p-6 text-sm text-destructive">{error}</p>;
-  if (!detail) return <p className="p-6 text-sm text-muted-foreground">Loading...</p>;
+  if (!detail) {
+    return (
+      <div className="animate-pulse space-y-4 p-6" aria-label="loading mission">
+        <div className="h-4 w-40 rounded-sm bg-muted" />
+        <div className="h-7 w-2/3 rounded-sm bg-muted" />
+        <div className="h-20 rounded-md bg-muted" />
+        <div className="h-20 rounded-md bg-muted" />
+      </div>
+    );
+  }
 
   const live = Boolean(detail.live?.running);
   const resumable = !live && ["needs-owner", "interrupted", "failed"].includes(detail.status.status);
@@ -92,14 +101,15 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           <RefreshCw className="size-3" /> Refresh
         </Button>
       </div>
-      {/* product-first: the goal is the headline; the mission id is a caption */}
+      {/* product-first: the goal is the headline; activity reads as relative time */}
       <div>
         <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
           {detail.mission.goal}
         </h2>
-        <p className="mt-1 font-mono text-xs text-muted-foreground/70">
-          {detail.mission.id}
-          {steps.length > 0 ? ` · ${settled} of ${steps.length} steps settled` : ""}
+        <p className="mt-1 text-xs text-muted-foreground/70">
+          {detail.journal.length > 0
+            ? `active ${formatRelative(detail.journal[detail.journal.length - 1].ts)}`
+            : `${settled} of ${steps.length} steps settled`}
         </p>
       </div>
       {detail.live?.error ? (
@@ -120,7 +130,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
       <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} />
       <details className="rounded-md border border-border bg-card p-4">
         <summary className="cursor-pointer text-sm font-medium text-foreground">
-          Inspector - raw journal ({detail.journal.length} events)
+          Journal ({detail.journal.length} events)
         </summary>
         <div className="mt-3 max-h-72 space-y-1 overflow-auto font-mono text-xs text-muted-foreground">
           {[...detail.journal].reverse().map((entry, i) => (

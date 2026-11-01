@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import type { JournalEntry, MissionDetail } from "../api";
-import { cn, formatTime } from "../lib";
+import { cn, formatRelative, formatTime } from "../lib";
 import { ApprovalCard } from "./ApprovalCard";
 import { Badge } from "./ui/Badge";
 
@@ -179,7 +179,7 @@ export function MissionRunTrace({
                   </span>
                   {stateBadge(st.state, detail.approved)}
                   {st.at ? (
-                    <span className="text-xs text-muted-foreground">{formatTime(st.at)}</span>
+                    <span className="text-xs text-muted-foreground">{formatRelative(st.at)}</span>
                   ) : null}
                 </div>
                 {st.state === "needs-owner" && detail.approved ? (

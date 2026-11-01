@@ -4,6 +4,7 @@
 // fingerprint-bound approval exactly like `skye approve` does.
 import { useState } from "react";
 import { approveStep } from "../api";
+import { humanError } from "../lib";
 
 export function ApprovalCard({
   missionId,
@@ -46,7 +47,7 @@ export function ApprovalCard({
             await approveStep(missionId, step);
             onApproved();
           } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            setError(humanError(e, "The approval"));
           } finally {
             setBusy(false);
           }

@@ -52,11 +52,21 @@ function MissionRowButton({ row, onOpen }: { row: MissionRow; onOpen: () => void
 
 export function MissionsOverview({
   missions,
+  loading,
   onOpen,
 }: {
   missions: MissionRow[];
+  loading?: boolean;
   onOpen: (id: string) => void;
 }) {
+  if (loading && missions.length === 0) {
+    return (
+      <div className="animate-pulse space-y-2" aria-label="loading missions">
+        <div className="h-16 rounded-md bg-muted" />
+        <div className="h-16 rounded-md bg-muted" />
+      </div>
+    );
+  }
   if (missions.length === 0) {
     return (
       <div className="rounded-md border border-dashed border-border bg-card/50 p-10 text-center">
