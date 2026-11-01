@@ -817,7 +817,7 @@ multi_spec.write_text(json.dumps({
                "goal": "frontend docs", "repo": "frontend",
                "gates": [], "budget": {"max_steps": 4}},
               {"id": "build-be", "role": "developer", "adapter": "root",
-               "goal": "backend docs", "repo": "backend",
+               "goal": "backend docs", "repo": "backend", "needs": ["build"],
                "gates": [], "budget": {"max_steps": 4}}]}))
 multi_def = load_mission(multi_spec)  # the real validation/normalization path
 # Same relative path in BOTH repos, distinct content per repo: the docs write runs through
@@ -948,6 +948,34 @@ with sync_playwright() as pw:
     print("MULTI same-path previews show each repo's own content, never the other's:",
           "PASS" if be_preview and fe_preview and not cross and no_err else "FAIL")
     shot(page, out_dir / "ui-artifacts-multirepo.png")
+    g = json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/missions/multi-recovery/graph",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+    gnodes = {n["id"]: n for n in g["nodes"]}
+    g_edge = any(e["from"] == "build" and e["to"] == "build-be" for e in g["edges"])
+    g_repos = (gnodes.get("build", {}).get("repo") == "frontend"
+               and gnodes.get("build-be", {}).get("repo") == "backend")
+    g_states = all(gnodes.get(s, {}).get("state") == "done" for s in ("build", "build-be"))
+    print("GRAPH route: real nodes with repo labels/states + the needs edge:",
+          "PASS" if g_edge and g_repos and g_states and len(gnodes) == 2 else
+          f"FAIL nodes={list(gnodes)} edges={g['edges']}")
+    flow_nodes = page.locator("[data-flow-node]").count()
+    flow_edge = page.locator("[data-flow-edge='build->build-be']").count()
+    flow_repos = (page.locator("[data-flow-node='build']").locator("text=frontend").count()
+                  and page.locator("[data-flow-node='build-be']").locator("text=backend").count())
+    print("FLOW view: nodes, needs edge and repo chips render from the graph route:",
+          "PASS" if flow_nodes == 2 and flow_edge and flow_repos else "FAIL")
+    page.locator("[data-flow-node='build-be']").click()
+    page.wait_for_timeout(600)
+    sel = page.locator("text=backend docs").count() and page.locator("text=runs in backend").count()
+    print("FLOW node select shows the step's real goal and repo assignment:",
+          "PASS" if sel else "FAIL")
+    page.locator("button", has_text="Show execution log").click()
+    page.wait_for_timeout(600)
+    log_rows = page.locator("li", has_text="settled").count()
+    print("FLOW execution log lists redacted journal events:",
+          "PASS" if log_rows >= 2 else f"FAIL rows={log_rows}")
+    shot(page, out_dir / "ui-flow-multi.png")
     nctx = browser.new_context(viewport={"width": 430, "height": 800})
     npage = nctx.new_page()
     npage.goto(ui_url + "#/mission/multi-recovery")

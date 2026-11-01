@@ -9,6 +9,7 @@ import {
 } from "../api";
 import { Button } from "./ui/Button";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
+import { MissionFlow } from "./MissionFlow";
 import { DiscussionPanel } from "./DiscussionPanel";
 import { MissionRunTrace } from "./MissionRunTrace";
 import { Badge } from "./ui/Badge";
@@ -274,6 +275,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           {actionError}
         </p>
       ) : null}
+      <MissionFlow missionId={detail.mission.id} />
       <MissionRunTrace
         detail={detail}
         onChanged={refresh}

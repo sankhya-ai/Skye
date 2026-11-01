@@ -125,6 +125,30 @@ export class ApiError extends Error {
 export const getMissions = () =>
   api<{ missions: MissionRow[]; live: Record<string, { running?: boolean }> }>("/api/missions");
 export const getMission = (id: string) => api<MissionDetail>(`/api/missions/${id}`);
+
+export type GraphNode = {
+  id: string;
+  role: string;
+  adapter: string;
+  repo: string;
+  goal: string;
+  origin: "authored" | "proposed";
+  state: string;
+  reason?: string;
+  proposed_by?: string;
+  repo_reason?: string;
+  worker_job?: string;
+};
+
+export type MissionGraph = {
+  meta: { id: string; goal: string; status: string; repos: string[]; workspace: string };
+  nodes: GraphNode[];
+  edges: { from: string; to: string; kind: string }[];
+  timeline: Array<{ ts?: number; step?: string; event?: string; status?: string; reason?: string }>;
+};
+
+export const getMissionGraph = (id: string) =>
+  api<MissionGraph>(`/api/missions/${encodeURIComponent(id)}/graph`);
 export const approveStep = (mission: string, step: string) =>
   api<{ approved: boolean }>("/api/approve", { method: "POST", body: JSON.stringify({ mission, step }) });
 export const ackRecovery = (id: string) =>
