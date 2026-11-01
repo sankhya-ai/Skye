@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from skye import __version__
-from skye import approvals, backlog, gateway, projects, roles
+from skye import approvals, backlog, gateway, issues, projects, roles
 from skye.contract import ADAPTERS, ROLES
 from skye.mission import (Journal, MissionError, default_state_dir, load_mission,
                           mission_status, reset_mission, run_mission)
@@ -319,6 +319,8 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"approvals": approvals.pending(self.approvals_path)})
                 if url.path == "/api/backlog":
                     return self._json({"features": backlog.list_features()})
+                if url.path == "/api/issues":
+                    return self._json({"issues": issues.list_issues()})
                 if url.path == "/api/projects":
                     return self._json({"projects": projects.list_projects()})
                 if url.path == "/api/roles":
@@ -358,6 +360,19 @@ class UiHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._json({"error": "invalid JSON body"}, 400)
         try:
+            if url.path == "/api/issues":
+                # Issue intake: an owner-wired error feed (production logs, frontend error
+                # hook, user report) files a PENDING backlog proposal. Recording a signal
+                # never starts work - the owner decides on the proposal as usual.
+                try:
+                    issue, created = issues.report(
+                        str(body.get("kind") or ""), str(body.get("summary") or ""),
+                        detail=str(body.get("detail") or ""),
+                        project=str(body.get("project") or ""),
+                        source=str(body.get("source") or "api"))
+                except issues.IssueError as error:
+                    return self._json({"error": str(error)}, 400)
+                return self._json({"recorded": created, "issue": issue})
             if url.path == "/api/backlog/decide":
                 try:
                     feature = backlog.decide(str(body.get("feature") or ""),

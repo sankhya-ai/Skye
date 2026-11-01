@@ -62,6 +62,8 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
 
   const live = Boolean(detail.live?.running);
   const resumable = !live && ["needs-owner", "interrupted", "failed"].includes(detail.status.status);
+  const steps = detail.status.steps ?? [];
+  const settled = steps.filter((s) => s.state === "settled" && s.status === "done").length;
 
   return (
     <div className="space-y-4">
@@ -73,27 +75,35 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         >
           <ArrowLeft className="size-4" /> Missions
         </button>
-        <h2 className="font-mono text-lg">{detail.mission.id}</h2>
         {overallBadge(detail.status.status, live, detail.approved)}
         <span className="flex-1" />
         {resumable ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted"
+            className="h-8 inline-flex items-center gap-1 rounded-full bg-primary px-3 text-xs text-primary-foreground transition disabled:opacity-30"
             onClick={() => act(() => resumeMission(id))}
           >
-            <Play className="size-3" /> Resume mission
+            <Play className="size-3" /> Resume
           </button>
         ) : null}
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted"
+          className="h-8 inline-flex items-center gap-1 rounded-full border border-border bg-card px-3 text-xs text-foreground transition hover:bg-muted"
           onClick={() => refresh()}
         >
           <RefreshCw className="size-3" /> Refresh
         </button>
       </div>
-      <p className="text-sm text-muted-foreground">{detail.mission.goal}</p>
+      {/* product-first: the goal is the headline; the mission id is a caption */}
+      <div>
+        <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
+          {detail.mission.goal}
+        </h2>
+        <p className="mt-1 font-mono text-xs text-muted-foreground/70">
+          {detail.mission.id}
+          {steps.length > 0 ? ` · ${settled} of ${steps.length} steps settled` : ""}
+        </p>
+      </div>
       {detail.live?.error ? (
         <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
           {detail.live.error}
@@ -109,9 +119,11 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         onChanged={refresh}
         onRedispatch={(step) => act(() => redispatchStep(id, step))}
       />
-      <section className="rounded-xl border border-border bg-card p-4">
-        <h3 className="mb-2 text-sm font-medium">Journal</h3>
-        <div className="max-h-72 space-y-1 overflow-auto font-mono text-xs text-muted-foreground">
+      <details className="rounded-md border border-border bg-card p-4">
+        <summary className="cursor-pointer text-sm font-medium text-foreground">
+          Inspector - raw journal ({detail.journal.length} events)
+        </summary>
+        <div className="mt-3 max-h-72 space-y-1 overflow-auto font-mono text-xs text-muted-foreground">
           {[...detail.journal].reverse().map((entry, i) => (
             <div key={i} className="flex gap-2">
               <span className="shrink-0 text-muted-foreground/70">{formatTime(entry.ts)}</span>
@@ -122,7 +134,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           ))}
           {detail.journal.length === 0 ? <p>Nothing journaled yet.</p> : null}
         </div>
-      </section>
+      </details>
     </div>
   );
 }

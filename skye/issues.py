@@ -1,0 +1,100 @@
+"""Issue intake: external error SIGNALS (production logs, frontend errors, user reports) become
+backlog PROPOSALS, never work.
+
+The user's maintenance loop: any error the team sees should become a fix the team owns. The
+safe version of that loop starts here - a signal is recorded (with its source and payload),
+turned into a PENDING backlog item, and only the owner's approval lets a repair mission start.
+The intake is deliberately dumb: it does not parse stack traces into fixes (the planner does
+that when the owner approves), it does not deduplicate semantically (exact source+summary
+only), and it never connects to a live production feed by itself. Feeds are owner-connected:
+a deployment's log shipper or a frontend error hook POSTs here when the owner wires it up.
+Persisted in skye.issues.json (override with SKYE_ISSUES), atomic writes, same posture as the
+backlog and policy registries.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import time
+from pathlib import Path
+from typing import Any
+
+from . import backlog
+
+DEFAULT_PATH = "skye.issues.json"
+KINDS = ("production-log", "frontend-error", "user-report", "test-failure")
+
+
+class IssueError(ValueError):
+    pass
+
+
+def default_path() -> str:
+    return os.environ.get("SKYE_ISSUES", "").strip() or DEFAULT_PATH
+
+
+def _read(path: str | Path | None = None) -> dict[str, Any]:
+    try:
+        data = json.loads(Path(path or default_path()).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {"issues": []}
+    if not isinstance(data, dict) or not isinstance(data.get("issues"), list):
+        return {"issues": []}
+    return data
+
+
+def _write(path: Path, data: dict[str, Any]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
+    tmp.replace(path)
+
+
+def list_issues(path: str | Path | None = None, project: str = "") -> list[dict[str, Any]]:
+    rows = [i for i in _read(path)["issues"] if i.get("id")]
+    if project:
+        rows = [i for i in rows if i.get("project") == project]
+    return rows
+
+
+def report(kind: str, summary: str, *, detail: str = "", project: str = "",
+           source: str = "", path: str | Path | None = None) -> tuple[dict[str, Any], bool]:
+    """Record one error signal and file a PENDING backlog proposal for it.
+
+    Returns (issue, created) - created is False when the same source+summary was already
+    reported (the team does not file the same fire twice; the existing issue's count bumps).
+    A proposal carries the issue id so the eventual repair mission traces back to the signal.
+    """
+    if kind not in KINDS:
+        raise IssueError(f"kind must be one of {KINDS}, got {kind!r}")
+    summary = str(summary or "").strip()
+    if not summary:
+        raise IssueError("an issue needs a summary")
+    target = Path(path or default_path())
+    data = _read(target)
+    key = (project, source, summary.lower())
+    for issue in data["issues"]:
+        if (issue.get("project"), issue.get("source"), str(issue.get("summary")).lower()) == key:
+            issue["occurrences"] = int(issue.get("occurrences", 1)) + 1
+            issue["last_seen"] = time.time()
+            _write(target, data)
+            return issue, False
+    issue = {"id": f"issue-{secrets.token_hex(4)}", "kind": kind, "project": project,
+             "summary": summary, "detail": str(detail or "")[:4000], "source": source,
+             "occurrences": 1, "first_seen": time.time(), "last_seen": time.time(),
+             "feature_id": ""}
+    # The proposal is the only way an issue reaches work. Title/brief stay factual - the
+    # planner decides the actual fix after the owner approves.
+    title = summary[:80]
+    brief = (f"{kind} reported"
+             + (f" by {source}" if source else "")
+             + f": {summary}"
+             + (f"\n\nDetail:\n{issue['detail']}" if issue["detail"] else ""))
+    proposed = backlog.propose([{"title": title, "brief": brief}],
+                               project=project, mission=issue["id"], path=None)
+    if proposed:
+        issue["feature_id"] = proposed[0]["id"]
+    data["issues"].append(issue)
+    _write(target, data)
+    return issue, True

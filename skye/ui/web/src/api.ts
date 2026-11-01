@@ -141,3 +141,28 @@ export const startFeature = (feature: string, run = true) =>
     method: "POST",
     body: JSON.stringify({ feature, run }),
   });
+
+export type IssueRow = {
+  id: string;
+  kind: string;
+  project: string;
+  summary: string;
+  detail: string;
+  source: string;
+  occurrences: number;
+  first_seen: number;
+  last_seen: number;
+  feature_id: string;
+};
+
+export const getIssues = () => api<{ issues: IssueRow[] }>("/api/issues");
+export const reportIssue = (issue: {
+  kind: string;
+  summary: string;
+  detail?: string;
+  project?: string;
+  source?: string;
+}) => api<{ recorded: boolean; issue: IssueRow }>("/api/issues", {
+  method: "POST",
+  body: JSON.stringify(issue),
+});

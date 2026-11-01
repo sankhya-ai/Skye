@@ -367,3 +367,32 @@ def test_backlog_round_trip_through_the_api(ui_server, tmp_path, monkeypatch):
     assert status == 200
     assert payload["mission"]["project"] == project_id
     assert "Add cart" in payload["mission"]["goal"]
+
+
+def test_issue_intake_files_a_backlog_proposal(ui_server, tmp_path, monkeypatch):
+    """An error signal POST becomes a recorded issue + a PENDING backlog proposal; the owner
+    still decides. A duplicate signal bumps occurrences without a second proposal."""
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "skye.issues.json"))
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    url, _ = ui_server
+    status, payload = _req(url, "/api/issues", method="POST",
+                           body={"kind": "production-log", "summary": "502s on /checkout",
+                                 "detail": "upstream timeout", "project": "shop",
+                                 "source": "deploy-feed"})
+    assert status == 200, payload
+    assert payload["recorded"] is True
+    status, payload = _req(url, "/api/issues")
+    assert len(payload["issues"]) == 1
+    status, payload = _req(url, "/api/backlog")
+    assert len(payload["features"]) == 1
+    assert payload["features"][0]["status"] == "pending"
+    assert "502s on /checkout" in payload["features"][0]["title"]
+    status, payload = _req(url, "/api/issues", method="POST",
+                           body={"kind": "production-log", "summary": "502s on /checkout",
+                                 "project": "shop", "source": "deploy-feed"})
+    assert payload["recorded"] is False
+    status, payload = _req(url, "/api/backlog")
+    assert len(payload["features"]) == 1
+    status, payload = _req(url, "/api/issues", method="POST",
+                           body={"kind": "bogus", "summary": "x"})
+    assert status == 400
