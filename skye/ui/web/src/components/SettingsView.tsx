@@ -193,7 +193,11 @@ export function SettingsView() {
                   const detail = adapters?.find((d) => d.name === a);
                   return (
                     <option key={a}>
-                      {a}{detail && !detail.available ? " (not installed)" : ""}
+                      {a}{detail && !detail.available
+                        ? detail.probe === "local-server"
+                          ? " (not reachable)"
+                          : " (not installed)"
+                        : ""}
                     </option>
                   );
                 })}

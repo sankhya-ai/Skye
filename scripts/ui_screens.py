@@ -19,6 +19,15 @@ ws.mkdir()
     'print("JOURNEY OK: checkout 2x10.0 + 1x3.5 = 23.5; badge 3 items")\n')
 
 home = demo / "root-home"
+home.mkdir(exist_ok=True)
+# Fixture authorization, NOT a recorded owner approval (same standing as the grant seeded in
+# ui_team_scenario.py): unattended workers may only run owner-approved shell commands, and
+# the multi-repo script's docs write goes through the Shell tool (classified
+# "run command:mkdir"). This throwaway demo tenant's trust ledger starts promoted for that
+# command; it is never presented as evidence of a real owner's approval or the approval flow.
+(home / "trust.json").write_text(json.dumps({
+    "schema_version": "root.trust_ledger.v1",
+    "entries": {"run command:mkdir": {"approvals": 1, "rejections": 0, "promoted": True}}}))
 os.environ["TURA_CODE_HOME"] = str(home)
 os.environ["TURA_CODE_OFFLINE"] = "1"
 for var in ("OPENROUTER_API_KEY", "TURA_CODE_TOKEN"):
@@ -793,9 +802,29 @@ multi_spec.write_text(json.dumps({
     "id": "multi-recovery", "goal": "Multi-repo probe: backend + frontend",
     "repos": {"backend": str(repo_be), "frontend": str(repo_fe)},
     "steps": [{"id": "build", "role": "developer", "adapter": "root",
-               "goal": "touch both repos", "repo": "frontend",
+               "goal": "frontend docs", "repo": "frontend",
+               "gates": [], "budget": {"max_steps": 4}},
+              {"id": "build-be", "role": "developer", "adapter": "root",
+               "goal": "backend docs", "repo": "backend",
                "gates": [], "budget": {"max_steps": 4}}]}))
 multi_def = load_mission(multi_spec)  # the real validation/normalization path
+# Same relative path in BOTH repos, distinct content per repo: the docs write runs through
+# the Shell tool with the worktree cwd, so each repo's file names its own repository. This
+# is the identical-path ambiguity case the grouped Changed files review must disambiguate.
+multi_script = demo / "multi-script.json"
+multi_script.write_text(json.dumps([
+    "tool_call: " + json.dumps({"id": "r", "name": "ReadFile",
+                                "arguments": json.dumps({"path": "README.md"})}),
+    "tool_call: " + json.dumps({"id": "w", "name": "WriteFile",
+                                "arguments": json.dumps({"path": "assets/cart-launch.svg",
+                                                         "content": POSTER_SVG})}),
+    "tool_call: " + json.dumps({"id": "w2", "name": "Shell",
+                                "arguments": json.dumps({"command":
+                                    "mkdir -p docs && printf '# Cart launch notes\\n\\nRepo: %s\\n' "
+                                    '\"$(basename \"$PWD\")\" > docs/cart-launch.md'})}),
+    "text: Here is the plan. " + json.dumps(plan)]))
+main_script = os.environ["TURA_CODE_SCRIPTED_ECHO"]
+os.environ["TURA_CODE_SCRIPTED_ECHO"] = str(multi_script)
 multi_dir = state_dir / "missions" / "multi-recovery"
 multi_dir.mkdir(parents=True, exist_ok=True)
 (multi_dir / "mission.json").write_text(json.dumps(multi_def, indent=2) + "\n")
@@ -866,19 +895,53 @@ with sync_playwright() as pw:
         if multi_final in ("done", "failed", "needs-owner", "gate-failed"):
             break
         time.sleep(1)
-    fe_written = (Path(mrec2["repos"]["frontend"]["worktree"]) / "docs" / "cart-launch.md").exists()
-    be_untouched = not (Path(mrec2["repos"]["backend"]["worktree"]) / "docs" / "cart-launch.md").exists()
-    print("MULTI named-repo step executes in the frontend worktree only:",
-          "PASS" if multi_final == "done" and fe_written and be_untouched else
-          f"FAIL status={multi_final} fe={fe_written} be_untouched={be_untouched}")
+    os.environ["TURA_CODE_SCRIPTED_ECHO"] = main_script
+    fe_docs = (Path(mrec2["repos"]["frontend"]["worktree"]) / "docs" / "cart-launch.md")
+    be_docs = (Path(mrec2["repos"]["backend"]["worktree"]) / "docs" / "cart-launch.md")
+    fe_txt = fe_docs.read_text() if fe_docs.exists() else ""
+    be_txt = be_docs.read_text() if be_docs.exists() else ""
+    own_only = ("Repo: frontend" in fe_txt and "backend" not in fe_txt
+                and "Repo: backend" in be_txt and "frontend" not in be_txt)
+    print("MULTI named-repo steps write the same relative path in their own worktree only:",
+          "PASS" if multi_final == "done" and own_only else
+          f"FAIL status={multi_final} fe={fe_txt[:40]!r} be={be_txt[:40]!r}")
+    art = d.get("artifacts") or {}
+    art_repos = art.get("repos") or {}
+    per_repo_ok = (set(art_repos) == {"backend", "frontend"}
+                   and all("docs/cart-launch.md" in (art_repos[r].get("added") or [])
+                           and art_repos[r].get("complete") for r in ("backend", "frontend")))
+    print("MULTI artifacts payload carries the same path per repo (artifacts.repos):",
+          "PASS" if per_repo_ok else f"FAIL repos={list(art_repos)}")
     page.wait_for_timeout(3500)  # let the detail refresh show the settled run
     page.screenshot(path=str(out_dir / "ui-recovery-multi-resumed.png"), full_page=True)
+    # Grouped Changed files: each repo's section is captioned with its name and previews
+    # that repo's own bytes for the SAME relative path - the ambiguity the flat list hid.
+    captions = all(page.locator("div[data-repo=\"" + r + "\"]").count() for r in ("backend", "frontend"))
+    rows_ok = all(page.locator("div[data-repo=\"" + r + "\"]")
+                  .locator("span.font-mono", has_text="docs/cart-launch.md").count()
+                  for r in ("backend", "frontend"))
+    print("MULTI Changed files groups the same relative path under repo captions:",
+          "PASS" if captions and rows_ok else "FAIL")
+    for r in ("backend", "frontend"):
+        section = page.locator("div[data-repo=\"" + r + "\"]")
+        row = section.locator("div", has=page.locator("span.font-mono",
+                                                      has_text="docs/cart-launch.md")).last
+        row.locator("button", has_text="Preview").click()
+        page.wait_for_timeout(1200)
+    be_preview = page.locator("div[data-repo=\"backend\"]").locator("text=Repo: backend").count()
+    fe_preview = page.locator("div[data-repo=\"frontend\"]").locator("text=Repo: frontend").count()
+    cross = (page.locator("div[data-repo=\"backend\"]").locator("text=Repo: frontend").count()
+             + page.locator("div[data-repo=\"frontend\"]").locator("text=Repo: backend").count())
+    no_err = not page.locator("text=artifact preview failed").count()
+    print("MULTI same-path previews show each repo's own content, never the other's:",
+          "PASS" if be_preview and fe_preview and not cross and no_err else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-artifacts-multirepo.png"), full_page=True)
     nctx = browser.new_context(viewport={"width": 430, "height": 800})
     npage = nctx.new_page()
     npage.goto(ui_url + "#/mission/multi-recovery")
     npage.wait_for_timeout(2500)
     overflow = npage.evaluate("document.documentElement.scrollWidth > window.innerWidth")
-    ncard = npage.locator("text=Workspace recovery").count()
+    ncard = npage.locator("text=Workspace was recovered").count()
     print("MULTI narrow 430px: no horizontal overflow, recovery card legible:",
           "PASS" if ncard and not overflow else "FAIL")
     npage.screenshot(path=str(out_dir / "ui-recovery-multi-narrow.png"), full_page=True)

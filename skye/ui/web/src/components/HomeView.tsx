@@ -290,9 +290,11 @@ export function HomeView({
                 </select>
               </div>
             ) : null}
-            {setup?.fields?.repos?.note ? (
-              <p className="text-[11px] text-muted-foreground/70">{setup.fields.repos.note}</p>
-            ) : null}
+            <p className="text-[11px] text-muted-foreground/70">
+              Each repository gets a short name and its absolute path; steps then reference a
+              repo by name. Repositories must be distinct - the server validates them exactly
+              like a mission file.
+            </p>
           </div>
         </details>
         {error ? <p className="mt-2 pl-4 text-xs text-destructive">{error}</p> : null}

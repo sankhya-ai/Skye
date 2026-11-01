@@ -115,10 +115,11 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   const workspace = detail.workspace;
   const recoveryPending = Boolean(workspace?.recovery_pending);
   const recoveryAcked = Boolean(workspace?.recovery_acknowledged);
-  // An acknowledged recovery means the operator explicitly chose to continue, so Resume is
-  // offered even when no step ever dispatched (status "not-started").
+  // An acknowledged recovery offers Resume only while the mission is still waiting to run;
+  // once it has settled, a Resume button and "resume when ready" copy would be stale.
+  const missionDone = detail.status.status === "done";
   const resumable = !live && (["needs-owner", "interrupted", "failed"].includes(detail.status.status)
-                              || recoveryAcked);
+                              || (recoveryAcked && !missionDone));
   // Backlog-started missions compose the goal as "Title: brief". Split that
   // composition into a kicker + heading so the title isn't repeated into one
   // long sentence. Direct goals without a title-like prefix render whole.
@@ -157,14 +158,16 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           <p className="font-medium text-foreground">
             {recoveryPending
               ? "Workspace recovery needs your review"
-              : "Workspace recovery acknowledged"}
+              : missionDone
+                ? "Workspace was recovered during this mission"
+                : "Workspace recovery acknowledged"}
           </p>
           {workspace?.repos ? (
             <>
               <p className="mt-1 text-muted-foreground">
                 A worktree was lost and rebuilt from its branch. Committed work survived;
-                uncommitted worker changes are unrecoverable. Review the rebuilt trees before
-                continuing.
+                uncommitted worker changes are unrecoverable.
+                {missionDone ? " The mission has already finished." : " Review the rebuilt trees before continuing."}
               </p>
               <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground/70">
                 {Object.entries(workspace.repos).map(([name, r]) => (
@@ -181,7 +184,8 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
                 The mission's workspace was rebuilt from branch{" "}
                 <span className="font-mono">{workspace?.branch || "?"}</span> after its
                 worktree was lost. Committed work survived; uncommitted worker changes are
-                unrecoverable. Review the rebuilt tree before continuing.
+                unrecoverable.
+                {missionDone ? " The mission has already finished." : " Review the rebuilt tree before continuing."}
               </p>
               <p className="mt-1 font-mono text-[11px] text-muted-foreground/70">
                 base {String(workspace?.base_rev || "?").slice(0, 12)}
@@ -191,7 +195,8 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           {recoveryAcked ? (
             <p className="mt-2 text-muted-foreground">
               Recovery acknowledged{workspace?.recovery_acknowledged?.by
-                ? ` by ${workspace.recovery_acknowledged.by}` : ""} - resume when ready.
+                ? ` by ${workspace.recovery_acknowledged.by}` : ""}
+              {missionDone ? "." : " - resume when ready."}
             </p>
           ) : (
             <Button

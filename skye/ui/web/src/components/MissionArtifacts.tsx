@@ -1,6 +1,6 @@
 import { Eye, EyeOff, FileDiff, FileMinus2, FilePlus2, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getArtifactFileUrl, getArtifactText, type MissionArtifacts as Artifacts } from "../api";
+import { getArtifactFileUrl, getArtifactText, type MissionArtifacts as Artifacts, type RepoArtifacts } from "../api";
 import { Badge } from "./ui/Badge";
 import { MarkdownView } from "./MarkdownView";
 
@@ -20,7 +20,7 @@ function previewKind(path: string): "image" | "text" | null {
   return null;
 }
 
-function Row({ missionId, path, icon }: { missionId: string; path: string; icon: React.ReactNode }) {
+function Row({ missionId, path, repo, icon }: { missionId: string; path: string; repo?: string; icon: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
@@ -53,9 +53,9 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
     setError(null);
     try {
       if (kind === "image") {
-        if (!url) setUrl(await getArtifactFileUrl(missionId, path));
+        if (!url) setUrl(await getArtifactFileUrl(missionId, path, repo));
       } else if (text === null) {
-        setText(await getArtifactText(missionId, path));
+        setText(await getArtifactText(missionId, path, repo));
       }
       setOpen(true);
     } catch (e) {
@@ -113,11 +113,12 @@ function Row({ missionId, path, icon }: { missionId: string; path: string; icon:
   );
 }
 
-function Group({ missionId, label, paths, overflow, icon }: {
+function Group({ missionId, label, paths, overflow, repo, icon }: {
   missionId: string;
   label: string;
   paths: string[];
   overflow?: number;
+  repo?: string;
   icon: React.ReactNode;
 }) {
   if (paths.length === 0 && !overflow) return null;
@@ -127,11 +128,40 @@ function Group({ missionId, label, paths, overflow, icon }: {
         {label} ({paths.length + (overflow ?? 0)})
       </p>
       {paths.map((path) => (
-        <Row key={path} missionId={missionId} path={path} icon={icon} />
+        <Row key={path} missionId={missionId} path={path} repo={repo} icon={icon} />
       ))}
       {overflow ? (
         <p className="py-1 text-xs text-muted-foreground">and {overflow} more</p>
       ) : null}
+    </div>
+  );
+}
+
+function DiffGroups({ missionId, repo, entry }: {
+  missionId: string;
+  repo?: string;
+  entry: RepoArtifacts;
+}) {
+  const added = entry.added ?? [];
+  const modified = entry.modified ?? [];
+  const deleted = entry.deleted ?? [];
+  const empty = added.length + modified.length + deleted.length === 0
+    && !entry.added_overflow && !entry.modified_overflow && !entry.deleted_overflow;
+  if (empty) {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground">
+        The repo tree is byte-identical before and after this mission - no file changed.
+      </p>
+    );
+  }
+  return (
+    <div>
+      <Group missionId={missionId} label="Added" paths={added} overflow={entry.added_overflow} repo={repo}
+             icon={<FilePlus2 className="size-3.5 shrink-0 text-success" />} />
+      <Group missionId={missionId} label="Modified" paths={modified} overflow={entry.modified_overflow} repo={repo}
+             icon={<FileDiff className="size-3.5 shrink-0 text-info" />} />
+      <Group missionId={missionId} label="Deleted" paths={deleted} overflow={entry.deleted_overflow} repo={repo}
+             icon={<FileMinus2 className="size-3.5 shrink-0 text-destructive" />} />
     </div>
   );
 }
@@ -151,6 +181,33 @@ export function MissionArtifactsPanel({ missionId, artifacts }: {
       </div>
     );
   }
+  const repos = artifacts.repos ? Object.entries(artifacts.repos) : [];
+  if (repos.length > 0) {
+    // Multi-repo mission: group the recorded diff per repository so the same relative
+    // path in two repos is reviewed under its own repo, never merged into one list.
+    return (
+      <div className="rounded-md border border-border bg-card p-4">
+        <h3 className="text-sm font-medium text-foreground">Changed files</h3>
+        {repos.map(([name, entry]) => (
+          <div key={name} data-repo={name} className="mt-3 rounded-md border border-border/60 bg-background/40 p-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-foreground">{name}</span>
+              {entry.start_truncated || entry.end_truncated ? (
+                <Badge variant="secondary">large repo - diff partial</Badge>
+              ) : null}
+            </div>
+            {entry.complete ? (
+              <DiffGroups missionId={missionId} repo={name} entry={entry} />
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                No recorded changes yet - the final file record is written when the mission finishes.
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (!artifacts.complete) {
     // The end-of-mission file manifest is only recorded when the mission completes;
     // interrupted or in-flight work may have changed files we cannot see yet.
@@ -163,11 +220,6 @@ export function MissionArtifactsPanel({ missionId, artifacts }: {
       </div>
     );
   }
-  const added = artifacts.added ?? [];
-  const modified = artifacts.modified ?? [];
-  const deleted = artifacts.deleted ?? [];
-  const empty = added.length + modified.length + deleted.length === 0
-    && !artifacts.added_overflow && !artifacts.modified_overflow && !artifacts.deleted_overflow;
   return (
     <div className="rounded-md border border-border bg-card p-4">
       <div className="flex items-center gap-2">
@@ -176,20 +228,7 @@ export function MissionArtifactsPanel({ missionId, artifacts }: {
           <Badge variant="secondary">large repo - diff partial</Badge>
         ) : null}
       </div>
-      {empty ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          The repo tree is byte-identical before and after this mission - no file changed.
-        </p>
-      ) : (
-        <div>
-          <Group missionId={missionId} label="Added" paths={added} overflow={artifacts.added_overflow}
-                 icon={<FilePlus2 className="size-3.5 shrink-0 text-success" />} />
-          <Group missionId={missionId} label="Modified" paths={modified} overflow={artifacts.modified_overflow}
-                 icon={<FileDiff className="size-3.5 shrink-0 text-info" />} />
-          <Group missionId={missionId} label="Deleted" paths={deleted} overflow={artifacts.deleted_overflow}
-                 icon={<FileMinus2 className="size-3.5 shrink-0 text-destructive" />} />
-        </div>
-      )}
+      <DiffGroups missionId={missionId} entry={artifacts} />
     </div>
   );
 }

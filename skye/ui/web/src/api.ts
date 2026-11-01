@@ -37,6 +37,19 @@ export type JournalEntry = {
   [key: string]: unknown;
 };
 
+export type RepoArtifacts = {
+  repo?: string;
+  complete?: boolean;
+  start_truncated?: boolean;
+  end_truncated?: boolean;
+  added?: string[];
+  modified?: string[];
+  deleted?: string[];
+  added_overflow?: number;
+  modified_overflow?: number;
+  deleted_overflow?: number;
+};
+
 export type MissionArtifacts = {
   recorded: boolean;
   repo?: string;
@@ -49,6 +62,9 @@ export type MissionArtifacts = {
   added_overflow?: number;
   modified_overflow?: number;
   deleted_overflow?: number;
+  // Multi-repo missions: the same derived diff per recorded repository, keyed by the
+  // mission's repo name. Identical relative paths across repos stay unambiguous.
+  repos?: Record<string, RepoArtifacts>;
 };
 
 export type RepoWorkspace = {
@@ -303,18 +319,20 @@ export const reportIssue = (issue: {
 
 // Raw artifact fetch (image/markdown bytes) for inline preview - same header token as api(),
 // returned as an object URL the caller must revoke.
-export async function getArtifactFileUrl(mission: string, path: string): Promise<string> {
+export async function getArtifactFileUrl(mission: string, path: string, repo?: string): Promise<string> {
   const token = new URLSearchParams(window.location.search).get("token") ?? "";
-  const res = await fetch(`/api/mission-artifact/${mission}?path=${encodeURIComponent(path)}`, {
+  const repoQ = repo ? `&repo=${encodeURIComponent(repo)}` : "";
+  const res = await fetch(`/api/mission-artifact/${mission}?path=${encodeURIComponent(path)}${repoQ}`, {
     headers: { "X-Skye-Token": token },
   });
   if (!res.ok) throw new Error(`artifact preview failed (${res.status})`);
   return URL.createObjectURL(await res.blob());
 }
 
-export async function getArtifactText(mission: string, path: string): Promise<string> {
+export async function getArtifactText(mission: string, path: string, repo?: string): Promise<string> {
   const token = new URLSearchParams(window.location.search).get("token") ?? "";
-  const res = await fetch(`/api/mission-artifact/${mission}?path=${encodeURIComponent(path)}`, {
+  const repoQ = repo ? `&repo=${encodeURIComponent(repo)}` : "";
+  const res = await fetch(`/api/mission-artifact/${mission}?path=${encodeURIComponent(path)}${repoQ}`, {
     headers: { "X-Skye-Token": token },
   });
   if (!res.ok) throw new Error(`artifact preview failed (${res.status})`);
