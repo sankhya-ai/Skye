@@ -2,7 +2,7 @@
 // is the owner's explicit go on an APPROVED item, creating a planner mission under its
 // project. Provenance is shown in product terms (which project, from work or from an error
 // signal) - raw ids stay in the API, not on the surface.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   decideFeature,
   reworkFeature,
@@ -14,6 +14,7 @@ import {
   getProjects,
   startFeature,
   type FeatureRow,
+  type ThreadEntry,
   type IssueRow,
   type MissionRow,
   type Project,
@@ -68,6 +69,78 @@ const KIND_LABEL: Record<string, string> = {
   "user-report": "a user report",
   "test-failure": "a failing check",
 };
+
+// Thread kinds read as product words, never raw record tags. Folded team-line entries
+// carry their discussion kind as a "[kind] " body prefix (the recorded data) - it is
+// parsed here for display so the surface shows a readable label instead of the tag.
+const THREAD_KIND_LABEL: Record<string, string> = {
+  evidence: "evidence",
+  verdict: "verdict",
+  status: "status",
+  discussion: "team line",
+};
+const FOLDED_KIND_LABEL: Record<string, string> = {
+  note: "note",
+  "contract-change": "plan change",
+  ack: "ack",
+};
+
+function threadLabel(entry: ThreadEntry): { label: string | null; body: string } {
+  let body = entry.body;
+  let label = THREAD_KIND_LABEL[entry.kind] ?? null;
+  const folded = entry.kind === "discussion" ? body.match(/^\[([a-z-]+)\]\s*/) : null;
+  if (folded) {
+    label = `team line - ${FOLDED_KIND_LABEL[folded[1]] ?? folded[1]}`;
+    body = body.slice(folded[0].length);
+  }
+  return { label, body };
+}
+
+function threadTime(ts: number): string {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// Chronological history, oldest first. A clipped list must say so: the hint below the
+// scroll area stays until the reader reaches the newest entry.
+function ThreadList({ thread }: { thread: ThreadEntry[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [moreBelow, setMoreBelow] = useState(false);
+  const check = useCallback(() => {
+    const el = ref.current;
+    if (el) setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+  }, []);
+  useEffect(() => {
+    check();
+  }, [thread.length, check]);
+  return (
+    <div className="mt-1">
+      <div
+        ref={ref}
+        onScroll={check}
+        className="max-h-40 space-y-1 overflow-y-auto text-xs text-muted-foreground"
+      >
+        {thread.map((entry, i) => {
+          const { label, body } = threadLabel(entry);
+          return (
+            <p key={i}>
+              <span className="text-foreground/80">{entry.actor}</span>
+              {label ? <span className="text-muted-foreground/60"> · {label}</span> : null}
+              <span className="text-muted-foreground/50"> · {threadTime(entry.ts)}</span>
+              {" - "}
+              {body}
+            </p>
+          );
+        })}
+      </div>
+      {moreBelow ? (
+        <p className="mt-0.5 text-[11px] text-muted-foreground/60">
+          more history below - scroll
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export function BacklogView() {
   const [features, setFeatures] = useState<FeatureRow[]>([]);
@@ -211,15 +284,7 @@ export function BacklogView() {
                       <summary className="cursor-pointer text-xs text-muted-foreground/70 hover:text-foreground">
                         Thread ({f.thread.length})
                       </summary>
-                      <div className="mt-1 max-h-40 space-y-1 overflow-auto text-xs text-muted-foreground">
-                        {[...f.thread].reverse().map((entry, i) => (
-                          <p key={i}>
-                            <span className="text-foreground/80">{entry.actor}</span>
-                            {" · "}
-                            {entry.body}
-                          </p>
-                        ))}
-                      </div>
+                      <ThreadList thread={f.thread} />
                     </details>
                   ) : null}
                   {f.verification?.journey_changed ? (
