@@ -5,6 +5,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
 import { getPolicy, savePolicy } from "../api";
+import { humanError } from "../lib";
 
 type Rule = { adapter: string; role: string };
 const ADAPTERS = ["root", "claude-code", "codex"];
@@ -38,7 +39,7 @@ export function SettingsView() {
       setAdvanced(JSON.stringify(data, null, 2));
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, "policy"));
     }
   }, []);
 
@@ -60,19 +61,26 @@ export function SettingsView() {
       await savePolicy(policy);
       setMessage("Saved - the next dispatch runs under this policy.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, "policy"));
     }
   };
 
   const saveAdvanced = async () => {
     setMessage(null);
     setError(null);
+    let parsed: Record<string, unknown>;
     try {
-      await savePolicy(JSON.parse(advanced || "{}"));
+      parsed = JSON.parse(advanced || "{}");
+    } catch {
+      setError("That isn't valid JSON - check the syntax and try again.");
+      return;
+    }
+    try {
+      await savePolicy(parsed);
       setMessage("Saved - the next dispatch runs under this policy.");
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, "policy"));
     }
   };
 

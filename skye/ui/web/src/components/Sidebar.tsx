@@ -73,9 +73,12 @@ function chatStatus(mission: MissionRow): string {
       return "not started";
     case "running":
       return "in progress";
-    default:
-      // failed, gate-failed, anything else terminal-but-not-done
+    case "failed":
+    case "gate-failed":
       return "failed";
+    default:
+      // An unrecognized status is unknown, not a failure.
+      return "unknown";
   }
 }
 
@@ -131,7 +134,7 @@ export function Sidebar({
     .slice(0, 8);
 
   return (
-    <aside className="fixed top-2 bottom-2 left-2 z-10 flex w-60 flex-col overflow-hidden rounded-md border border-border/60 glass-panel pt-[3px]">
+    <aside className="fixed top-2 bottom-2 left-2 z-10 flex w-60 flex-col overflow-hidden rounded-md border border-border/60 glass-panel pt-[3px] max-sm:static max-sm:m-2 max-sm:w-auto">
       <p className="px-3 pt-2 pb-1 text-sm font-semibold tracking-tight">Skye</p>
       <nav className="space-y-0.5">
         {NAV.map((item) => (

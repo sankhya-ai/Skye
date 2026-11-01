@@ -4,6 +4,7 @@ import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/Button";
 import { createRole, getRoles, type RoleRow } from "../api";
+import { humanError } from "../lib";
 import { Badge } from "./ui/Badge";
 
 export function AgentsView() {
@@ -20,7 +21,7 @@ export function AgentsView() {
       setRoles((await getRoles()).roles);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, "roles"));
     }
   }, []);
 
@@ -43,7 +44,7 @@ export function AgentsView() {
       setDescription("");
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, "role"));
     }
   };
 

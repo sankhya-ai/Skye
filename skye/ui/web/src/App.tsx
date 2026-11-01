@@ -99,7 +99,7 @@ export default function App() {
         missionsOk={missionsOk}
         onProjectsChanged={() => void refresh()}
       />
-      <main className="min-w-0 pl-64">
+      <main className="min-w-0 pl-64 max-sm:pl-0">
       {unreachable ? (
         <p className="mx-6 mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-foreground">
           Can't reach the local server. Retrying in the background.

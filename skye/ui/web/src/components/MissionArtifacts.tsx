@@ -152,11 +152,13 @@ export function MissionArtifactsPanel({ missionId, artifacts }: {
     );
   }
   if (!artifacts.complete) {
+    // The end-of-mission file manifest is only recorded when the mission completes;
+    // interrupted or in-flight work may have changed files we cannot see yet.
     return (
       <div className="rounded-md border border-border bg-card p-4">
         <h3 className="text-sm font-medium text-foreground">Changed files</h3>
         <p className="mt-2 text-xs text-muted-foreground">
-          No changes yet.
+          No recorded changes - the final file record is written when the mission finishes.
         </p>
       </div>
     );

@@ -219,6 +219,29 @@ with sync_playwright() as pw:
                 print("MARKDOWN preview rendered:", "PASS" if rendered else "FAIL",
                       "| link not navigable:", "PASS" if not link_nav else "FAIL")
                 page.screenshot(path=str(out_dir / "ui-artifact-markdown.png"), full_page=True)
+
+            # sidebar layout: full-page captures misplace fixed elements, so verify with
+            # real viewport shots - pinned at top before and after scrolling
+            vpage = page
+            vpage.screenshot(path=str(out_dir / "ui-viewport-top.png"))
+            vpage.evaluate("window.scrollTo(0, 600)")
+            vpage.wait_for_timeout(400)
+            vpage.screenshot(path=str(out_dir / "ui-viewport-scrolled.png"))
+            aside_top = vpage.evaluate(
+                "document.querySelector('aside').getBoundingClientRect().top")
+            print("SIDEBAR pinned while scrolled:", "PASS" if aside_top < 20 else f"FAIL top={aside_top}")
+            vpage.evaluate("window.scrollTo(0, 0)")
+
+            # narrow viewport: the product must still fit a small window
+            nctx = browser.new_context(viewport={"width": 430, "height": 800})
+            npage = nctx.new_page()
+            npage.goto(ui_url + "#/missions")
+            npage.wait_for_timeout(2500)
+            npage.screenshot(path=str(out_dir / "ui-narrow-missions.png"))
+            overlap = npage.evaluate(
+                "document.querySelector('main').getBoundingClientRect().left")
+            print("NARROW main starts after sidebar:", "INFO left=", overlap)
+            nctx.close()
             # approval states: the codex-adapter mission paused at the policy gate
             page.goto(ui_url + f"#/mission/{approval_mission}")
             page.wait_for_timeout(3000)
