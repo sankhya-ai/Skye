@@ -6,15 +6,17 @@ whose pid is gone is stale (the process crashed or was killed) and is cleaned up
 dispatch never holds a slot forever. Records survive the process, which is what makes the cap
 work across separate CLI invocations; liveness comes from the pid, not from the file existing.
 
-This is a cooperative bookkeeping limit, not a scheduler and not a lock: two dispatches started
-in the same instant can both pass the check before either registers (check-then-act), so the cap
-can be exceeded by a race; it cannot be exceeded by dispatches that start after peers registered.
-There is still no queue: a dispatch that arrives while the cap is full comes back needs-owner,
-and the owner retries or raises the cap.
+The acquire-and-count is serialized with an flock'd lock file, so two dispatches started in the
+same instant cannot both pass the check: the second one counts the first's already-registered
+slot. This closes the check-then-act race for processes on this machine sharing the state dir
+(flock is per-filesystem; it is not a distributed lock, and there is still no queue). A dispatch
+that arrives while the cap is full comes back needs-owner, and the owner retries or raises the
+cap.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import time
@@ -49,6 +51,19 @@ class Registry:
             "pid": os.getpid(), "started": time.time(), "fingerprint": fingerprint,
             "goal": contract.get("goal", "")[:120], "role": contract.get("role", ""),
             "adapter": contract.get("adapter", "")}) + "\n", "utf-8")
+
+    def acquire_and_count(self, contract: dict[str, Any], fingerprint: str) -> int:
+        """Register this dispatch and count the OTHER live dispatches, atomically under an flock:
+        no two dispatches can interleave registration and counting, so the cap check the caller
+        makes with this number actually holds. Returns the number of other live dispatches."""
+        lock_path = self.dir.parent / "running.lock"
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                self.acquire(contract, fingerprint)
+                return len(self.others())
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def release(self) -> None:
         try:

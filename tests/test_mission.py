@@ -141,7 +141,7 @@ def test_a_step_needing_the_owner_pauses_the_mission_until_approved(tmp_path):
 
 # ----- crash recovery -----
 
-def test_a_settled_step_is_never_rerun_after_a_crash(tmp_path):
+def test_an_interrupted_cli_step_pauses_for_an_operator_decision(tmp_path):
     path = _mission_file(tmp_path, _steps())
     mission = load_mission(path)
     state = tmp_path / "st"
@@ -157,14 +157,19 @@ def test_a_settled_step_is_never_rerun_after_a_crash(tmp_path):
         seen.append(spec["role"])
         return Result(ok=True, output=f"{spec['role']} fresh output")
 
+    # No blind repeat: claude-code cannot reattach, and partial effects from the interrupted
+    # attempt are the operator's call - the mission STOPS until they choose.
+    paused = run_mission(mission, _policy(), runner=runner,
+                         bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=state)
+    assert paused.status == "interrupted" and seen == [] and "dev" in paused.reason
+    # The explicit decision: re-run exactly that step; pm is still never re-run.
     outcome = run_mission(mission, _policy(), runner=runner,
-                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=state)
+                          bridge=FileBridge(tmp_path / "events.jsonl"), state_dir=state,
+                          redispatch="dev")
     assert outcome.status == "done"
-    assert seen == ["developer", "tester"]  # pm was NOT re-run
-    # The dev brief carries pm's RECORDED output, and the journal owns up to the re-dispatch.
-    assert "pm settled output" in outcome.steps["dev"]["output"] or True  # brief checked below
+    assert seen == ["developer", "tester"]
     kinds = [e["event"] for e in journal.entries()]
-    assert "redispatch" in kinds  # claude-code has no reattach; the journal says so honestly
+    assert "redispatch" in kinds  # journaled as an operator-chosen re-run, not silent recovery
 
 
 def test_handoff_uses_recorded_outcomes_on_resume(tmp_path):

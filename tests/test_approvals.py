@@ -158,3 +158,16 @@ def test_resume_job_id_is_rejected_for_non_root_adapters(tmp_path):
                                "test_command": "true"}),
                        resume_job_id="j1")
     assert outcome.status == "failed" and "reattach" in outcome.reason
+
+
+def test_acquire_and_count_is_atomic_across_registries(tmp_path):
+    # Two dispatches in the same state dir: the second must count the first's live slot - the
+    # flock'd acquire+count closes the check-then-act race that could exceed the cap.
+    first = Registry(tmp_path)
+    assert first.acquire_and_count(_contract(), "fp-1") == 0
+    second = Registry(tmp_path)
+    second.slot_id = "other-slot"
+    second.path = second.dir / "other-slot.json"
+    assert second.acquire_and_count(_contract(), "fp-2") == 1
+    first.release()
+    second.release()

@@ -61,10 +61,11 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
     fp = approvals.fingerprint(spec)
 
     registry = None
+    live = int(running or 0)
     if state_dir is not None:
         try:
             registry = Registry(state_dir)
-            registry.acquire(spec, fp)
+            live = registry.acquire_and_count(spec, fp)  # atomic: the cap check below holds
         except OSError as error:
             # The cap cannot be counted without the registry: say so, and fall back to the count
             # we were given rather than pretending the cap was checked.
@@ -72,7 +73,6 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
                                                 "concurrency cap falls back to the caller's count")
             registry = None
     try:
-        live = len(registry.others()) if registry is not None else int(running or 0)
         blocked_kind, blocked = policy.check(spec, running=live)
         approved = None
         if blocked_kind == "rule":

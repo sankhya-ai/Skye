@@ -17,7 +17,7 @@ workers, which you already pay for.
 
 ## What is real today (honest state)
 
-The supported working slice, all covered by tests in `tests/` (63 tests):
+The supported working slice, all covered by tests in `tests/` (64 tests):
 
 - **Contract -> policy -> gateway -> worker -> gates, for real.** With adapter `root`, Skye drives
   the vendored Root through its real owner HTTP API: the adapter authenticates with Root's local

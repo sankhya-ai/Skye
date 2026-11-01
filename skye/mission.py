@@ -22,9 +22,11 @@ BEFORE it is relied on, so a crash mid-mission is recoverable:
 - dynamically accepted steps are rebuilt from the journal on resume, in acceptance order;
 - a step dispatched but never settled was interrupted. For the Root adapter the journal holds the
   Root job id, and resume REATTACHES to that job (polls it) instead of starting a duplicate. For
-  the CLI adapters (claude-code/codex) no reattach exists - resume re-dispatches the step, the
-  journal says so honestly, and partial effects in the repo from the interrupted attempt are the
-  operator's to inspect (the step's worker may repeat work; nothing hides that);
+  the CLI adapters (claude-code/codex) no reattach exists, and the interrupted attempt may have
+  left partial external effects (half-edited files, side effects) that blindly repeating would
+  compound - so resume STOPS there with status "interrupted" and waits for an explicit operator
+  decision: `skye mission redispatch <file> --step <id>` (re-run that step, journaled as an
+  operator-chosen redispatch) or `skye mission reset` (start clean);
 - a mission stops at needs-owner exactly like a single dispatch, writing the pending step contract
   for `skye approve`; `skye mission run` again resumes after the approval.
 
@@ -243,7 +245,11 @@ def _step_contract(mission: dict[str, Any], step: dict[str, Any],
 def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner=None,
                 bridge=None, state_dir: str | Path | None = None,
                 approvals_path: str | Path | None = None,
-                catalogues_dir: str = "catalogues") -> MissionOutcome:
+                catalogues_dir: str = "catalogues",
+                redispatch: str | None = None) -> MissionOutcome:
+    """``redispatch`` names an interrupted step the OPERATOR explicitly chose to re-run
+    (skye mission redispatch <file> --step <id>). Without it, an interrupted step that cannot
+    reattach pauses the mission instead of blindly repeating work with unknown partial effects."""
     """Run or resume a mission. The journal decides what already happened; settled-done steps are
     skipped with their recorded outcomes carried into later briefs."""
     policy = policy or Policy.load()
@@ -300,9 +306,21 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             if step["adapter"] == "root" and prior_job:
                 resume_job_id = prior_job  # reattach: poll the existing Root job, never duplicate it
                 journal.append(step_id, "reattached", worker_job=prior_job)
-            else:
+            elif redispatch == step_id:
                 journal.append(step_id, "redispatch",
-                               reason="previous attempt interrupted before settling; no reattach for this adapter")
+                               reason="operator explicitly re-runs the interrupted step")
+            else:
+                # No reattach possible and no operator decision: STOP. The interrupted attempt
+                # may have left partial external effects; silently repeating the step could
+                # compound them. The operator inspects and chooses: redispatch or reset.
+                reason = (f"step '{step_id}' was interrupted before settling and cannot be "
+                          f"reattached ({step['adapter']} jobs are not resumable). Inspect the "
+                          f"repo for partial effects, then choose: `skye mission redispatch "
+                          f"<file> --step {step_id}` to re-run exactly this step, or "
+                          f"`skye mission reset <file>` to start clean.")
+                emit(events.make_event("mission", {}, status="interrupted", reason=reason, **context))
+                return MissionOutcome(status="interrupted", mission_id=mission["id"],
+                                      reason=reason, steps=outcomes)
         journal.append(step_id, "dispatched", fingerprint=fingerprint(contract))
         emit(events.make_event("mission-step", contract, status="dispatched", **context))
         job_observer = lambda job_id, _s=step_id: journal.append(_s, "worker-job", worker_job=job_id)
