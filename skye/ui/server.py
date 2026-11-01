@@ -20,6 +20,7 @@ import os
 import secrets
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -692,7 +693,14 @@ def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = 
     with _live_lock:
         if _live_missions.get(mission_id, {}).get("running"):
             raise MissionError(f"mission {mission_id} is already running")
-        _live_missions[mission_id] = {"running": True, "started": time.time(), "error": None}
+        # Identity of THIS run (actual writer process + per-run token): the follow-up
+        # handler stamps it on intents/markers; the engine stamps it on dispatched and
+        # worker-progress records. A provider ack resolves a follow-up only when the
+        # identities match - a delayed same-text ack from a PRIOR run's process, landing
+        # after the current intent, can never release the current claim.
+        run_instance = f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
+        _live_missions[mission_id] = {"running": True, "started": time.time(),
+                                      "error": None, "run_instance": run_instance}
 
     def _run() -> None:
         try:
@@ -703,7 +711,7 @@ def resume_in_thread(state_dir: Path, mission_id: str, redispatch: str | None = 
             run_mission(mission, policy=Policy.load(policy_path_default()),
                         state_dir=state_dir, approvals_path=approvals_path_for(state_dir),
                         redispatch=redispatch, redispatch_fresh=redispatch_fresh,
-                        clear_cancel=True, runner=RUNNER)
+                        clear_cancel=True, runner=RUNNER, run_instance=run_instance)
         except Exception as exc:  # surfaced via GET /api/missions/<id> -> live.error
             with _live_lock:
                 _live_missions[mission_id]["error"] = str(exc)
@@ -1182,10 +1190,13 @@ class UiHandler(BaseHTTPRequestHandler):
                     if step_status is None:
                         return self._json({"error": f"unknown step '{step}'"}, 404)
                     with _live_lock:
-                        running = _live_missions.get(mission_id, {}).get("running")
+                        _live = _live_missions.get(mission_id, {})
+                        running = _live.get("running")
+                        run_instance = _live.get("run_instance")
                     if running:
                         from ..adapters import base as _adapter_base
                         from ..mission import Journal as _Journal
+                        from ..mission import _same_run_instance
                         import uuid as _uuid
                         journal = _Journal(mission_dir / "journal.jsonl")
                         # Durable intent BEFORE the write: if this server dies after
@@ -1284,7 +1295,13 @@ class UiHandler(BaseHTTPRequestHandler):
                                                     "steer-ack", "steer-rejected",
                                                     "steer-unapplied")
                                                 and str(e.get("text") or "")[:300]
-                                                == intent_text):
+                                                == intent_text
+                                                and _same_run_instance(
+                                                    entries_all[intent_pos], e)):
+                                            # SAME generation only: a delayed
+                                            # same-text ack from a prior run's
+                                            # process (or a legacy record with no
+                                            # stamped identity) never resolves.
                                             resolved = True
                                             break
                                     if resolved:
@@ -1342,6 +1359,7 @@ class UiHandler(BaseHTTPRequestHandler):
                                     and a.get("kind") in ("steer-ack", "steer-rejected",
                                                           "steer-unapplied")
                                     and str(a.get("text") or "")[:300] == text0
+                                    and _same_run_instance(e, a)
                                     for a in generation)
                                 if not receipt:
                                     return self._json(
@@ -1362,6 +1380,7 @@ class UiHandler(BaseHTTPRequestHandler):
                                         {"follow_id": follow_id,
                                          "owner_pid": os.getpid(),
                                          "run_key": run_key,
+                                         "run_instance": run_instance,
                                          "created": time.time()}))
                             except FileExistsError:
                                 # another process won the race between check and claim
@@ -1381,7 +1400,8 @@ class UiHandler(BaseHTTPRequestHandler):
                                          "preserved_text": text}, 409)
                                 journal.append(step, "follow-up", follow_id=follow_id,
                                                text=text[:500],
-                                               delivery="steered-live", state="intent")
+                                               delivery="steered-live", state="intent",
+                                               run_instance=run_instance)
                                 intent_journaled = True
                                 if not _marker_owned(marker, follow_id):
                                     # Stolen after the intent landed: do NOT submit.

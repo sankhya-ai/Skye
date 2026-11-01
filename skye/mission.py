@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -404,8 +405,22 @@ def _step_contract(mission: dict[str, Any], step: dict[str, Any],
     return validate(contract)
 
 
+def _same_run_instance(intent: dict[str, Any], event: dict[str, Any]) -> bool:
+    """A provider receipt only counts for a follow-up steered into the SAME run
+    instance: every engine run mints a process identity (pid + per-run token),
+    stamped on its dispatched/worker-progress records and on the follow-up intents
+    and steer markers written while it is live. Position in the journal bounds a
+    receipt by NEWER dispatches, but cannot reject a delayed event from an OLDER
+    process that lands after the current intent - only matching identity does.
+    A legacy record with no stamped identity can never prove its generation:
+    fail closed (no resolution)."""
+    token = intent.get("run_instance")
+    return bool(token) and event.get("run_instance") == token
+
+
 def _progress_journaler(journal: "Journal", emit, context: dict[str, Any],
-                        step_id: str, contract: dict[str, Any]):
+                        step_id: str, contract: dict[str, Any],
+                        run_instance: str | None = None):
     """The streaming seam: adapter stream events land in the journal (bounded text) and on
     the live event bridge as they arrive - the UI's progress view reads both."""
     def on_progress(event: dict[str, Any]) -> None:
@@ -419,6 +434,8 @@ def _progress_journaler(journal: "Journal", emit, context: dict[str, Any],
             fields["text"] = str(event.get("name", ""))[:120]
         else:
             return  # session/result bookkeeping rides worker-session, not progress
+        if run_instance:
+            fields["run_instance"] = run_instance
         journal.append(step_id, "worker-progress", **fields)
         emit(events.make_event("worker-progress", contract, stream_kind=fields["kind"],
                                text=fields.get("text", ""),
@@ -453,7 +470,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 approvals_path: str | Path | None = None,
                 catalogues_dir: str = "catalogues",
                 redispatch: str | None = None, redispatch_fresh: bool = False,
-                clear_cancel: bool = False) -> MissionOutcome:
+                clear_cancel: bool = False,
+                run_instance: str | None = None) -> MissionOutcome:
     """``redispatch`` names an interrupted step the OPERATOR explicitly chose to re-run
     (skye mission redispatch <file> --step <id>). Without it, an interrupted step that cannot
     reattach pauses the mission instead of blindly repeating work with unknown partial effects."""
@@ -463,6 +481,11 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     endpoints and the CLI pass it); any other caller finds the cancel marker still standing
     and pauses needs-owner instead of silently overriding the operator's stop."""
     policy = policy or Policy.load()
+    # Identity of THIS engine run (actual writer process + a per-run token): every
+    # dispatched and worker-progress record this run journals carries it, and the
+    # server stamps it on the follow-up intents/markers it writes while this run is
+    # live, so a provider ack can only resolve a follow-up from the same generation.
+    run_instance = run_instance or f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
     state_dir = Path(state_dir or default_state_dir())
     mission_dir = state_dir / "missions" / mission["id"]
     mission_dir.mkdir(parents=True, exist_ok=True)
@@ -658,12 +681,14 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                     continue
                 kind = e.get("kind")
                 if kind == "steer-ack" and pos not in _used_receipts \
-                        and str(e.get("text") or "")[:300] == text:
+                        and str(e.get("text") or "")[:300] == text \
+                        and _same_run_instance(entry, e):
                     receipt = pos
                     break
                 if kind in ("steer-rejected", "steer-unapplied") \
                         and pos not in _used_receipts \
-                        and str(e.get("text") or "")[:300] == text:
+                        and str(e.get("text") or "")[:300] == text \
+                        and _same_run_instance(entry, e):
                     negative = kind
                     _used_receipts.add(pos)
                     break
@@ -759,13 +784,15 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             recorded = sessions.get(target)
             if recorded:
                 contract["resume_session_id"] = recorded["session_id"]
-            journal.append(target, "dispatched", fingerprint=fingerprint(contract))
+            journal.append(target, "dispatched", fingerprint=fingerprint(contract),
+                           run_instance=run_instance)
             outcome = dispatch(contract, policy, runner=runner, bridge=bridge,
                                state_dir=state_dir, approvals_path=approvals_path,
                                catalogues_dir=catalogues_dir,
                                event_context=dict(context, step=target),
                                on_progress=_progress_journaler(journal, emit, context,
-                                                               target, contract))
+                                                               target, contract,
+                                                               run_instance=run_instance))
             if outcome.session_id:
                 journal.append(target, "worker-session", adapter=step["adapter"],
                                session_id=outcome.session_id,
@@ -1015,7 +1042,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             contracts[step_id] = _step_contract(
                 mission, step, outcomes, discussion_tail=discussion_tail,
                 unacked=[c for c in unacked if step["role"] in (c.get("waiting_on") or [])])
-            journal.append(step_id, "dispatched", fingerprint=fingerprint(contracts[step_id]))
+            journal.append(step_id, "dispatched", fingerprint=fingerprint(contracts[step_id]),
+                           run_instance=run_instance)
             emit(events.make_event("mission-step", contracts[step_id], status="dispatched", **context))
 
         def _run_one(step: dict[str, Any]) -> Outcome:
@@ -1034,7 +1062,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 resume_job_id=resume_jobs.get(step_id) or None, job_observer=job_observer,
                 event_context=dict(context, step=step_id),
                 on_progress=_progress_journaler(journal, emit, context, step_id,
-                                                contracts[step_id]))
+                                                contracts[step_id],
+                                                run_instance=run_instance))
 
         # Wave width is bounded by BOTH the conservative module cap and the owner's policy:
         # policy.max_concurrent (default 1) is the team-wide concurrency the owner actually
