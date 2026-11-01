@@ -313,11 +313,21 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 # No reattach possible and no operator decision: STOP. The interrupted attempt
                 # may have left partial external effects; silently repeating the step could
                 # compound them. The operator inspects and chooses: redispatch or reset.
+                orphan = ""
+                if step["adapter"] == "root":
+                    # Crash window: POST accepted before the job id reached the journal leaves an
+                    # orphan Root job server-side. Reattach needs the id, so point the operator at
+                    # Root's own job records instead of guessing a match ourselves.
+                    orphan = (f" A Root job may have been submitted just before the crash without "
+                              f"its id reaching the journal (dispatched at "
+                              f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(state.get('ts') or 0))}); "
+                              f"check Root's job records under the Root home's jobs/ directory "
+                              f"for that orphan before re-running.")
                 reason = (f"step '{step_id}' was interrupted before settling and cannot be "
-                          f"reattached ({step['adapter']} jobs are not resumable). Inspect the "
-                          f"repo for partial effects, then choose: `skye mission redispatch "
-                          f"<file> --step {step_id}` to re-run exactly this step, or "
-                          f"`skye mission reset <file>` to start clean.")
+                          f"reattached ({step['adapter']} jobs are not resumable without a "
+                          f"journaled job id).{orphan} Inspect for partial effects, then choose: "
+                          f"`skye mission redispatch <file> --step {step_id}` to re-run exactly "
+                          f"this step, or `skye mission reset <file>` to start clean.")
                 emit(events.make_event("mission", {}, status="interrupted", reason=reason, **context))
                 return MissionOutcome(status="interrupted", mission_id=mission["id"],
                                       reason=reason, steps=outcomes)
