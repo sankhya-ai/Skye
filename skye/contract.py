@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-ROLES = ("developer", "reviewer", "designer", "artist", "pm", "tester", "explorer", "devops")
+ROLES = ("developer", "senior-dev", "backend-dev", "frontend-dev", "reviewer", "designer",
+         "artist", "pm", "tester", "explorer", "devops")
 ADAPTERS = ("root", "claude-code", "codex")
 GATES = ("tests", "review", "journey")
 
@@ -49,6 +50,29 @@ def validate(contract: dict[str, Any]) -> dict[str, Any]:
         raise ContractError(f"gates must be a list within {', '.join(GATES)}")
     out["gates"] = gates
     out["branch"] = str(out.get("branch") or "").strip()
+    # Write claims: the repo-relative paths/prefixes this job expects to WRITE. The mission
+    # scheduler will not run two steps with intersecting claims concurrently - the real
+    # interference guard for parallel waves. Claims are declarations, not enforcement on the
+    # worker (the tool catalogue scopes that); they exist so the scheduler can serialize
+    # colliding work instead of letting two agents edit the same file at once.
+    claims = out.get("claims") or []
+    if not isinstance(claims, list) or any(not isinstance(c, str) for c in claims):
+        raise ContractError("claims must be a list of repo-relative path prefixes")
+    if len(claims) > 64:
+        raise ContractError("claims are bounded at 64 entries")
+    normalized = []
+    for claim in claims:
+        raw = claim.strip().replace("\\", "/")
+        # Reject escape attempts BEFORE trimming: "../x" must fail, never become "x".
+        if raw.startswith("/") or ".." in [seg for seg in raw.split("/")]:
+            raise ContractError(f"claim must stay inside the repo, got {claim!r}")
+        clean = raw.lstrip("./").rstrip("/")
+        if not clean:
+            raise ContractError(f"claim must name a path inside the repo, got {claim!r}")
+        if len(clean) > 200:
+            raise ContractError(f"claim is too long ({len(clean)} > 200 chars)")
+        normalized.append(clean)
+    out["claims"] = normalized
     out["brief"] = str(out.get("brief") or "").strip()  # the worker's small, self-contained brief
     # Owner-authored role instructions (registry "instructions" field) snapshot into the
     # contract at VALIDATION time as their own field: the text the owner reviews and approves
@@ -104,3 +128,14 @@ def load(path: str | Path) -> dict[str, Any]:
     except (OSError, ValueError) as error:
         raise ContractError(f"cannot read the job contract: {error}") from error
     return validate(raw)
+
+
+def claims_conflict(first: list[str], second: list[str]) -> tuple[str, str] | None:
+    """The first intersecting claim pair between two claim sets, or None. Prefix semantics:
+    "src/api" conflicts with "src/api/routes.py" and with "src/api", not with "src/web".
+    A segment boundary is required - "src/api" does not claim "src/apis"."""
+    for a in first:
+        for b in second:
+            if a == b or a.startswith(b + "/") or b.startswith(a + "/"):
+                return (a, b)
+    return None

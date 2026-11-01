@@ -40,6 +40,49 @@ The supported working slice, all covered by tests in `tests/` (64 tests):
   a local `events.jsonl`, never silently dropped; a dead line sink never loses an event or kills
   a dispatch. The Root owner token authenticates the adapter host-side only - it never appears in
   worker output, events, or errors (tested).
+- **Reusable agent definitions with explicit tool catalogues.** A role name is a badge; an
+  agent DEFINITION (`skye/agents.py`) is the capability: versioned instructions plus an explicit
+  tool catalogue, resolved from one registry at dispatch and snapshotted into the contract
+  (approval-fingerprint-covered) instead of being re-synthesized per brief - that removes
+  repeated role synthesis, it does not make context free. The shipped standard team
+  (developer, senior-dev, backend-dev, frontend-dev, reviewer, designer, artist, pm, tester,
+  explorer, devops) carries real instructions and gateway catalogues; owner registry entries
+  refine builtins or compose with `extends`. A worker may propose new specialists at run time
+  ({"propose_agents": [...]}); proposals validate like contracts (known tool universe, bounded
+  instructions, resolvable extends), land as status "proposed" - invisible to contracts until
+  the owner runs `skye agents promote <name>`. Defining a capability stays the owner's call.
+- **The team line: agents talking to each other during the work.** Each mission has an
+  append-only discussion channel (`skye/discuss.py`, flock-serialized across worker processes,
+  fsync'd): broadcasts, questions, and contract-change notices with required acks
+  (seen/adapting/object in the note, the ack on the record). Delivery is honestly tiered: the
+  tail and role-addressed unacked changes fold into the NEXT steps' briefs (guaranteed);
+  running workers poll `skye hear <mission> --since <cursor>` when they choose (briefs carry
+  the exact say/hear/ack commands); and with SKYE_LINE_INVITE configured, posts ride the
+  existing Chamber line bridge as sealed messages for realtime cross-process visibility. No
+  push into an already-running CLI worker exists - Claude Code/Codex cannot receive mid-run -
+  and nothing here claims otherwise. When a mission settles, its discussion folds into the
+  linked ticket's thread so the conversation outlives the run.
+- **Write claims: parallel work that cannot collide.** Contracts declare the repo paths they
+  expect to write ("claims"); the mission scheduler never co-dispatches steps with
+  intersecting claims (journaled claim-held, retried after the holder settles), and the
+  dispatcher re-checks under the running-registry flock at acquire time, closing the
+  cross-process check-then-dispatch race. Claims are a cooperative scheduling guard - they
+  serialize declared write overlap; the tool catalogue, not claims, scopes what a worker can
+  touch, and neither is an OS security boundary. Undeclared writes are outside the guard.
+- **Review send-backs: the repair loop inside a mission.** The reviewer's verdict vocabulary
+  gains {"verdict": "request-changes", "feedback": [...]}: the implementation step re-runs
+  with the feedback folded into its brief and is re-reviewed, bounded by max_review_rounds
+  (mission or policy, default 2, max 8), every round journaled (crash-safe: the journal
+  re-seeds the feedback on resume). Exhausted rounds and block verdicts fail exactly as before.
+- **Persistent team tickets with labels and a real reopen.** Backlog records are now tickets:
+  validated labels (type:bug, area:*, severity:*, owner words), a permanent thread (comments,
+  evidence, verdicts, status, folded discussion), and missions[] history. A PM bug report on
+  DELIVERED work (`skye backlog reopen <id> --evidence ... --label ...`, or
+  issues.report_for_feature) reopens the SAME ticket with evidence and labels - never a fresh
+  context-free one; the owner decides the repair (reopened -> approved) and the normal intake
+  starts the repair mission with the whole history attached. A bug on awaiting-verification
+  work sends it back; on queued work it attaches as evidence. `skye backlog pickup` lists
+  approved repairs not yet started - read-only; pickup never dispatches by itself.
 - **Persisted dynamic workflows (missions).** `skye mission run` executes a workflow of
   contracts with `needs` handoffs (each step's brief carries the recorded outcomes of the steps it
   depends on), `when` conditions (a step runs only if a referenced step settled a given way;

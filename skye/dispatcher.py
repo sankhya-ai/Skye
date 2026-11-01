@@ -26,7 +26,7 @@ from skye import journey
 
 @dataclass
 class Outcome:
-    status: str  # "done" | "needs-owner" | "failed" | "gate-failed"
+    status: str  # "done" | "needs-owner" | "failed" | "gate-failed" | "claim-held"
     contract: dict[str, Any]
     reason: str = ""
     worker_output: str = ""
@@ -66,7 +66,14 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
     if state_dir is not None:
         try:
             registry = Registry(state_dir)
-            live = registry.acquire_and_count(spec, fp)  # atomic: the cap check below holds
+            live, claim_conflict = registry.acquire_guarded(spec, fp)  # atomic under one flock
+            if claim_conflict is not None:
+                registry.release()
+                reason = (f"write claim '{claim_conflict[0]}' intersects "
+                          f"'{claim_conflict[1]}' held by running {claim_conflict[2]}; "
+                          "this dispatch is held, not run - retry after the holder settles")
+                emit("claim-held", spec, status="claim-held", reason=reason, fingerprint=fp)
+                return Outcome(status="claim-held", contract=spec, reason=reason, fingerprint=fp)
         except OSError as error:
             # The cap cannot be counted without the registry: say so, and fall back to the count
             # we were given rather than pretending the cap was checked.
@@ -209,6 +216,13 @@ def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, brid
             return {"gate": "review", "ok": False,
                     "detail": f"reviewer blocked the changes: {reasons or 'no reasons given'}",
                     "reviewer": tail}
+        if decision == "request-changes":
+            # The send-back: not a pass, not a hard fail. The gate does not open, and the
+            # MISSION layer decides whether the step gets another bounded round with this
+            # feedback (a redo edge, journaled) or the failure stands.
+            return {"gate": "review", "ok": False, "changes_requested": True,
+                    "detail": f"reviewer requested changes: {reasons or 'no feedback given'}",
+                    "feedback": reasons, "reviewer": tail}
         return {"gate": "review", "ok": False,
                 "detail": "the reviewer finished without a parseable verdict; the review gate "
                           "requires an explicit approve", "reviewer": tail}

@@ -21,6 +21,12 @@ class Policy:
         self.allow_unattended: list[dict[str, Any]] = list(data.get("allow_unattended") or [])
         self.test_command: str = str(data.get("test_command") or "")
         self.journey_command: str = str(data.get("journey_command") or "")
+        # Review-loop bound: how many times a reviewer may send a step back for changes inside
+        # one mission before the failure stands. Bounded, journaled, never a silent retry loop.
+        try:
+            self.max_review_rounds: int = min(8, max(0, int(data.get("max_review_rounds") or 2)))
+        except (TypeError, ValueError):
+            self.max_review_rounds = 2
         try:
             self.journey_timeout_seconds: int = max(1, int(data.get("journey_timeout_seconds") or 600))
         except (TypeError, ValueError):

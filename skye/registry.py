@@ -50,7 +50,11 @@ class Registry:
         self.path.write_text(json.dumps({
             "pid": os.getpid(), "started": time.time(), "fingerprint": fingerprint,
             "goal": contract.get("goal", "")[:120], "role": contract.get("role", ""),
-            "adapter": contract.get("adapter", "")}) + "\n", "utf-8")
+            "adapter": contract.get("adapter", ""),
+            # Write claims ride the slot record, so the mission scheduler can hold a step whose
+            # declared write-paths intersect a RUNNING dispatch - including one from another
+            # process or mission sharing this state dir.
+            "claims": list(contract.get("claims") or [])}) + "\n", "utf-8")
 
     def acquire_and_count(self, contract: dict[str, Any], fingerprint: str) -> int:
         """Register this dispatch and count the OTHER live dispatches, atomically under an flock:
@@ -62,6 +66,33 @@ class Registry:
             try:
                 self.acquire(contract, fingerprint)
                 return len(self.others())
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def acquire_guarded(self, contract: dict[str, Any], fingerprint: str
+                        ) -> tuple[int, tuple[str, str, str] | None]:
+        """Register this dispatch, count other live dispatches, AND check write-claim
+        intersection - all under the one flock, so no two processes can both pass the claims
+        check for colliding paths in the same instant (the check-then-act race the scheduler's
+        pre-filter cannot close across processes). Returns (other live count, conflict) where
+        conflict is (our claim, their claim, holder description) or None. On a conflict the
+        caller MUST release() and not run - the slot record is removed."""
+        from .contract import claims_conflict
+        lock_path = self.dir.parent / "running.lock"
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                claims = list(contract.get("claims") or [])
+                others = self.others()
+                if claims:
+                    for record in others:
+                        hit = claims_conflict(claims, list(record.get("claims") or []))
+                        if hit:
+                            return (len(others),
+                                    (hit[0], hit[1],
+                                     f"{record.get('role', '?')} ({record.get('goal', '')[:60]})"))
+                self.acquire(contract, fingerprint)
+                return (len(others), None)
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 

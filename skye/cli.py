@@ -10,6 +10,16 @@
   skye mission check <file>      validate a mission file
   skye mission reset <file>      archive the journal so the mission starts clean
   skye ui [--port 8787]          local screens for missions, journals and approvals
+  skye say <mission-id> --as <role> [--kind K] [--ack-needed R,...] <message>
+                                 post to the mission's team line (workers coordinate here)
+  skye hear <mission-id> [--since N] [--limit N]   read new team-line posts (JSON + cursor)
+  skye ack <mission-id> <message-id> --as <role> [--note N]   ack a contract-change
+  skye agents                    list agent definitions (builtin, registry, proposed)
+  skye agents promote <name>     activate a worker-proposed agent (the owner's go-ahead)
+  skye backlog list [--status S] list tickets
+  skye backlog reopen <id> --evidence TEXT [--label L]...   reopen delivered work with evidence
+  skye backlog comment <id> --as <actor> <message>          add to a ticket's thread
+  skye backlog labels <id> <label>...                       replace a ticket's labels
 """
 
 from __future__ import annotations
@@ -126,6 +136,130 @@ def _cmd_mission(args: list[str]) -> int:
     return 0 if outcome.status == "done" else 1
 
 
+def _flag(args: list[str], name: str, default: str = "") -> str:
+    return args[args.index(name) + 1] if name in args and args.index(name) + 1 < len(args) else default
+
+
+def _cmd_say(args: list[str]) -> int:
+    if len(args) < 2 or "--as" not in args:
+        print("usage: skye say <mission-id> --as <role> [--kind K] [--ack-needed R,...] <message>",
+              file=sys.stderr)
+        return 2
+    from . import discuss, events
+    from .mission import default_state_dir
+    mission_id = args[0]
+    message = " ".join(a for a in args[1:] if not a.startswith("--"))
+    ack_needed = [r for r in _flag(args, "--ack-needed").split(",") if r.strip()]
+    try:
+        entry = discuss.post(default_state_dir(), mission_id,
+                             author=_flag(args, "--as"),
+                             kind=_flag(args, "--kind", "broadcast") or "broadcast",
+                             body=message, requires_ack=ack_needed,
+                             bridge=events.from_env())
+    except discuss.DiscussionError as error:
+        print(f"cannot post: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps({"posted": True, "id": entry["id"], "seq": entry["seq"]}, indent=2))
+    return 0
+
+
+def _cmd_hear(args: list[str]) -> int:
+    if not args:
+        print("usage: skye hear <mission-id> [--since N] [--limit N]", file=sys.stderr)
+        return 2
+    from . import discuss
+    from .mission import default_state_dir
+    result = discuss.read(default_state_dir(), args[0],
+                          since=int(_flag(args, "--since", "0") or 0),
+                          limit=int(_flag(args, "--limit", "100") or 100))
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def _cmd_ack(args: list[str]) -> int:
+    if len(args) < 2 or "--as" not in args:
+        print("usage: skye ack <mission-id> <message-id> --as <role> [--note N]", file=sys.stderr)
+        return 2
+    from . import discuss, events
+    from .mission import default_state_dir
+    try:
+        entry = discuss.ack(default_state_dir(), args[0], args[1],
+                            author=_flag(args, "--as"), note=_flag(args, "--note"),
+                            bridge=events.from_env())
+    except discuss.DiscussionError as error:
+        print(f"cannot ack: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps({"acked": True, "id": entry["id"], "ack_of": entry["ack_of"]}, indent=2))
+    return 0
+
+
+def _cmd_agents(args: list[str]) -> int:
+    from . import agents
+    if args and args[0] == "promote":
+        if len(args) < 2:
+            print("usage: skye agents promote <name>", file=sys.stderr)
+            return 2
+        try:
+            record = agents.promote(args[1])
+        except Exception as error:
+            print(f"cannot promote: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps({"promoted": True, "agent": record["name"]}, indent=2))
+        return 0
+    print(json.dumps({"agents": agents.list_definitions()}, indent=2))
+    return 0
+
+
+def _cmd_backlog(args: list[str]) -> int:
+    from . import backlog
+    if not args or args[0] == "list":
+        status = _flag(args, "--status")
+        print(json.dumps({"tickets": backlog.list_features(status=status)}, indent=2))
+        return 0
+    action = args[0]
+    if action == "reopen":
+        if len(args) < 2:
+            print("usage: skye backlog reopen <id> --evidence TEXT [--label L]...", file=sys.stderr)
+            return 2
+        labels = [args[i + 1] for i, a in enumerate(args) if a == "--label" and i + 1 < len(args)]
+        try:
+            feature = backlog.reopen(args[1], evidence=_flag(args, "--evidence"),
+                                     labels=labels, actor=_flag(args, "--as", "owner") or "owner")
+        except backlog.BacklogError as error:
+            print(f"cannot reopen: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps({"reopened": True, "ticket": feature["id"],
+                          "status": feature["status"], "labels": feature.get("labels", [])},
+                         indent=2))
+        return 0
+    if action == "comment":
+        if len(args) < 3:
+            print("usage: skye backlog comment <id> --as <actor> <message>", file=sys.stderr)
+            return 2
+        message = " ".join(a for a in args[2:] if not a.startswith("--"))
+        try:
+            entry = backlog.add_thread(args[1], actor=_flag(args, "--as", "owner") or "owner",
+                                       kind="comment", body=message)
+        except backlog.BacklogError as error:
+            print(f"cannot comment: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps({"added": True, "entry": entry}, indent=2))
+        return 0
+    if action == "labels":
+        if len(args) < 2:
+            print("usage: skye backlog labels <id> <label>...", file=sys.stderr)
+            return 2
+        try:
+            feature = backlog.set_labels(args[1], args[2:])
+        except backlog.BacklogError as error:
+            print(f"cannot set labels: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps({"labels": feature.get("labels", [])}, indent=2))
+        return 0
+    print("usage: skye backlog list|reopen|comment|labels ...", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
@@ -154,6 +288,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "mission":
         return _cmd_mission(rest)
+    if command == "say":
+        return _cmd_say(rest)
+    if command == "hear":
+        return _cmd_hear(rest)
+    if command == "ack":
+        return _cmd_ack(rest)
+    if command == "agents":
+        return _cmd_agents(rest)
+    if command == "backlog":
+        return _cmd_backlog(rest)
     print(USAGE, file=sys.stderr)
     return 2
 

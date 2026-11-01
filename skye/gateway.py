@@ -20,6 +20,12 @@ BUILTIN: dict[str, dict[str, Any]] = {
     "pm": {"tools": ["Read", "Glob", "Grep", "inspect_page"], "writable": False},
     "tester": {"tools": ["Read", "Glob", "Grep", "Bash"], "writable": False},
     "developer": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
+    # The standard specialists: same reach as the general developer - their DIFFERENCE lives in
+    # their agent definitions (instructions), which is the honest place for expertise. Teams
+    # narrow per role with catalogue files when a specialist should see less.
+    "senior-dev": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
+    "backend-dev": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
+    "frontend-dev": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
     "devops": {"tools": ["Read", "Glob", "Grep", "Bash"], "writable": True},
 }
 

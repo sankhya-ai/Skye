@@ -98,3 +98,42 @@ def report(kind: str, summary: str, *, detail: str = "", project: str = "",
     data["issues"].append(issue)
     _write(target, data)
     return issue, True
+
+
+def report_for_feature(feature_id: str, kind: str, summary: str, *, detail: str = "",
+                       labels: list | None = None, actor: str = "pm",
+                       source: str = "", path: str | Path | None = None) -> tuple[dict[str, Any], str]:
+    """A bug reported ON an existing ticket (the PM's maintenance loop): the issue is recorded,
+    proper labels land on the ticket, and the ticket itself moves -
+
+      delivered             -> reopened (evidence + labels on the original ticket; owner decides
+                                       the repair; the ticket keeps its whole history)
+      awaiting-verification -> sent back with the bug as the note (the work was not good enough)
+      pending/approved      -> stays queued; the bug is attached as evidence for the work to cover
+
+    Returns (issue, action) where action is "reopened" | "sent-back" | "attached".
+    Never starts work: pickup flows through the owner's decision and the normal intake."""
+    feature = backlog.get(feature_id)
+    issue, _ = report(kind, summary, detail=detail, project=feature.get("project", ""),
+                      source=source or actor, path=path)
+    label_set = ["type:bug"] + [str(l) for l in (labels or [])]
+    status = feature.get("status")
+    evidence = f"{kind}: {summary}" + (f" - {detail[:300]}" if detail else "")
+    if status == "delivered":
+        backlog.reopen(feature_id, evidence=evidence, labels=label_set, actor=actor)
+        action = "reopened"
+    elif status == "awaiting-verification":
+        backlog.set_labels(feature_id,
+                           list(dict.fromkeys((feature.get("labels") or []) + label_set)),
+                           actor=actor)
+        backlog.send_back(feature_id, note=f"bug reported: {evidence}")
+        action = "sent-back"
+    elif status in ("pending", "approved"):
+        backlog.set_labels(feature_id,
+                           list(dict.fromkeys((feature.get("labels") or []) + label_set)),
+                           actor=actor)
+        backlog.add_thread(feature_id, actor=actor, kind="evidence", body=evidence)
+        action = "attached"
+    else:
+        raise IssueError(f"feature {feature_id} is {status}; bugs cannot attach to it")
+    return issue, action
