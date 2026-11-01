@@ -416,8 +416,10 @@ class UiHandler(BaseHTTPRequestHandler):
                     path = policy_path_default()
                     raw = json.loads(path.read_text("utf-8")) if path.exists() else {}
                     policy = Policy.load(path)
+                    from .. import pickup as pickup_module
                     return self._json({"raw": raw, "path": str(path.resolve()),
-                                       "max_concurrent": policy.max_concurrent})
+                                       "max_concurrent": policy.max_concurrent,
+                                       "auto_pickup": pickup_module.config(policy)})
                 if url.path.startswith("/api/mission-artifact/"):
                     mission_id = url.path.rsplit("/", 1)[-1]
                     rel_path = (parse_qs(url.query).get("path") or [""])[0]
@@ -671,6 +673,30 @@ def approvals_path_for(state_dir: Path) -> Path:
     return state_dir / "approvals.json"
 
 
+PICKUP_POLL_SECONDS = 5.0
+
+
+def _picker_loop(server: "ThreadingHTTPServer", interval: float = PICKUP_POLL_SECONDS) -> None:
+    """The trusted-pickup poller. Policy is reloaded from disk EVERY tick: switching
+    auto_pickup off (or breaking the file) stops the next start rather than a stale copy.
+    A tick exception is reported, never swallowed silently, and never kills the server."""
+    from .. import pickup as pickup_module
+    picker_id = f"ui-{os.getpid()}-{int(time.time())}"
+    while not getattr(server, "_picker_stop", False):
+        try:
+            policy = Policy.load(policy_path_default())
+            live = sum(1 for m in _live_missions.values() if m.get("running"))
+            pickup_module.poll_once(
+                policy=policy, picker=picker_id,
+                create_mission=lambda spec: create_mission(server.state_dir, spec),
+                start_run=lambda mid: resume_in_thread(server.state_dir, mid),
+                live_count=live)
+        except Exception:  # noqa: BLE001 - the loop must survive a bad tick
+            import traceback
+            traceback.print_exc()
+        time.sleep(interval)
+
+
 def serve(state_dir: Path | None = None, port: int = 8787) -> None:
     state_dir = Path(state_dir or default_state_dir()).resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -685,9 +711,13 @@ def serve(state_dir: Path | None = None, port: int = 8787) -> None:
     print(f"skye ui {__version__} serving {state_dir}")
     print(f"open: {url}")
     print("localhost only; the URL carries this run's session token.")
+    picker = threading.Thread(target=_picker_loop, args=(server,),
+                              name="skye-pickup", daemon=True)
+    picker.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        server._picker_stop = True  # type: ignore[attr-defined]
         token_file.unlink(missing_ok=True)
