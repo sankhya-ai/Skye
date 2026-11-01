@@ -42,6 +42,7 @@ export default function App() {
   const [route, setRoute] = useState<string>(() => window.location.hash.slice(1) || "/");
   const [missions, setMissions] = useState<MissionRow[]>([]);
   const [missionsLoaded, setMissionsLoaded] = useState(false);
+  const [unreachable, setUnreachable] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
@@ -62,8 +63,12 @@ export default function App() {
       );
       setMissionsLoaded(true);
       setProjects(projectData.projects);
+      setUnreachable(false);
     } catch {
-      // the sidebar and views surface their own errors on demand
+      // Views keep showing their last data; a slim banner carries the outage and the
+      // skeleton gives way to the empty state instead of spinning forever.
+      setUnreachable(true);
+      setMissionsLoaded(true);
     }
   }, []);
 
@@ -87,6 +92,11 @@ export default function App() {
         onProjectsChanged={() => void refresh()}
       />
       <main className="min-w-0 pl-64">
+      {unreachable ? (
+        <p className="mx-6 mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-foreground">
+          Can't reach the local server. Retrying in the background.
+        </p>
+      ) : null}
       <div key={route} className="view-enter">
         {isDetail && detailId ? (
           <div className="mx-auto max-w-3xl px-4 py-8">

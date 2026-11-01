@@ -96,6 +96,7 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  text-wrap: pretty;
 }
 
 /* berd's signature dot-grid canvas (.bg-dot-grid, 24px) */

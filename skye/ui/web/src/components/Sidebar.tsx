@@ -6,6 +6,8 @@
 import { Folder, Home, ListTodo, MessageSquare, Plus, Settings, Users, Workflow } from "lucide-react";
 import { useState } from "react";
 import { createProject, type MissionRow, type Project } from "../api";
+import { humanError } from "../lib";
+import { Button } from "./ui/Button";
 
 const NAV = [
   { path: "/", label: "Home", icon: Home },
@@ -81,9 +83,11 @@ export function Sidebar({
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const addProject = async () => {
     setError(null);
+    setSaving(true);
     try {
       await createProject({ name: name.trim(), repo: repo.trim() });
       setName("");
@@ -91,7 +95,9 @@ export function Sidebar({
       setAdding(false);
       onProjectsChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, "project"));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -141,14 +147,14 @@ export function Sidebar({
             className="w-full rounded-sm border border-border bg-background px-2 py-1 font-mono text-xs outline-none"
           />
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
-          <button
-            type="button"
-            onClick={() => void addProject()}
+          <Button
+            size="xs"
+            loading={saving}
             disabled={!name.trim() || !repo.trim()}
-            className="rounded-sm bg-foreground px-2 py-1 text-xs font-medium text-background disabled:opacity-30"
+            onClick={() => void addProject()}
           >
             Add project
-          </button>
+          </Button>
         </div>
       ) : null}
       <div className="space-y-0.5">

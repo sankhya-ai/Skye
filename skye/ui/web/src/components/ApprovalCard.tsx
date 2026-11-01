@@ -43,7 +43,7 @@ export function ApprovalCard({
       </p>
       <details className="mb-2">
         <summary className="cursor-pointer text-xs text-muted-foreground/80 hover:text-foreground">
-          Contract details{fingerprint ? ` · ${fingerprint.slice(0, 12)}` : ""}
+          Contract details
         </summary>
         <dl className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
           {fingerprint ? <div>fingerprint {fingerprint}</div> : null}

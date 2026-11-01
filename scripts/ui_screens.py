@@ -274,6 +274,61 @@ with sync_playwright() as pw:
                 rpage.screenshot(path=str(out_dir / "ui-backlog-reject-dialog-reduced-motion.png"))
             ctx.close()
     browser.close()
+
+# --- interrupted state: kill the server mid-run, restart, the mission cannot reattach ---
+interrupt_started = post("/api/backlog/start",
+                         {"feature": approval_feat["id"], "adapter": "root", "run": True})
+interrupt_mission = interrupt_started["id"]
+time.sleep(0.4)  # the first step is dispatched, not yet settled
+old_token = token
 ui_proc.terminate()
+ui_proc.wait(timeout=10)
+env2 = dict(env)
+ui_proc = subprocess.Popen([sys.executable, "-m", "skye.cli", "ui", "--port", str(ui_port),
+                            "--state-dir", str(state_dir)], cwd=demo, env=env2)
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline:
+    new_tok = (state_dir / "ui-token").read_text().strip()
+    if new_tok != old_token:
+        token = new_tok
+        break
+    time.sleep(0.1)
+ui_url = f"http://127.0.0.1:{ui_port}/?token={token}"
+deadline = time.monotonic() + 20
+while ui_proc.poll() is None and time.monotonic() < deadline:
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{ui_port}/api/missions",
+            headers={"X-Skye-Token": token}), timeout=2)
+        break
+    except Exception:
+        time.sleep(0.2)
+with sync_playwright() as pw:
+    browser = pw.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(ui_url + f"#/mission/{interrupt_mission}")
+    page.wait_for_timeout(2500)
+    status = json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{ui_port}/api/missions/{interrupt_mission}",
+        headers={"X-Skye-Token": token}), timeout=30).read())
+    st = status["status"]["status"]
+    print("INTERRUPTED mission state after kill+restart:", st)
+    if st == "interrupted":
+        page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
+        print("INTERRUPTED capture: taken")
+    else:
+        page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
+        print("INTERRUPTED capture: taken but state was", st, "- inspect")
+
+    # --- server down: what the user sees with the server unreachable ---
+    ui_proc.terminate()
+    ui_proc.wait(timeout=10)
+    page.goto(ui_url + "#/missions")
+    page.wait_for_timeout(7000)  # one failed refresh cycle + render
+    banner = page.locator("text=Can't reach the local server").count()
+    print("SERVER-DOWN banner visible:", "PASS" if banner else "FAIL")
+    page.screenshot(path=str(out_dir / "ui-server-down.png"), full_page=True)
+    browser.close()
+
 print("mission:", mission_id, final)
 print("UI SCREENS OK")
