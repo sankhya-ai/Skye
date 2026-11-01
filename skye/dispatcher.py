@@ -1,78 +1,254 @@
 """The dispatcher: plain code, no LLM anywhere in the coordination path.
 
-Flow per contract: validate -> policy check -> resolve the role's tool catalogue -> run the worker
-adapter -> run the quality gates in order. The "tests" gate runs the POLICY's test command (never a
-contract-supplied one). The "review" gate dispatches a reviewer contract through the same policy -
-a second worker looks at the diff; Skye itself reads and judges nothing.
+Flow per contract: validate -> register in the running registry (when a state dir is configured)
+-> policy check (standing rule OR a consumed one-time owner approval; the concurrency cap is
+never approval-overridable) -> resolve the role's tool catalogue -> run the worker adapter (with
+the contract's timeout budget wired through, and unenforceable budget fields reported as notes,
+never silently dropped) -> run the quality gates in order. The "tests" gate runs the POLICY's test
+command (never a contract-supplied one). The "review" gate dispatches a reviewer contract through
+the same dispatch path and requires an explicit approve verdict - a second worker looks at the
+diff; Skye itself reads and judges nothing beyond that verdict marker.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from . import adapters, events, gateway
+from . import adapters, approvals, events, gateway, review
 from .contract import validate
 from .policy import Policy
+from .registry import Registry
+from skye import journey
 
 
 @dataclass
 class Outcome:
-    status: str  # "done" | "needs-owner" | "failed" | "gate-failed"
+    status: str  # "done" | "needs-owner" | "failed" | "gate-failed" | "claim-held" | "cancelled"
     contract: dict[str, Any]
     reason: str = ""
     worker_output: str = ""
     gates: list[dict[str, Any]] = field(default_factory=list)
+    fingerprint: str = ""
+    worker_job: str = ""  # the worker's own job id (Root), for audit and crash recovery
+    budget_notes: list[str] = field(default_factory=list)
+    # Session-protocol adapters (claude-code/codex): the vendor's session/thread id, how
+    # this run relates to it (fresh | resumed), and honest stop causes. session_id is what
+    # a later follow-up, rework round or operator redispatch resumes.
+    session_id: str = ""
+    continuity: str = ""
+    cancelled: bool = False
+    resume_rejected: bool = False
+    protocol: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
-def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: int = 0,
-             runner=None, catalogues_dir: str = "catalogues", bridge=None) -> Outcome:
+def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: int | None = None,
+             runner=None, catalogues_dir: str = "catalogues", bridge=None,
+             state_dir: str | Path | None = None, approvals_path: str | Path | None = None,
+             resume_job_id: str | None = None, job_observer=None,
+             event_context: dict[str, Any] | None = None,
+             cancel_event=None, on_progress=None) -> Outcome:
     """Run one contract through policy, worker and gates. ``runner`` replaces the adapter call in
     tests; production code never passes it. ``bridge`` (default: events.from_env()) receives the
-    lifecycle events this dispatch emits - the Chamber line when configured, else the local log."""
+    lifecycle events this dispatch emits - the Chamber line when configured, else the local log.
+    ``state_dir`` enables the running registry (the real max_concurrent enforcement); without it
+    the ``running`` count is taken as given. ``resume_job_id`` reattaches to an existing Root job
+    instead of starting a new one (crash recovery; Root adapter only)."""
     policy = policy or Policy.load()
     bridge = bridge if bridge is not None else events.from_env()
-    emit = bridge.publish
+    context = dict(event_context or {})
+
+    def emit(kind: str, spec: dict[str, Any], **fields: Any) -> None:
+        bridge.publish(events.make_event(kind, spec, **context, **fields))
+
     try:
         spec = validate(contract)
     except Exception as error:
-        emit(events.make_event("failed", contract, status="failed", reason=str(error)))
+        emit("failed", contract, status="failed", reason=str(error))
         return Outcome(status="failed", contract=contract, reason=str(error))
-    blocked = policy.unattended_ok(spec, running=running)
-    if blocked:
-        emit(events.make_event("needs-owner", spec, status="needs-owner", reason=blocked))
-        return Outcome(status="needs-owner", contract=spec, reason=blocked)
-    catalogue = gateway.resolve(spec["role"], catalogues_dir)
-    spec["tools"] = catalogue["tools"]
-    spec["tools_writable"] = catalogue["writable"]
-    adapter = adapters.get(spec["adapter"])
-    emit(events.make_event("accepted", spec, status="running"))
-    run = runner or adapter.run
+    fp = approvals.fingerprint(spec)
+
+    registry = None
+    live = int(running or 0)
+    if state_dir is not None:
+        try:
+            registry = Registry(state_dir)
+            live, claim_conflict = registry.acquire_guarded(spec, fp)  # atomic under one flock
+            if claim_conflict is not None:
+                registry.release()
+                reason = (f"write claim '{claim_conflict[0]}' intersects "
+                          f"'{claim_conflict[1]}' held by running {claim_conflict[2]}; "
+                          "this dispatch is held, not run - retry after the holder settles")
+                emit("claim-held", spec, status="claim-held", reason=reason, fingerprint=fp)
+                return Outcome(status="claim-held", contract=spec, reason=reason, fingerprint=fp)
+        except OSError as error:
+            # The cap cannot be counted without the registry: say so, and fall back to the count
+            # we were given rather than pretending the cap was checked.
+            emit("registry-error", spec, reason=f"running registry unavailable ({error}); the "
+                                                "concurrency cap falls back to the caller's count")
+            registry = None
     try:
-        result = run(spec)
-    except Exception as error:
-        emit(events.make_event("failed", spec, status="failed", reason=str(error)))
-        return Outcome(status="failed", contract=spec, reason=str(error))
-    outcome = Outcome(status="done", contract=spec, worker_output=result.output)
-    if not result.ok:
-        outcome.status = "failed"
-        outcome.reason = f"worker exited {result.returncode}"
-        emit(events.make_event("failed", spec, status="failed", reason=outcome.reason))
-        return outcome
-    for gate in spec["gates"]:
-        outcome.gates.append(_run_gate(gate, spec, policy, runner, bridge=bridge))
-        emit(events.make_event("gate", spec, status="ok" if outcome.gates[-1]["ok"] else "failed",
-                               gate=gate, reason=outcome.gates[-1]["detail"]))
-        if not outcome.gates[-1]["ok"]:
-            outcome.status = "gate-failed"
-            outcome.reason = outcome.gates[-1]["detail"]
+        blocked_kind, blocked = policy.check(spec, running=live)
+        approved = None
+        if blocked_kind == "rule":
+            approved = approvals.peek(spec, approvals_path)
+            if approved:
+                blocked_kind, blocked = "ok", ""
+        if blocked_kind != "ok":
+            hint = (f" Contract fingerprint {fp[:12]}: to run exactly this contract once, the owner "
+                    f"runs `skye approve <job.json>`.") if blocked_kind == "rule" else ""
+            emit("needs-owner", spec, status="needs-owner", reason=blocked, fingerprint=fp)
+            return Outcome(status="needs-owner", contract=spec, reason=blocked + hint, fingerprint=fp)
+        catalogue = gateway.resolve(spec["role"], catalogues_dir)
+        spec["tools"] = catalogue["tools"]
+        spec["tools_writable"] = catalogue["writable"]
+        adapter = adapters.get(spec["adapter"])
+        if job_observer is not None:
+            adapter.job_observer = job_observer
+        if resume_job_id and spec["adapter"] != "root" and runner is None:
+            reason = (f"crash recovery cannot reattach on the {spec['adapter']} adapter: only Root "
+                      "jobs are resumable; re-dispatch this contract instead")
+            emit("failed", spec, status="failed", reason=reason, fingerprint=fp)
+            return Outcome(status="failed", contract=spec, reason=reason, fingerprint=fp)
+        if approved is not None:
+            consumed = approvals.consume(spec, approvals_path)  # single-use, consumed on start
+            emit("approved", spec, status="running", fingerprint=fp,
+                 reason=f"one-time owner approval consumed (approved at {consumed.get('approved_at', '?')})"
+                 if consumed else "one-time owner approval")
+        enforced = set(getattr(adapter, "ENFORCED_BUDGET", ("timeout_seconds",)))
+        forwarded = set(getattr(adapter, "FORWARDED_BUDGET", ()))
+        notes = []
+        for key in spec["budget"]:
+            if key in enforced:
+                continue
+            if key in forwarded:
+                notes.append(f"budget field '{key}' is forwarded to the {spec['adapter']} worker's "
+                             "own budget machinery; its enforcement depends on that worker's "
+                             "configuration (e.g. provider-reported pricing), so Skye does not "
+                             "guarantee it as a hard bound")
+            else:
+                notes.append(f"budget field '{key}' is not enforceable on the {spec['adapter']} "
+                             "adapter; it is recorded but does not limit the worker")
+        timeout = int(spec["budget"].get("timeout_seconds") or 1800)
+        emit("accepted", spec, status="running", authorized_via="approval" if approved else "rule",
+             budget_notes=notes, fingerprint=fp)
+        if runner is not None:
+            run = runner
+        elif resume_job_id:
+            run = lambda s: adapter.run(s, timeout=timeout, resume_job_id=resume_job_id)
+        elif getattr(adapter, "SUPPORTS_SESSIONS", False):
+            # Session protocol: streamed events, vendor session capture/resume, operator
+            # cancel. run_key registers the live process so the UI cancel endpoint can
+            # signal exactly this run. The contract's resume_session_id (set by the
+            # mission for rework/follow-up/redispatch continuity) re-enters the recorded
+            # session - a rejected resume fails CLOSED below, never a silent fresh run.
+            run_key = (f"{context.get('mission', '')}:{context.get('step', '')}"
+                       if context.get("mission") and context.get("step") else None)
+
+            # The live-file lets a LATER process tell a still-running worker (a survivor
+            # of a server crash - the registry is in-memory) from a free slot.
+            live_file = None
+            if run_key and state_dir:
+                live_file = (Path(state_dir) / "missions" / str(context["mission"])
+                             / f"live-{re.sub(r'[^A-Za-z0-9_.-]', '_', str(context['step']))}.json")
+
+            def run(s, _adapter=adapter, _key=run_key, _live=live_file):
+                return _adapter.run_session(
+                    s, timeout=timeout,
+                    resume_session_id=str(s.get("resume_session_id") or "") or None,
+                    run_key=_key, on_event=on_progress, cancel_event=cancel_event,
+                    live_file=_live, run_instance=context.get("run_instance"))
+        else:
+            run = lambda s: adapter.run(s, timeout=timeout)
+        try:
+            result = run(spec)
+        except Exception as error:
+            emit("failed", spec, status="failed", reason=str(error), fingerprint=fp)
+            return Outcome(status="failed", contract=spec, reason=str(error), fingerprint=fp,
+                           budget_notes=notes)
+        worker_job = getattr(result, "job_id", "") or ""
+        session_fields = {}
+        if hasattr(result, "session_id"):
+            session_fields = {"session_id": result.session_id,
+                              "continuity": result.continuity,
+                              "cancelled": result.cancelled,
+                              "resume_rejected": result.resume_rejected,
+                              "protocol": getattr(result, "protocol", "") or "",
+                              "usage": result.usage}
+        if getattr(result, "duplicate_live", False):
+            # A worker for this exact step may still be running after a crash: fail
+            # closed, never run two processes into one session/repo.
+            emit("needs-owner", spec, status="needs-owner", reason=result.output,
+                 fingerprint=fp)
+            return Outcome(status="needs-owner", contract=spec, reason=result.output,
+                           fingerprint=fp)
+        if getattr(result, "cancelled", False):
+            reason = "cancelled by the operator"
+            emit("cancelled", spec, status="cancelled", reason=reason, fingerprint=fp)
+            return Outcome(status="cancelled", contract=spec, reason=reason,
+                           worker_output=result.output, fingerprint=fp, **session_fields)
+        if getattr(result, "resume_rejected", False):
+            reason = (f"the {spec['adapter']} CLI rejected resuming the recorded session "
+                      f"'{result.session_id or spec.get('resume_session_id')}' (exit "
+                      f"{result.returncode}); Skye did NOT start a fresh session - the "
+                      "session's context would be lost silently. Restore the session or "
+                      "redispatch the step fresh (an explicit owner choice).")
+            emit("failed", spec, status="failed", reason=reason, fingerprint=fp)
+            return Outcome(status="failed", contract=spec, reason=reason,
+                           worker_output=result.output, fingerprint=fp, **session_fields)
+        outcome = Outcome(status="done", contract=spec, worker_output=result.output,
+                          fingerprint=fp, worker_job=worker_job, budget_notes=notes,
+                          **session_fields)
+        if not result.ok:
+            outcome.status = "failed"
+            outcome.reason = f"worker exited {result.returncode}"
+            emit("failed", spec, status="failed", reason=outcome.reason, worker_job=worker_job,
+                 fingerprint=fp)
             return outcome
-    emit(events.make_event("done", spec, status="done"))
-    return outcome
+        for gate in spec["gates"]:
+            outcome.gates.append(_run_gate(gate, spec, policy, runner, bridge=bridge,
+                                           approvals_path=approvals_path, event_context=context))
+            emit("gate", spec, status="ok" if outcome.gates[-1]["ok"] else "failed",
+                 gate=gate, reason=outcome.gates[-1]["detail"], worker_job=worker_job,
+                 fingerprint=fp)
+            if not outcome.gates[-1]["ok"]:
+                outcome.status = "gate-failed"
+                outcome.reason = outcome.gates[-1]["detail"]
+                return outcome
+        emit("done", spec, status="done", worker_job=worker_job, fingerprint=fp)
+        return outcome
+    finally:
+        if registry is not None:
+            registry.release()
 
 
-def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, bridge=None) -> dict[str, Any]:
+def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, bridge=None,
+              approvals_path: str | Path | None = None,
+              event_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    if gate == "journey":
+        # The delivery bar the owner set: replay the affected USER JOURNEY, not just tests.
+        # The command is owner-configured (policy.journey_command); its output tail is the
+        # recorded evidence. No command configured means the journey CANNOT be verified -
+        # fail honestly, never wave it through.
+        if not policy.journey_command:
+            return {"gate": "journey", "ok": False,
+                    "detail": "the team policy names no journey command; the journey cannot be replayed"}
+        result = journey.run_journey(policy.journey_command, cwd=spec["repo"],
+                                     timeout=policy.journey_timeout_seconds)
+        result["repo_revision"] = journey.repo_revision(spec["repo"])
+        result["journey_digest"] = journey.journey_digest(policy.journey_command, spec["repo"])
+        return {"gate": "journey", "ok": result["passed"],
+                "detail": ("journey replay passed"
+                           if result["passed"]
+                           else ("journey replay timed out" if result["timed_out"]
+                                 else f"journey replay failed ({result['returncode']})")),
+                "command": policy.journey_command, "evidence": result["evidence"],
+                "repo_revision": result["repo_revision"],
+                "journey_digest": result["journey_digest"]}
     if gate == "tests":
         if not policy.test_command:
             return {"gate": "tests", "ok": False,
@@ -84,10 +260,48 @@ def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, brid
                 "command": policy.test_command}
     if gate == "review":
         # A reviewer CONTRACT through the same dispatch path: a second worker judges the diff, so
-        # no worker grades its own work and Skye judges nothing itself.
-        review = {"goal": f"Review the changes in {spec['repo']} for the job: {spec['goal']}",
-                  "repo": spec["repo"], "role": "reviewer", "adapter": spec["adapter"], "gates": []}
-        verdict = dispatch(review, policy, runner=runner, bridge=bridge)
-        return {"gate": "review", "ok": verdict.status == "done",
-                "detail": verdict.reason or "review finished", "reviewer": verdict.worker_output[-500:]}
+        # no worker grades its own work and Skye judges nothing itself. The reviewer runs inside
+        # this dispatch's concurrency slot (sequentially, after the worker finished - real
+        # concurrency stays one), and its verdict decides the gate: only an explicit "pass"
+        # opens it; "block", a missing/malformed/unknown verdict, or a reviewer that never
+        # finished all fail.
+        verdict = dispatch(review.build_review_contract(spec, policy.review_role or "reviewer"),
+                           policy, runner=runner, bridge=bridge, approvals_path=approvals_path,
+                           event_context=event_context)
+        tail = verdict.worker_output[-500:]
+        if verdict.status != "done":
+            return {"gate": "review", "ok": False,
+                    "detail": f"the reviewer did not finish: {verdict.reason}", "reviewer": tail}
+        decision, reasons = review.parse_verdict(verdict.worker_output)
+        if decision == "pass":
+            return {"gate": "review", "ok": True, "detail": "reviewer passed the changes",
+                    "reviewer": tail}
+        if decision == "block":
+            return {"gate": "review", "ok": False,
+                    "detail": f"reviewer blocked the changes: {reasons or 'no reasons given'}",
+                    "reviewer": tail}
+        if decision == "request-changes":
+            # The send-back: not a pass, not a hard fail. The gate does not open, and the
+            # MISSION layer decides whether the step gets another bounded round with this
+            # feedback (a redo edge, journaled) or the failure stands.
+            # Two fail-closed cases never produce a redo edge:
+            if not reasons.strip():
+                # ...no usable feedback: a blind redo would replay the identical brief.
+                return {"gate": "review", "ok": False,
+                        "detail": "reviewer requested changes without usable feedback; a blind "
+                                  "redo would replay the identical brief, so the gate fails "
+                                  "closed instead", "reviewer": tail}
+            if spec.get("role") == (policy.review_role or "reviewer"):
+                # ...an invalid redo target: the step under review IS the reviewer, so the
+                # send-back would route the reviewer's work to itself.
+                return {"gate": "review", "ok": False,
+                        "detail": "reviewer requested changes on a review step; a review step "
+                                  "cannot be sent back to itself, so the gate fails closed "
+                                  "instead", "reviewer": tail}
+            return {"gate": "review", "ok": False, "changes_requested": True,
+                    "detail": f"reviewer requested changes: {reasons}",
+                    "feedback": reasons, "reviewer": tail}
+        return {"gate": "review", "ok": False,
+                "detail": "the reviewer finished without a parseable verdict; the review gate "
+                          "requires an explicit approve", "reviewer": tail}
     return {"gate": gate, "ok": False, "detail": f"unknown gate '{gate}'"}

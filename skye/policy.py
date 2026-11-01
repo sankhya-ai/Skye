@@ -20,8 +20,25 @@ class Policy:
         data = data or {}
         self.allow_unattended: list[dict[str, Any]] = list(data.get("allow_unattended") or [])
         self.test_command: str = str(data.get("test_command") or "")
+        self.journey_command: str = str(data.get("journey_command") or "")
+        # Review-loop bound: how many times a reviewer may send a step back for changes inside
+        # one mission before the failure stands. Bounded, journaled, never a silent retry loop.
+        try:
+            self.max_review_rounds: int = min(8, max(0, int(data.get("max_review_rounds") or 2)))
+        except (TypeError, ValueError):
+            self.max_review_rounds = 2
+        try:
+            self.journey_timeout_seconds: int = max(1, int(data.get("journey_timeout_seconds") or 600))
+        except (TypeError, ValueError):
+            self.journey_timeout_seconds = 600
         self.max_concurrent: int = int(data.get("max_concurrent") or 1)
         self.review_role: str = str(data.get("review_role") or "reviewer")
+        # Trusted automatic pickup (skye/pickup.py). Absent or malformed means fully OFF;
+        # enabling it automates the intake click only - step contracts still pass the normal
+        # approval gate at dispatch.
+        self.auto_pickup: dict[str, Any] = data.get("auto_pickup") if isinstance(data.get("auto_pickup"), dict) else {}
+        # Per-mission workspaces (skye/workspaces.py): absent = off = shared-tree behavior.
+        self.workspaces: dict[str, Any] = data.get("workspaces") if isinstance(data.get("workspaces"), dict) else {}
 
     @classmethod
     def load(cls, path: str | Path = DEFAULT_PATH) -> "Policy":
@@ -30,13 +47,21 @@ class Policy:
         except (OSError, ValueError):
             return cls()  # absent or broken: the conservative default
 
+    def check(self, contract: dict[str, Any], running: int = 0) -> tuple[str, str]:
+        """("ok"|"cap"|"rule", reason). The cap and the no-rule case are distinct: a one-time
+        owner approval may override a missing RULE, but never the concurrency CAP - an approval
+        is consent for one contract, not a raise of the team's parallelism limit."""
+        if running >= self.max_concurrent:
+            return ("cap",
+                    f"the team already runs {running} contract(s); the cap is {self.max_concurrent}")
+        for rule in self.allow_unattended:
+            if rule.get("adapter") == contract["adapter"] and rule.get("role") in (contract["role"], "*"):
+                return ("ok", "")
+        return ("rule",
+                f"{contract['adapter']}/{contract['role']} is not on the team's unattended "
+                "list, so this run needs your approval before it starts")
+
     def unattended_ok(self, contract: dict[str, Any], running: int = 0) -> str:
         """Why a contract may not run unattended, or '' when it may. Adapter and role must both be
         named by one rule; the concurrency cap is team-wide."""
-        if running >= self.max_concurrent:
-            return f"the team already runs {running} contract(s); the cap is {self.max_concurrent}"
-        for rule in self.allow_unattended:
-            if rule.get("adapter") == contract["adapter"] and rule.get("role") in (contract["role"], "*"):
-                return ""
-        return (f"no policy rule allows unattended {contract['adapter']}/{contract['role']}: "
-                "the owner confirms this contract first")
+        return self.check(contract, running=running)[1]

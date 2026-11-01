@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+/* Self-hosted fonts taken from block/berd (Apache-2.0, see skye/ui/NOTICE; the fonts
+   themselves are SIL OFL 1.1 - license texts ship beside the files in assets/fonts/).
+   Inter backs --font-sans/--font-display; Geist Mono backs --font-mono. */
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/Inter[opsz,wght].ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/Inter-Italic[opsz,wght].ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./assets/fonts/GeistMono[wght].ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Light canvas taken from block/berd's globals.css semantic tokens (Apache-2.0,
+   see skye/ui/NOTICE): gray-scale aliases, #f5f5f5 canvas, white cards, translucent
+   card-glass with 18px backdrop blur, muted #f0f0f0, borders #e8e8e8. */
+:root {
+  --canvas-base: #f5f5f5;
+  --background: #ffffff;
+  --foreground: #242424;
+  --card: #ffffff;
+  --card-foreground: #242424;
+  --card-glass: color-mix(in srgb, var(--card) 78%, transparent);
+  --backdrop-panel: blur(18px) saturate(180%) brightness(1.02);
+  --muted: #f0f0f0;
+  --muted-foreground: #666666;
+  --accent: #f5f5f5;
+  --accent-hover: #f0f0f0;
+  --border: #e8e8e8;
+  --input: #e5e5e5;
+  --ring: #cccccc;
+  --primary: #1a1a1a;
+  --primary-foreground: #ffffff;
+  --destructive: #b91c1c;
+  --success: #73b468;
+  --info: #5c98f9;
+  --warning: #fbcd44;
+  /* Floating chat composer - muted gray tint, translucent for backdrop blur. */
+  --surface-chat-composer: color-mix(in srgb, var(--muted) 72%, transparent);
+  --surface-chat-composer-hover: color-mix(in srgb, var(--muted) 80%, transparent);
+  /* Sidebar rows */
+  --sidebar-row-hover: color-mix(in srgb, var(--foreground) 2%, transparent);
+  --sidebar-row-active: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+
+@theme inline {
+  --color-canvas-base: var(--canvas-base);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-card-glass: var(--card-glass);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-info: var(--info);
+  --color-warning: var(--warning);
+  --color-surface-chat-composer: var(--surface-chat-composer);
+  --color-surface-chat-composer-hover: var(--surface-chat-composer-hover);
+  --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+  /* berd's 5-step radius scale - adjacent steps differ by 6px so nested layers
+     stay concentric with p-1.5 padding between them. */
+  --radius-xs: 6px;
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+  --radius-composer: 40px;
+}
+
+/* Placeholders default to a 50% mix that fails WCAG AA (impeccable low-contrast
+   findings). #595959 keeps AA on both white cards (7.0:1) and the composer's
+   #f1f1f1 muted surface (~4.7:1). */
+::placeholder {
+  color: #595959;
+  opacity: 1;
+}
+
+body {
+  background: var(--canvas-base);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-wrap: pretty;
+}
+
+/* berd's signature dot-grid canvas (.bg-dot-grid, 24px) */
+.bg-dot-grid {
+  background-image: radial-gradient(circle, #cbcbcb 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Floating glass panel over the canvas */
+.glass-panel {
+  background: var(--card-glass);
+  backdrop-filter: var(--backdrop-panel);
+  -webkit-backdrop-filter: var(--backdrop-panel);
+}
+
+/* berd's card shadow */
+.shadow-card {
+  box-shadow: 0 2px 8px rgba(76, 76, 76, 0.15);
+}
+
+/* Motion + elevation tokens, berd's vocabulary (Apache-2.0, see skye/ui/NOTICE):
+   flat at rest, shadows only on interaction/overlay, fast quiet transitions. */
+:root {
+  --shadow-mini: 0 2px 8px rgba(76, 76, 76, 0.15);
+  --shadow-elevated: 0 3px 12px rgba(76, 76, 76, 0.22);
+  --shadow-popover: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.2);
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 320ms;
+}
+
+.shadow-mini { box-shadow: var(--shadow-mini); }
+.shadow-elevated { box-shadow: var(--shadow-elevated); }
+.shadow-popover { box-shadow: var(--shadow-popover); }
+.shadow-modal { box-shadow: var(--shadow-modal); }
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* Route-level view transition: quiet, fast, never theatrical. */
+.view-enter { animation: view-in var(--duration-normal) ease-out; }
+
+/* Reduced motion: kill every animation/transition outright - targeting individual
+   utility classes is fragile, and the preference is absolute. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

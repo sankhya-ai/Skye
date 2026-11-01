@@ -65,6 +65,10 @@ ROLES: dict[str, list[str]] = {
     # Look at a running page (inspect_page: localhost only, executes the page's JS; see tura_code/visual). No code runner,
     # so they cannot start the app themselves: the owner or a developer/tester job runs it first.
     "designer": ["ReadFile", "ReadMediaFile", "Glob", "Grep", "find_tools", "use_tool", "inspect_page", "interact_page", "inspect_deployed", "role_guide", "design_scan"],
+    # A PRODUCING design role: writes artifact files and inspects pages, but gets no code runner
+    # (no Shell/process/run_python), so it stays out of the scope_guarantee "none" tier. Deliberately
+    # distinct from the read-only "designer" judgment role - the owner picks the producing one.
+    "artist": ["ReadFile", "ReadMediaFile", "Glob", "Grep", "WriteFile", "StrReplaceFile", "find_tools", "use_tool", "inspect_page", "interact_page", "role_guide", "design_scan"],
     "pm": ["ReadFile", "ReadMediaFile", "Glob", "Grep", "find_tools", "use_tool", "inspect_page", "interact_page", "inspect_deployed", "role_guide"],
     "tester": ["ReadFile", "ReadMediaFile", "Glob", "Grep", "Shell", "process", "find_tools", "use_tool"],
 }
@@ -791,8 +795,8 @@ class Jobs:
         from .visual import TargetError, host_ports, resolve_target
         from .visual.act import check_deployed_url, resolve_public
 
-        if spec.role not in ("designer", "pm"):
-            raise JobError("interact and deployed are for the designer and pm roles only.")
+        if spec.role not in ("designer", "pm", "artist"):
+            raise JobError("interact and deployed are for the designer, artist and pm roles only.")
         out: dict[str, Any] = {}
         try:
             if spec.interact:

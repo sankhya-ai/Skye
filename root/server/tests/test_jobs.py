@@ -24,7 +24,7 @@ def test_roles_with_a_code_runner_are_not_called_a_boundary():
     tenant = SimpleNamespace(settings=SimpleNamespace(get=lambda: SimpleNamespace(tool_scope=[])))
     for role, scope in jobs.ROLES.items():
         level = catalogue.guarantee(tenant, SimpleNamespace(tool_scope=scope))["level"]
-        assert level == ("tool-names" if role in ("explorer", "reviewer", "designer", "pm") else "none"), role
+        assert level == ("tool-names" if role in ("explorer", "reviewer", "designer", "artist", "pm") else "none"), role
 
 
 def _wait(client, job_id, timeout=30):

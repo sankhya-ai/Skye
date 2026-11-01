@@ -31,9 +31,10 @@ class FileBridge:
 
     def __init__(self, path: str | Path = "events.jsonl") -> None:
         self.path = Path(path)
+        self._lock = threading.Lock()  # parallel mission steps publish from worker threads
 
     def publish(self, event: dict[str, Any]) -> None:
-        with self.path.open("a", encoding="utf-8") as handle:
+        with self._lock, self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event) + "\n")
 
     def close(self) -> None:
@@ -122,7 +123,8 @@ class FanoutBridge:
 
 def from_env(log_path: str | Path = "events.jsonl") -> FanoutBridge:
     """Configuration by environment: SKYE_LINE_INVITE (a chamber line invite URL) adds the line
-    sink; SKYE_LINE_TO names the recipient handle (default "*", everyone on the line). The file sink is always on."""
+    sink; SKYE_LINE_TO names the recipient handle and is REQUIRED (no default audience: "*" is
+    everyone on the line and must be chosen explicitly). The file sink is always on."""
     sinks: list[Any] = [FileBridge(log_path)]
     invite = os.environ.get("SKYE_LINE_INVITE", "").strip()
     if invite:

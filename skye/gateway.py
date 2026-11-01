@@ -15,9 +15,17 @@ BUILTIN: dict[str, dict[str, Any]] = {
     "explorer": {"tools": ["Read", "Glob", "Grep"], "writable": False},
     "reviewer": {"tools": ["Read", "Glob", "Grep"], "writable": False},
     "designer": {"tools": ["Read", "Glob", "Grep", "inspect_page"], "writable": False},
+    # The producing counterpart to the read-only designer: writes artifact files, still no Bash.
+    "artist": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "inspect_page"], "writable": True},
     "pm": {"tools": ["Read", "Glob", "Grep", "inspect_page"], "writable": False},
     "tester": {"tools": ["Read", "Glob", "Grep", "Bash"], "writable": False},
     "developer": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
+    # The standard specialists: same reach as the general developer - their DIFFERENCE lives in
+    # their agent definitions (instructions), which is the honest place for expertise. Teams
+    # narrow per role with catalogue files when a specialist should see less.
+    "senior-dev": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
+    "backend-dev": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
+    "frontend-dev": {"tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"], "writable": True},
     "devops": {"tools": ["Read", "Glob", "Grep", "Bash"], "writable": True},
 }
 
@@ -29,6 +37,10 @@ def resolve(role: str, catalogues_dir: str | Path = "catalogues") -> dict[str, A
     if path.exists():
         data = json.loads(path.read_text("utf-8"))
         return {"tools": list(data.get("tools") or []), "writable": bool(data.get("writable")), "source": str(path)}
+    from .roles import catalogue_for
+    registry = catalogue_for(role)
+    if registry is not None:
+        return {**registry, "source": "roles-registry"}
     if role in BUILTIN:
         return {**BUILTIN[role], "source": "builtin"}
     raise KeyError(f"no tool catalogue for role '{role}' (neither {path} nor a builtin)")

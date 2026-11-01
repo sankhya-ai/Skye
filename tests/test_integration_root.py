@@ -135,3 +135,397 @@ def test_a_worker_that_breaks_its_contract_fails_the_dispatch(root_server, tmp_p
     assert outcome.status == "failed" and "contract" in outcome.worker_output
     # The tests gate never ran: the worker failing ends the dispatch before gates.
     assert outcome.gates == []
+
+
+@requires_runtime
+def test_review_sendback_repairs_and_passes_through_real_root(root_server, tmp_path, monkeypatch):
+    """The PM review loop for real, no mock runner: an implementation step dispatched to the
+    vendored Root; a REAL reviewer job (second Root process) requests changes; the SAME step is
+    redispatched with the feedback in its brief; the repair lands; a second real reviewer passes.
+    The scripted model is re-scripted per job from the test seam (the model is scaffolding);
+    everything else - contracts, gates, journal, Root's job machinery - is the real path."""
+    import skye.dispatcher as dispatcher
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+
+    scripts = {
+        ("developer", 1): [tool_call("w1", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items)\n"}),
+                            text('done {"summary": "cart total, v1"}')],
+        ("developer", 2): [tool_call("w2", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items) if items else 0\n"}),
+                            text('fixed {"summary": "empty cart returns 0"}')],
+        ("reviewer", 1): [text('Reviewed. {"verdict": "request-changes", "feedback": ["empty cart must return 0"]}')],
+        ("reviewer", 2): [text('Reviewed again. {"verdict": "pass"}')],
+    }
+    calls: dict[str, int] = {"developer": 0, "reviewer": 0}
+
+    def write_script(role: str) -> None:
+        calls[role] += 1
+        path = tmp_path / f"script-{role}-{calls[role]}.json"
+        path.write_text(json.dumps(scripts[(role, calls[role])]))
+        monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(path))
+
+    real_dispatch = dispatcher.dispatch
+
+    def per_job_scripting(contract, *args, **kwargs):
+        write_script(contract["role"])  # swap the script BEFORE Root launches this job
+        return real_dispatch(contract, *args, **kwargs)
+
+    # Both dispatch entry points route through the seam: mission's bound name (worker jobs)
+    # and dispatcher's module global (the review gate's reviewer jobs).
+    monkeypatch.setattr(mission_mod, "dispatch", per_job_scripting)
+    monkeypatch.setattr(dispatcher, "dispatch", per_job_scripting)
+
+    mission_path = tmp_path / "mission.json"
+    mission_path.write_text(json.dumps({
+        "id": "m-review", "goal": "cart totals", "repo": str(repo),
+        "max_review_rounds": 3,
+        "steps": [{"id": "build", "role": "developer", "adapter": "root",
+                   "goal": "write cart.py with a total()", "gates": ["review"],
+                   "contract_keys": ["summary"], "budget": {"max_steps": 6}}]}))
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}],
+                     "review_role": "reviewer"})
+    state_dir = tmp_path / ".skye"
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert calls == {"developer": 2, "reviewer": 2}
+
+    # Four real Root jobs ran: two implementations, two reviews.
+    jobs = [json.loads(p.read_text()) for p in (home / "jobs").glob("*.json")]
+    dev_jobs = sorted((j for j in jobs if j["role"] == "developer"), key=lambda j: j["started"])
+    review_jobs = sorted((j for j in jobs if j["role"] == "reviewer"), key=lambda j: j["started"])
+    assert len(dev_jobs) == 2 and len(review_jobs) == 2
+    # The redo's brief really carried the reviewer's feedback into the worker's job.
+    assert "empty cart must return 0" in dev_jobs[1]["goal"]
+    # The repaired file is what the reviewer approved.
+    assert "else 0" in (repo / "cart.py").read_text()
+    # The loop is journaled: one review-round with feedback, then a settled done.
+    journal = [json.loads(line)
+               for line in (state_dir / "missions/m-review/journal.jsonl").read_text().splitlines()]
+    kinds = [(e["step"], e["event"]) for e in journal]
+    assert ("build", "review-round") in kinds
+    assert kinds[-1] == ("build", "settled")
+    assert journal[-1]["status"] == "done"
+
+
+class SimulatedCrash(BaseException):
+    """The process 'dies' right after a journal entry is fsync'd. BaseException, not Exception:
+    the dispatcher converts ordinary Exceptions into a failed Outcome (a settled result), and a
+    real process death is not a settled result - it must escape the same way here."""
+
+
+@requires_runtime
+def test_crash_after_review_sendback_recovers_through_real_root(root_server, tmp_path, monkeypatch):
+    """Root + crash repair loop, the previously outstanding combination: real worker job, real
+    reviewer job requesting changes, then a CRASH after the review-round entry is journaled but
+    before the redo starts. The resume (a fresh run_mission over the journal alone) re-seeds the
+    feedback into the redo's brief, the repair runs as a NEW real Root job, a second real
+    reviewer passes. Phase 1 and phase 2 both go through the vendored Root binary."""
+    import skye.dispatcher as dispatcher
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+
+    scripts = {
+        ("developer", 1): [tool_call("w1", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items)\n"}),
+                            text('done {"summary": "cart total, v1"}')],
+        ("developer", 2): [tool_call("w2", "WriteFile", {"path": "cart.py",
+                                                          "content": "def total(items):\n    return sum(i['price'] for i in items) if items else 0\n"}),
+                            text('fixed {"summary": "empty cart returns 0"}')],
+        ("reviewer", 1): [text('Reviewed. {"verdict": "request-changes", "feedback": ["empty cart must return 0"]}')],
+        ("reviewer", 2): [text('Reviewed again. {"verdict": "pass"}')],
+    }
+    calls: dict[str, int] = {"developer": 0, "reviewer": 0}
+
+    def per_job_scripting(contract, *args, **kwargs):
+        role = contract["role"]
+        calls[role] += 1
+        path = tmp_path / f"crash-script-{role}-{calls[role]}.json"
+        path.write_text(json.dumps(scripts[(role, calls[role])]))
+        monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(path))
+        return real_dispatch(contract, *args, **kwargs)
+
+    real_dispatch = dispatcher.dispatch
+    monkeypatch.setattr(mission_mod, "dispatch", per_job_scripting)
+    monkeypatch.setattr(dispatcher, "dispatch", per_job_scripting)
+
+    # Crash seam: the journal append for the review-round lands (fsync'd), then the run dies.
+    real_append = mission_mod.Journal.append
+    crashed_once = {"done": False}
+
+    def append_then_crash(self, step, event, **fields):
+        real_append(self, step, event, **fields)
+        if event == "review-round" and not crashed_once["done"]:
+            crashed_once["done"] = True
+            raise SimulatedCrash("process died right after journaling the send-back")
+
+    monkeypatch.setattr(mission_mod.Journal, "append", append_then_crash)
+
+    mission_path = tmp_path / "mission.json"
+    mission_path.write_text(json.dumps({
+        "id": "m-crash", "goal": "cart totals", "repo": str(repo),
+        "max_review_rounds": 3,
+        "steps": [{"id": "build", "role": "developer", "adapter": "root",
+                   "goal": "write cart.py with a total()", "gates": ["review"],
+                   "contract_keys": ["summary"], "budget": {"max_steps": 6}}]}))
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}],
+                     "review_role": "reviewer"})
+    state_dir = tmp_path / ".skye"
+
+    # Phase 1: real worker job, real reviewer job, send-back journaled, then the crash.
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert calls == {"developer": 1, "reviewer": 1}
+    journal_path = state_dir / "missions/m-crash/journal.jsonl"
+    entries = [json.loads(line) for line in journal_path.read_text().splitlines()]
+    assert [e["event"] for e in entries].count("review-round") == 1
+    assert not any(e["event"] == "settled" for e in entries)
+    assert "sum(i['price']" in (repo / "cart.py").read_text()
+
+    # Phase 2: resume from the journal alone. The redo is a NEW real Root job whose brief
+    # carries the reviewer's feedback; the second real reviewer passes.
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert calls == {"developer": 2, "reviewer": 2}
+
+    jobs = [json.loads(p.read_text()) for p in (home / "jobs").glob("*.json")]
+    dev_jobs = sorted((j for j in jobs if j["role"] == "developer"), key=lambda j: j["started"])
+    assert len(dev_jobs) == 2
+    assert "empty cart must return 0" in dev_jobs[1]["goal"]  # feedback survived the crash
+    assert "else 0" in (repo / "cart.py").read_text()
+    entries = [json.loads(line) for line in journal_path.read_text().splitlines()]
+    assert [e["event"] for e in entries].count("dispatched") == 2  # original + redo, no more
+    assert entries[-1]["event"] == "settled" and entries[-1]["status"] == "done"
+
+
+def _root_crash_seam(monkeypatch, mission_mod, crash_on, fired):
+    """Crash the run right after the chosen journal entry is fsync'd."""
+    real_append = mission_mod.Journal.append
+
+    def append_then_crash(self, step, event, **fields):
+        real_append(self, step, event, **fields)
+        if event == crash_on and not fired["done"]:
+            fired["done"] = True
+            raise SimulatedCrash(f"process died right after journaling {event}")
+
+    monkeypatch.setattr(mission_mod.Journal, "append", append_then_crash)
+    return real_append
+
+
+def _simple_root_mission(tmp_path, mission_id):
+    mission_path = tmp_path / f"{mission_id}.json"
+    mission_path.write_text(json.dumps({
+        "id": mission_id, "goal": "write a file", "repo": str(tmp_path / f"ws-{mission_id}"),
+        "steps": [{"id": "build", "role": "developer", "adapter": "root",
+                   "goal": f"write out-{mission_id}.py", "gates": [],
+                   "contract_keys": ["summary"], "budget": {"max_steps": 6}}]}))
+    (tmp_path / f"ws-{mission_id}").mkdir()
+    return mission_path
+
+
+@requires_runtime
+def test_operator_redispatch_with_a_stale_root_job_launches_a_fresh_one(root_server, tmp_path, monkeypatch):
+    """The browser-exercised bug, on the real path: an interrupted step WITH a stale prior job
+    id on record, and the operator's explicit redispatch. The journal must say redispatch (not
+    reattached), and a NEW real Root job must run - the stale job's old result must not be
+    polled in as if it were this attempt's."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([
+        tool_call("w", "WriteFile", {"path": "out-m-redispatch.py", "content": "print('v1')\n"}),
+        text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "worker-job", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-redispatch")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    stale_jobs = {p.name for p in (home / "jobs").glob("*.json")}
+    assert len(stale_jobs) == 1  # the orphaned, soon-stale job
+
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None,
+                          state_dir=state_dir, redispatch="build")
+    assert outcome.status == "done", outcome.reason
+    now_jobs = {p.name for p in (home / "jobs").glob("*.json")}
+    assert len(now_jobs) == 2, "a FRESH Root job must run; the stale one must not be reused"
+    new_job = (now_jobs - stale_jobs).pop()
+    result = json.loads(outcome.steps["build"]["output"])
+    assert result["job"] == new_job.split(".")[0]
+    journal = [json.loads(l)
+               for l in (state_dir / "missions/m-redispatch/journal.jsonl").read_text().splitlines()]
+    kinds = [e["event"] for e in journal]
+    assert "redispatch" in kinds and "reattached" not in kinds
+    assert journal[kinds.index("redispatch")].get("superseded_job")
+
+
+@requires_runtime
+def test_reattach_through_real_root_reuses_the_live_prior_job(root_server, tmp_path, monkeypatch):
+    """The companion case: no operator decision, prior job id journaled - resume REATTACHES to
+    the real prior Root job (no duplicate job) and settles from its result."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([
+        tool_call("w", "WriteFile", {"path": "out-m-reattach.py", "content": "print('v1')\n"}),
+        text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "worker-job", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-reattach")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    prior_jobs = {p.name for p in (home / "jobs").glob("*.json")}
+    assert len(prior_jobs) == 1
+
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "done", outcome.reason
+    assert {p.name for p in (home / "jobs").glob("*.json")} == prior_jobs  # no duplicate job
+    journal = (state_dir / "missions/m-reattach/journal.jsonl").read_text()
+    assert "reattached" in journal and "redispatch" not in journal
+
+
+@requires_runtime
+def test_interrupted_before_job_id_pauses_for_the_operator_through_real_root(root_server, tmp_path, monkeypatch):
+    """Crash after 'dispatched' but before the worker-job id lands: resume must NOT silently
+    re-run. The mission reports interrupted and names redispatch/reset; no new Root job."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "dispatched", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-interrupted")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    jobs_before = {p.name for p in (home / "jobs").glob("*.json")}
+
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+    outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert outcome.status == "interrupted"
+    assert "mission redispatch" in outcome.reason and "mission reset" in outcome.reason
+    assert {p.name for p in (home / "jobs").glob("*.json")} == jobs_before  # nothing re-ran
+
+
+@requires_runtime
+def test_reattach_to_a_wiped_root_home_pauses_then_redispatch_recovers(root_server, tmp_path, monkeypatch):
+    """The gone-job case on the real path: crash with the job id journaled, then the Root home
+    is REPLACED (fresh server, fresh home - the journaled job no longer exists anywhere).
+    Resume must pause as interrupted and launch nothing; the operator's redispatch then runs a
+    fresh real job on the new server and the mission completes."""
+    import skye.mission as mission_mod
+    from skye.mission import load_mission, run_mission
+    from skye.policy import Policy
+
+    url, home = root_server
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "backlog.json"))
+    monkeypatch.setenv("SKYE_ROLES", str(tmp_path / "roles.json"))
+    monkeypatch.setenv("SKYE_ISSUES", str(tmp_path / "issues.json"))
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([
+        tool_call("w", "WriteFile", {"path": "out-m-wiped.py", "content": "print('v1')\n"}),
+        text('done {"summary": "v1"}')]))
+    monkeypatch.setenv(launcher.SCRIPTED_ECHO_ENV, str(script))
+
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    state_dir = tmp_path / ".skye"
+    fired = {"done": False}
+    real_append = _root_crash_seam(monkeypatch, mission_mod, "worker-job", fired)
+    mission_path = _simple_root_mission(tmp_path, "m-wiped")
+
+    with pytest.raises(SimulatedCrash):
+        run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+    assert len(list((home / "jobs").glob("*.json"))) == 1
+    monkeypatch.setattr(mission_mod.Journal, "append", real_append)
+
+    # The Root home is wiped and replaced: a second server with a fresh home answers now.
+    home2 = tmp_path / "root-home-2"
+    monkeypatch.setenv("TURA_CODE_HOME", str(home2))
+    import uvicorn  # noqa: PLC0415
+    from tura_code.app import create_app  # noqa: PLC0415
+    app2 = create_app(home2)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port2 = probe.getsockname()[1]
+    server2 = uvicorn.Server(uvicorn.Config(app2, host="127.0.0.1", port=port2, log_level="error"))
+    thread2 = threading.Thread(target=server2.run, daemon=True)
+    thread2.start()
+    deadline = time.monotonic() + 30
+    while not server2.started and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert server2.started
+    monkeypatch.setenv("SKYE_ROOT_URL", f"http://127.0.0.1:{port2}")
+    monkeypatch.setenv("SKYE_ROOT_HOME", str(home2))
+    try:
+        # Resume: the journaled job is gone everywhere -> interrupted pause, nothing launched.
+        outcome = run_mission(load_mission(mission_path), policy, runner=None, state_dir=state_dir)
+        assert outcome.status == "interrupted"
+        assert "no longer exists" in outcome.reason and "no duplicate was launched" in outcome.reason
+        assert not list((home2 / "jobs").glob("*.json"))  # no silent fresh job on the new server
+        journal = (state_dir / "missions/m-wiped/journal.jsonl").read_text()
+        assert "reattached" not in journal and "settled" not in journal
+
+        # The operator decides: redispatch. A fresh REAL job runs on the new server.
+        outcome = run_mission(load_mission(mission_path), policy, runner=None,
+                              state_dir=state_dir, redispatch="build")
+        assert outcome.status == "done", outcome.reason
+        new_jobs = list((home2 / "jobs").glob("*.json"))
+        assert len(new_jobs) == 1
+        result = json.loads(outcome.steps["build"]["output"])
+        assert result["job"] == new_jobs[0].stem
+        journal = (state_dir / "missions/m-wiped/journal.jsonl").read_text()
+        assert "redispatch" in journal and "reattached" not in journal
+    finally:
+        server2.should_exit = True
+        thread2.join(15)

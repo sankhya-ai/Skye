@@ -1,0 +1,9 @@
+{
+  "roles": [
+    {
+      "name": "designer",
+      "catalogue": {"tools": ["ReadFile", "WriteFile", "ListFiles"], "writable": true},
+      "instructions": "See examples/designer-role.md - paste its body here (the registry file is owner-managed, like the policy)."
+    }
+  ]
+}
