@@ -77,7 +77,7 @@ const THREAD_KIND_LABEL: Record<string, string> = {
   evidence: "evidence",
   verdict: "verdict",
   status: "status",
-  discussion: "team line",
+  discussion: "note",
 };
 const FOLDED_KIND_LABEL: Record<string, string> = {
   note: "note",
@@ -85,15 +85,15 @@ const FOLDED_KIND_LABEL: Record<string, string> = {
   ack: "ack",
 };
 
-function threadLabel(entry: ThreadEntry): { label: string | null; body: string } {
+function threadLabel(entry: ThreadEntry): { chip: string | null; body: string } {
   let body = entry.body;
-  let label = THREAD_KIND_LABEL[entry.kind] ?? null;
+  let chip = THREAD_KIND_LABEL[entry.kind] ?? null;
   const folded = entry.kind === "discussion" ? body.match(/^\[([a-z-]+)\]\s*/) : null;
   if (folded) {
-    label = `team line - ${FOLDED_KIND_LABEL[folded[1]] ?? folded[1]}`;
+    chip = FOLDED_KIND_LABEL[folded[1]] ?? folded[1];
     body = body.slice(folded[0].length);
   }
-  return { label, body };
+  return { chip, body };
 }
 
 function threadTime(ts: number): string {
@@ -118,18 +118,23 @@ function ThreadList({ thread }: { thread: ThreadEntry[] }) {
       <div
         ref={ref}
         onScroll={check}
-        className="max-h-40 space-y-1 overflow-y-auto text-xs text-muted-foreground"
+        className="max-h-44 space-y-2 overflow-y-auto pr-1 text-xs"
       >
         {thread.map((entry, i) => {
-          const { label, body } = threadLabel(entry);
+          const { chip, body } = threadLabel(entry);
           return (
-            <p key={i}>
-              <span className="text-foreground/80">{entry.actor}</span>
-              {label ? <span className="text-muted-foreground/60"> · {label}</span> : null}
-              <span className="text-muted-foreground/50"> · {threadTime(entry.ts)}</span>
-              {" - "}
-              {body}
-            </p>
+            <div key={i} className="border-l-2 border-border/70 pl-2">
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                <span className="font-medium text-foreground/80">{entry.actor}</span>
+                {chip ? (
+                  <span className="rounded-xs border border-border px-1 py-px text-[10px] leading-tight text-muted-foreground">
+                    {chip}
+                  </span>
+                ) : null}
+                <span className="ml-auto tabular-nums">{threadTime(entry.ts)}</span>
+              </p>
+              <p className="mt-0.5 leading-relaxed text-foreground/80">{body}</p>
+            </div>
           );
         })}
       </div>
