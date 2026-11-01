@@ -233,7 +233,7 @@ export function Sidebar({
             >
               <MessageSquare className="mt-0.5 size-4 shrink-0" />
               <span className="min-w-0 flex-1">
-                <span className="block truncate">{mission.goal || mission.id}</span>
+                <span className="block truncate">{mission.goal || "Untitled mission"}</span>
                 <span className="block truncate text-xs text-muted-foreground">
                   {chatStatus(mission)}
                   {mission.last_activity ? ` · ${formatRelative(mission.last_activity)}` : ""}

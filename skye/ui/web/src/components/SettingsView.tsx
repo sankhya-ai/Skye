@@ -59,7 +59,7 @@ export function SettingsView() {
     policy.max_concurrent = Math.max(1, Math.min(4, Math.trunc(maxConcurrent) || 1));
     try {
       await savePolicy(policy);
-      setMessage("Saved - the next dispatch runs under this policy.");
+      setMessage("Saved - the next run uses this policy.");
     } catch (e) {
       setError(humanError(e, "policy"));
     }
@@ -77,7 +77,7 @@ export function SettingsView() {
     }
     try {
       await savePolicy(parsed);
-      setMessage("Saved - the next dispatch runs under this policy.");
+      setMessage("Saved - the next run uses this policy.");
       await refresh();
     } catch (e) {
       setError(humanError(e, "policy"));

@@ -43,13 +43,13 @@ export function ApprovalCard({
       </p>
       <details className="mb-2">
         <summary className="cursor-pointer text-xs text-muted-foreground/80 hover:text-foreground">
-          Contract details
+          What you're approving
         </summary>
         <dl className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
           {fingerprint ? <div>fingerprint {fingerprint}</div> : null}
           {contract.repo ? <div>repo {String(contract.repo)}</div> : null}
           <div>
-            gates{" "}
+            checks{" "}
             {Array.isArray(contract.gates) && contract.gates.length > 0
               ? contract.gates.map((g) => String(g)).join(", ")
               : "none"}
@@ -62,7 +62,7 @@ export function ApprovalCard({
         ) : null}
       </details>
       <p className="mb-2 text-xs text-muted-foreground">
-        Approving runs this contract once. Policy unchanged.
+        Approving runs this step once. Policy unchanged.
       </p>
       {error ? <p className="mb-2 text-xs text-destructive">{error}</p> : null}
       <Button

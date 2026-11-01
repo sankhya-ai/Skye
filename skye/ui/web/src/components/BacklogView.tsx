@@ -121,7 +121,7 @@ export function BacklogView() {
     const m = missions.find((row) => row.id === missionId);
     if (!m) return "work started";
     if (m.overall === "done") return ""; // the status badge carries the review state
-    if (m.needs_owner) return "paused - one contract needs your OK";
+    if (m.needs_owner) return "paused - one step needs your OK";
     if (m.live) return "running";
     if (m.overall === "interrupted") return "interrupted";
     if (m.overall === "failed") return "failed";

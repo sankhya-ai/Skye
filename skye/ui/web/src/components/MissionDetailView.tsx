@@ -122,7 +122,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         <p className="mt-1 text-xs text-muted-foreground/70">
           {detail.journal.length > 0
             ? `updated ${formatRelative(detail.journal[detail.journal.length - 1].ts)}`
-            : `${settled} of ${steps.length} steps settled`}
+            : `${settled} of ${steps.length} steps done`}
         </p>
       </div>
       {detail.live?.error ? (
@@ -143,7 +143,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
       <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} />
       <details className="rounded-md border border-border bg-card p-4">
         <summary className="cursor-pointer text-sm font-medium text-foreground">
-          Journal ({detail.journal.length} events)
+          Activity ({detail.journal.length} events)
         </summary>
         <div className="mt-3 max-h-72 space-y-1 overflow-auto font-mono text-xs text-muted-foreground">
           {[...detail.journal].reverse().map((entry, i) => (
@@ -154,7 +154,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
               {entry.status ? <span>({entry.status})</span> : null}
             </div>
           ))}
-          {detail.journal.length === 0 ? <p>Nothing journaled yet.</p> : null}
+          {detail.journal.length === 0 ? <p>No recorded activity yet.</p> : null}
         </div>
       </details>
     </div>

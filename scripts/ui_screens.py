@@ -263,7 +263,7 @@ with sync_playwright() as pw:
             approve = card.locator("button", has_text="Approve this step once")
             if approve.count():
                 # keyboard-only flow: summary toggles, Tab reaches approve, ring visible, Enter activates
-                summary = card.locator("summary", has_text="Contract details")
+                summary = card.locator("summary", has_text="What you're approving")
                 summary.focus()
                 page.keyboard.press("Enter")
                 page.wait_for_timeout(200)
@@ -413,6 +413,11 @@ with sync_playwright() as pw:
     if st == "interrupted":
         page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
         print("INTERRUPTED capture: taken")
+        again = page.locator("button", has_text="Run this step again")
+        print("INTERRUPTED re-run affordance:", "PASS" if again.count() else "FAIL no button")
+        # the copy above it must not promise zero side effects
+        note = page.locator("text=partially applied").count()
+        print("INTERRUPTED partial-effects note:", "PASS" if note else "FAIL missing")
     else:
         page.screenshot(path=str(out_dir / "ui-mission-interrupted.png"), full_page=True)
         print("INTERRUPTED capture: taken but state was", st, "- inspect")

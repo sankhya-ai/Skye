@@ -116,7 +116,7 @@ function stateBadge(state: string, approved?: boolean) {
     case "dispatched":
       return <Badge variant="info">running</Badge>;
     case "needs-owner":
-      return <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700">needs owner</Badge>;
+      return <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700">needs you</Badge>;
     case "interrupted":
       return <Badge variant="destructive">interrupted</Badge>;
     case "skipped":
@@ -222,18 +222,18 @@ export function MissionRunTrace({
                       : st.reason}
                   </p>
                 ) : null}
-                {st.state === "interrupted" ? (
+                {staleDispatch ? (
                   <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                     <p className="mb-2 text-xs text-muted-foreground">
-                      Stopped mid-step with unknown partial effects. Redispatch re-runs exactly
-                      this step; resetting the mission starts clean.
+                      Running it again re-runs exactly this step; resetting the mission
+                      starts clean.
                     </p>
                     <Button
                       variant="danger-outline"
                       size="sm"
                       onClick={() => onRedispatch(step.id)}
                     >
-                      <Send className="size-3" /> Redispatch this step
+                      <Send className="size-3" /> Run this step again
                     </Button>
                   </div>
                 ) : null}
