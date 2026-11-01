@@ -65,6 +65,11 @@ The **cart widget** keeps its own receipts: line items, totals and a badge count
 See [the shop README](https://example.invalid/docs) for context.
 """
 (demo / "script.json").write_text(json.dumps([
+    # a real running window: sleep classifies read-tier (auto-allowed, no trust grant) and
+    # keeps the dispatch alive long enough for mid-run UI/API state checks - same technique
+    # as ui_team_scenario.py's live capture.
+    "tool_call: " + json.dumps({"id": "s0", "name": "Shell",
+                                "arguments": json.dumps({"command": "sleep 4"})}),
     "tool_call: " + json.dumps({"id": "r", "name": "ReadFile",
                                 "arguments": json.dumps({"path": "app.py"})}),
     "tool_call: " + json.dumps({"id": "w", "name": "WriteFile",
@@ -197,6 +202,25 @@ with sync_playwright() as pw:
         if live_detail["live"].get("running"):
             # give the page's own polling a beat to render the live badge, then capture
             page.wait_for_timeout(1200)
+            g_live = json.loads(urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{ui_port}/api/missions/{mission_id}/graph",
+                headers={"X-Skye-Token": token}), timeout=30).read())
+            live_states = {n["id"]: n["state"] for n in g_live["nodes"]}
+            print("GRAPH route shows the running step mid-run:",
+                  "PASS" if "running" in live_states.values() else f"FAIL {live_states}")
+            flow_badge = 0
+            for _ in range(20):  # the flow polls on its own 3s cadence inside the run window
+                flow_badge = page.locator("[data-flow-node]", has_text="running").count()
+                if flow_badge:
+                    break
+                page.wait_for_timeout(400)
+            print("FLOW view marks the running node mid-run:",
+                  "PASS" if flow_badge else "FAIL")
+            try:
+                page.locator("[data-flow-card]").screenshot(
+                    path=str(out_dir / "ui-flow-running.png"), timeout=5000)
+            except Exception:
+                pass
             shot(page, out_dir / "ui-mission-detail-running.png")
             live_shot = True
             print("LIVE running-state capture: taken")
@@ -948,6 +972,21 @@ with sync_playwright() as pw:
     print("MULTI same-path previews show each repo's own content, never the other's:",
           "PASS" if be_preview and fe_preview and not cross and no_err else "FAIL")
     shot(page, out_dir / "ui-artifacts-multirepo.png")
+    # ordinary-viewport scroll proof: the sidebar stays pinned at top/mid/bottom
+    vp = browser.new_page(viewport={"width": 1280, "height": 800})
+    vp.goto(ui_url + "#/mission/multi-recovery")
+    vp.wait_for_timeout(2500)
+    pin_ok = True
+    for frac, name in ((0.0, "top"), (0.5, "mid"), (1.0, "bottom")):
+        vp.evaluate(f"window.scrollTo(0, (document.documentElement.scrollHeight - window.innerHeight) * {frac})")
+        vp.wait_for_timeout(400)
+        r = vp.locator("aside").evaluate("el => {const b = el.getBoundingClientRect(); return {top: b.top, bottom: b.bottom}}")
+        if abs(r["top"] - 8) > 2 or abs(r["bottom"] - 792) > 2:
+            pin_ok = False
+        vp.screenshot(path=str(out_dir / f"ui-scroll-{name}.png"))
+    print("SCROLL sidebar pinned at top/mid/bottom in an ordinary viewport:",
+          "PASS" if pin_ok else "FAIL")
+    vp.close()
     g = json.loads(urllib.request.urlopen(urllib.request.Request(
         f"http://127.0.0.1:{ui_port}/api/missions/multi-recovery/graph",
         headers={"X-Skye-Token": token}), timeout=30).read())
@@ -976,6 +1015,7 @@ with sync_playwright() as pw:
     print("FLOW execution log lists redacted journal events:",
           "PASS" if log_rows >= 2 else f"FAIL rows={log_rows}")
     shot(page, out_dir / "ui-flow-multi.png")
+    page.locator("[data-flow-card]").screenshot(path=str(out_dir / "ui-flow-multi-crop.png"))
     nctx = browser.new_context(viewport={"width": 430, "height": 800})
     npage = nctx.new_page()
     npage.goto(ui_url + "#/mission/multi-recovery")
@@ -1003,11 +1043,12 @@ with sync_playwright() as pw:
     page.locator("text=Multiple repositories").click()
     page.locator("text=+ Add repository").click()
     page.locator("text=+ Add repository").click()
-    page.locator('input[placeholder="name (e.g. backend)"]').nth(0).fill("backend")
+    page.locator('input[placeholder="label (e.g. web)"]').nth(0).fill("backend")
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(0).fill(str(repo_be))
-    page.locator('input[placeholder="name (e.g. backend)"]').nth(1).fill("frontend")
+    page.locator('input[placeholder="label (e.g. web)"]').nth(1).fill("frontend")
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill(str(repo_fe))
-    page.select_option("details select", label="backend")
+    # no "Planning runs in" selection: the planner repo auto-defaults to the first declared
+    # repo (previously a required manual choice), and step routing is fully automatic.
     shot(page, out_dir / "ui-composer-form.png")
     # validation is real: a relative path is refused before anything is sent
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill("relative/path")
@@ -1015,6 +1056,27 @@ with sync_playwright() as pw:
     refused = page.locator("text=needs an absolute path").count()
     page.locator('input[placeholder="/absolute/path/to/repo"]').nth(1).fill(str(repo_fe))
     print("COMPOSER refuses a non-absolute repo path before submit:", "PASS" if refused else "FAIL")
+    # the scripted planner proposes steps already routed to the declared repos, each with a
+    # recorded reason - the owner typed a goal and two folders, never an assignment.
+    composer_plan = {"verdict": "pass", "reasons": [], "propose_steps": [
+        {"id": "api-work", "role": "developer", "adapter": "root",
+         "goal": "change the API", "repo": "backend",
+         "repo_reason": "the API code lives in backend",
+         "gates": [], "budget": {"max_steps": 4}},
+        {"id": "web-work", "role": "developer", "adapter": "root",
+         "goal": "update the web UI", "repo": "frontend",
+         "repo_reason": "the web client lives in frontend",
+         "gates": [], "budget": {"max_steps": 4}}]}
+    composer_script = demo / "composer-script.json"
+    composer_script.write_text(json.dumps([
+        "tool_call: " + json.dumps({"id": "r", "name": "ReadFile",
+                                    "arguments": json.dumps({"path": "README.md"})}),
+        "tool_call: " + json.dumps({"id": "w2", "name": "Shell",
+                                    "arguments": json.dumps({"command":
+                                        "mkdir -p docs && printf '# Composer notes\\n\\nRepo: %s\\n' "
+                                        '\"$(basename \"$PWD\")\" > docs/composer.md'})}),
+        "text: Here is the plan. " + json.dumps(composer_plan)]))
+    os.environ["TURA_CODE_SCRIPTED_ECHO"] = str(composer_script)
     page.locator('button[aria-label="Start mission"]').click()
     page.wait_for_timeout(3000)
     page.wait_for_selector("text=repositories", timeout=15000)
@@ -1023,10 +1085,48 @@ with sync_playwright() as pw:
     print("COMPOSER multi-repo mission runs with per-repo worktrees shown:",
           "PASS" if mode and names else "FAIL")
     shot(page, out_dir / "ui-composer-multirepo.png")
+    composer_id = page.url.rsplit("/", 1)[-1]
+    deadline = time.monotonic() + 60
+    cg = {}
+    while time.monotonic() < deadline:
+        cg = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{ui_port}/api/missions/{composer_id}/graph",
+            headers={"X-Skye-Token": token}), timeout=30).read())
+        if cg.get("meta", {}).get("status") in ("done", "failed", "needs-owner", "gate-failed"):
+            break
+        time.sleep(1)
+    os.environ["TURA_CODE_SCRIPTED_ECHO"] = main_script
+    proposed = {n["id"]: n for n in cg.get("nodes", []) if n.get("origin") == "proposed"}
+    routed = (proposed.get("api-work", {}).get("repo") == "backend"
+              and proposed.get("web-work", {}).get("repo") == "frontend"
+              and all(proposed.get(s, {}).get("repo_reason") for s in ("api-work", "web-work"))
+              and all(proposed.get(s, {}).get("state") == "done" for s in ("api-work", "web-work")))
+    print("COMPOSER auto-routing: steps land in the right repos with recorded reasons:",
+          "PASS" if cg.get("meta", {}).get("status") == "done" and routed else
+          f"FAIL status={cg.get('meta', {}).get('status')} proposed={ {k: (v.get('repo'), v.get('state')) for k, v in proposed.items()} }")
+    page.wait_for_timeout(1500)
+    page.locator("[data-flow-node='api-work']").click()
+    page.wait_for_timeout(600)
+    why = page.locator("text=Why this repo: the API code lives in backend").count()
+    prop = page.locator("text=Proposed by").count()
+    print("FLOW shows the routed step's origin and repo reason:",
+          "PASS" if why and prop else "FAIL")
+    page.locator("[data-flow-card]").screenshot(path=str(out_dir / "ui-composer-routed.png"))
     page.wait_for_timeout(6000)  # two 3s poll cycles: the sidebar must catch up with done
     stale_running = page.locator("aside >> text=running").count()
     print("SIDEBAR consistent once the mission settles (no stale running):",
           "PASS" if not stale_running else "FAIL")
+    # blocked state in the workflow view: the policy-paused codex mission waits on the owner
+    page.goto(ui_url + f"#/mission/{approval_mission}")
+    page.wait_for_timeout(2500)
+    blocked_badge = page.locator("[data-flow-node]", has_text="needs you").count()
+    print("FLOW view shows the policy-blocked step as needing the owner:",
+          "PASS" if blocked_badge else "FAIL")
+    try:
+        page.locator("[data-flow-card]").screenshot(
+            path=str(out_dir / "ui-flow-blocked.png"), timeout=5000)
+    except Exception:
+        pass
     # adapter availability in Settings: truthful installed/not-installed from the engine probe
     page.goto(ui_url + "#/settings")
     page.wait_for_timeout(2000)

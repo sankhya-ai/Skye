@@ -134,7 +134,7 @@ export function MissionFlow({ missionId }: { missionId: string }) {
   const selectedNode = graph.nodes.find((n) => n.id === selected) ?? null;
 
   return (
-    <div className="rounded-md border border-border bg-card p-4">
+    <div data-flow-card className="rounded-md border border-border bg-card p-4">
       <div className="flex items-center gap-2">
         <h3 className="text-sm font-medium text-foreground">Workflow</h3>
         <span className="text-xs text-muted-foreground">

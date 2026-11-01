@@ -147,10 +147,9 @@ export function HomeView({
       setError("Repository names must be unique");
       return;
     }
-    if (declared.length > 0 && !defaultRepo) {
-      setError("Choose the default repository the planner runs in");
-      return;
-    }
+    const plannerRepo = defaultRepo
+      || declared.find((r) => REPO_NAME.test(r.name.trim()))?.path.trim()
+      || "";
     setBusy(true);
     setError(null);
     try {
@@ -163,7 +162,7 @@ export function HomeView({
         ...(declared.length > 0
           ? {
               repos: Object.fromEntries(declared.map((r) => [r.name.trim(), r.path.trim()])),
-              repo: defaultRepo,
+              repo: plannerRepo,
             }
           : {}),
       });
@@ -243,7 +242,7 @@ export function HomeView({
                   onChange={(e) =>
                     setRepoRows(repoRows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))
                   }
-                  placeholder="name (e.g. backend)"
+                  placeholder="label (e.g. web)"
                   className="w-32 rounded-md border border-border bg-background px-2 py-1 text-xs outline-none"
                 />
                 <input
@@ -273,7 +272,7 @@ export function HomeView({
             </button>
             {repoRows.length > 0 ? (
               <div className="flex items-center gap-2">
-                <label className="text-muted-foreground">Default repo</label>
+                <label className="text-muted-foreground">Planning runs in</label>
                 <select
                   value={defaultRepo}
                   onChange={(e) => setDefaultRepo(e.target.value)}
@@ -291,9 +290,10 @@ export function HomeView({
               </div>
             ) : null}
             <p className="text-[11px] text-muted-foreground/70">
-              Each repository gets a short name and its absolute path; steps then reference a
-              repo by name. Repositories must be distinct - the server validates them exactly
-              like a mission file.
+              Add the folders Skye may work in - any short label and its absolute path.
+              Skye assigns each step to a folder itself and shows why on the mission page;
+              "Planning runs in" is only where the planning step itself runs. Repositories
+              must be distinct - the server validates them exactly like a mission file.
             </p>
           </div>
         </details>
