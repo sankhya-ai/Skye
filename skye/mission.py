@@ -409,13 +409,19 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             kind = states.get(step_id, {}).get("event", "")
             if kind in ("dispatched", "reattached", "redispatch"):
                 prior_job = states.get(step_id, {}).get("worker_job", "")
-                if step["adapter"] == "root" and prior_job:
+                if redispatch == step_id:
+                    # The operator's explicit choice beats reattach, even with a prior job id
+                    # on record: they inspected and chose a FRESH run. Journaled as their
+                    # decision (with the superseded job id), never as a reattach, and no
+                    # resume_jobs entry - the stale job must not be polled as if it were
+                    # this attempt.
+                    journal.append(step_id, "redispatch",
+                                   reason="operator explicitly re-runs the interrupted step",
+                                   superseded_job=prior_job or "")
+                    ready.append(step)
+                elif step["adapter"] == "root" and prior_job:
                     resume_jobs[step_id] = prior_job  # reattach: poll the existing Root job, never duplicate it
                     journal.append(step_id, "reattached", worker_job=prior_job)
-                    ready.append(step)
-                elif redispatch == step_id:
-                    journal.append(step_id, "redispatch",
-                                   reason="operator explicitly re-runs the interrupted step")
                     ready.append(step)
                 elif not interrupted_reason:
                     # No reattach possible and no operator decision: STOP. The interrupted attempt

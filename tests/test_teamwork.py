@@ -402,3 +402,108 @@ def test_editing_role_instructions_invalidates_prior_approval(tmp_path, monkeypa
                           "adapter": "root", "gates": []})
     assert contract2["role_instructions"] == "scope BROADLY"
     assert approvals.peek(contract2) is None  # the old approval does not cover the new text
+
+
+def _seed_interrupted_journal(state_dir, worker_job=None):
+    mission_dir = state_dir / "missions" / "m-team"
+    mission_dir.mkdir(parents=True)
+    entries = [{"v": 1, "ts": 1.0, "step": "build", "event": "dispatched", "fingerprint": "x"}]
+    if worker_job:
+        entries.append({"v": 1, "ts": 2.0, "step": "build", "event": "worker-job",
+                        "worker_job": worker_job})
+    (mission_dir / "journal.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in entries))
+
+
+def test_operator_redispatch_beats_reattach_for_a_stale_prior_job(tmp_path, monkeypatch):
+    """A stale prior job id is on record, but the operator chose `mission redispatch`: the
+    decision must journal as a redispatch (with the superseded job), never as a reattach, and
+    the fresh dispatch must NOT resume the stale job."""
+    import skye.mission as mission_mod
+    state_dir = tmp_path / ".skye"
+    _seed_interrupted_journal(state_dir, worker_job="stale-job-1")
+    seen = {}
+    real_dispatch = mission_mod.dispatch
+
+    def capturing(contract, *a, **kw):
+        seen.update(kw)
+        return real_dispatch(contract, *a, **kw)
+
+    monkeypatch.setattr(mission_mod, "dispatch", capturing)
+
+    def runner(spec):
+        class R:
+            ok = True
+            returncode = 0
+            job_id = "job-new"
+            output = "fresh run"
+        return R
+
+    mission = _mission_file(tmp_path, [
+        {"id": "build", "role": "developer", "adapter": "root", "goal": "g", "gates": []}])
+    outcome = run_mission(mission, _policy(tmp_path, monkeypatch), runner=runner,
+                          state_dir=state_dir, redispatch="build")
+    assert outcome.status == "done"
+    assert not seen.get("resume_job_id"), "the stale job must not be resumed"
+    entries = [json.loads(l) for l in (state_dir / "missions/m-team/journal.jsonl").read_text().splitlines()]
+    kinds = [e["event"] for e in entries]
+    assert "redispatch" in kinds and "reattached" not in kinds
+    assert entries[kinds.index("redispatch")].get("superseded_job") == "stale-job-1"
+
+
+def test_reattach_without_operator_decision_resumes_the_prior_job(tmp_path, monkeypatch):
+    """No operator redispatch: the interrupted root step reattaches to its journaled job -
+    the fresh dispatch receives the prior job id to poll, never duplicates the work."""
+    import skye.mission as mission_mod
+    state_dir = tmp_path / ".skye"
+    _seed_interrupted_journal(state_dir, worker_job="job-live-1")
+    seen = {}
+    real_dispatch = mission_mod.dispatch
+
+    def capturing(contract, *a, **kw):
+        seen.update(kw)
+        return real_dispatch(contract, *a, **kw)
+
+    monkeypatch.setattr(mission_mod, "dispatch", capturing)
+
+    def runner(spec):
+        class R:
+            ok = True
+            returncode = 0
+            job_id = "job-live-1"
+            output = "ok"
+        return R
+
+    mission = _mission_file(tmp_path, [
+        {"id": "build", "role": "developer", "adapter": "root", "goal": "g", "gates": []}])
+    outcome = run_mission(mission, _policy(tmp_path, monkeypatch), runner=runner,
+                          state_dir=state_dir)
+    assert outcome.status == "done"
+    assert seen.get("resume_job_id") == "job-live-1"
+    journal = (state_dir / "missions/m-team/journal.jsonl").read_text()
+    assert "reattached" in journal and "redispatch" not in journal
+
+
+def test_interrupted_step_without_a_job_id_pauses_for_the_operator(tmp_path, monkeypatch):
+    """Interrupted before any worker job id reached the journal: no silent re-run - the
+    mission stops and names the operator's choices."""
+    state_dir = tmp_path / ".skye"
+    _seed_interrupted_journal(state_dir, worker_job=None)
+    dispatched = []
+
+    def runner(spec):
+        dispatched.append(spec["role"])
+        class R:
+            ok = True
+            returncode = 0
+            job_id = ""
+            output = "ok"
+        return R
+
+    mission = _mission_file(tmp_path, [
+        {"id": "build", "role": "developer", "adapter": "root", "goal": "g", "gates": []}])
+    outcome = run_mission(mission, _policy(tmp_path, monkeypatch), runner=runner,
+                          state_dir=state_dir)
+    assert outcome.status == "interrupted"
+    assert "mission redispatch" in outcome.reason and "mission reset" in outcome.reason
+    assert not dispatched  # nothing re-ran
