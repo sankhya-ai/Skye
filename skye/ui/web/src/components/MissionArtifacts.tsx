@@ -127,7 +127,7 @@ export function MissionArtifactsPanel({ missionId, artifacts }: {
       <div className="rounded-md border border-border bg-card p-4">
         <h3 className="text-sm font-medium text-foreground">Changed files</h3>
         <p className="mt-2 text-xs text-muted-foreground">
-          The baseline manifest is recorded; the final diff lands when the mission settles done.
+          No changes yet.
         </p>
       </div>
     );

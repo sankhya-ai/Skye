@@ -9,10 +9,12 @@ import {
   verifyFeature,
   getBacklog,
   getIssues,
+  getMissions,
   getProjects,
   startFeature,
   type FeatureRow,
   type IssueRow,
+  type MissionRow,
   type Project,
 } from "../api";
 import { humanError } from "../lib";
@@ -60,6 +62,7 @@ export function BacklogView() {
   const [features, setFeatures] = useState<FeatureRow[]>([]);
   const [issues, setIssues] = useState<IssueRow[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [missions, setMissions] = useState<MissionRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
@@ -67,14 +70,16 @@ export function BacklogView() {
 
   const refresh = useCallback(async () => {
     try {
-      const [backlogData, issueData, projectData] = await Promise.all([
+      const [backlogData, issueData, projectData, missionData] = await Promise.all([
         getBacklog(),
         getIssues(),
         getProjects(),
+        getMissions(),
       ]);
       setFeatures(backlogData.features);
       setIssues(issueData.issues);
       setProjects(projectData.projects);
+      setMissions(missionData.missions);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -108,6 +113,19 @@ export function BacklogView() {
       return `from ${KIND_LABEL[issue.kind] ?? "a signal"}${issue.occurrences > 1 ? ` · seen ${issue.occurrences}x` : ""}`;
     }
     return f.proposed_by ? "proposed while working" : "added directly";
+  };
+
+  // The linked mission's actual state, not a bare "work started": a paused mission
+  // waiting on the owner reads differently from one mid-run.
+  const missionState = (missionId: string): string => {
+    const m = missions.find((row) => row.id === missionId);
+    if (!m) return "work started";
+    if (m.overall === "done") return ""; // the status badge carries the review state
+    if (m.needs_owner) return "waiting for your approval";
+    if (m.live) return "running";
+    if (m.overall === "interrupted") return "interrupted";
+    if (m.overall === "failed") return "failed";
+    return "work started";
   };
 
   const order = (f: FeatureRow) =>
@@ -184,7 +202,9 @@ export function BacklogView() {
                   ) : null}
                   <p className="mt-1.5 text-xs text-muted-foreground/70">
                     {projectName(f.project)} · {provenance(f)}
-                    {f.mission_id && f.status !== "delivered" ? " · work started" : ""}
+                    {f.mission_id && f.status !== "delivered"
+                      ? ` · ${missionState(f.mission_id)}`
+                      : ""}
                     {f.status === "delivered" && f.verification?.journey_passed
                       ? " · journey replay passed"
                       : ""}

@@ -141,6 +141,24 @@ with sync_playwright() as pw:
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     # open the mission detail first: viewing a not-started mission starts its in-process run
     page.goto(ui_url + f"#/mission/{mission_id}")
+    # capture the LIVE state mid-run before waiting for the settle: running badge,
+    # dispatched step indicator, live journal entries
+    # race the run: poll the API and screenshot the moment the mission is actually live
+    live_shot = False
+    for _ in range(120):
+        live_detail = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{ui_port}/api/missions/{mission_id}",
+            headers={"X-Skye-Token": token}), timeout=30).read())
+        if live_detail["live"].get("running"):
+            # give the page's own polling a beat to render the live badge, then capture
+            page.wait_for_timeout(1200)
+            page.screenshot(path=str(out_dir / "ui-mission-detail-running.png"), full_page=True)
+            live_shot = True
+            print("LIVE running-state capture: taken")
+            break
+        page.wait_for_timeout(100)
+    if not live_shot:
+        print("LIVE running-state capture: mission never reported running during the race")
     deadline = time.monotonic() + 90
     final = "unknown"
     while time.monotonic() < deadline:

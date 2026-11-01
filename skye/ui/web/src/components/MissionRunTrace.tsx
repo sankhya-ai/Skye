@@ -151,6 +151,12 @@ export function MissionRunTrace({
   }));
   const steps = [...authored, ...dynamic];
   const pendingByStep = new Map(detail.pending_contracts.map((c) => [c.step, c]));
+  const fingerprintByStep = new Map<string, string>();
+  for (const entry of detail.journal) {
+    if (entry.event === "needs-owner" && entry.step && typeof entry.fingerprint === "string") {
+      fingerprintByStep.set(entry.step, entry.fingerprint);
+    }
+  }
 
   return (
     <div className="space-y-3" data-testid="mission-run-trace">
@@ -240,6 +246,7 @@ export function MissionRunTrace({
                       missionId={detail.mission.id}
                       step={step.id}
                       contract={pending}
+                      fingerprint={fingerprintByStep.get(step.id)}
                       onApproved={onChanged}
                     />
                   </div>

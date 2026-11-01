@@ -11,11 +11,13 @@ export function ApprovalCard({
   missionId,
   step,
   contract,
+  fingerprint,
   onApproved,
 }: {
   missionId: string;
   step: string;
   contract: Record<string, unknown>;
+  fingerprint?: string;
   onApproved: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -30,9 +32,35 @@ export function ApprovalCard({
       <p className="mb-1 text-xs text-muted-foreground">
         Step <span className="font-mono">{step}</span> is paused for the owner.
       </p>
+      {contract.goal ? (
+        <p className="mb-1 text-xs font-medium text-foreground">{String(contract.goal)}</p>
+      ) : null}
       <p className="mb-2 text-xs text-muted-foreground">
-        Adapter: {String(contract.adapter ?? "?")} · Role: {String(contract.role ?? "?")}
+        {String(contract.adapter ?? "?")} · {String(contract.role ?? "?")}
+        {contract.budget && typeof contract.budget === "object"
+          ? ` · up to ${String((contract.budget as Record<string, unknown>).max_steps ?? "?")} steps`
+          : ""}
       </p>
+      <details className="mb-2">
+        <summary className="cursor-pointer text-xs text-muted-foreground/80 hover:text-foreground">
+          Contract details{fingerprint ? ` · ${fingerprint.slice(0, 12)}` : ""}
+        </summary>
+        <dl className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
+          {fingerprint ? <div>fingerprint {fingerprint}</div> : null}
+          {contract.repo ? <div>repo {String(contract.repo)}</div> : null}
+          <div>
+            gates{" "}
+            {Array.isArray(contract.gates) && contract.gates.length > 0
+              ? contract.gates.map((g) => String(g)).join(", ")
+              : "none"}
+          </div>
+        </dl>
+        {contract.brief ? (
+          <pre className="mt-1 max-h-32 overflow-auto rounded-sm bg-muted/60 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground whitespace-pre-wrap">
+            {String(contract.brief)}
+          </pre>
+        ) : null}
+      </details>
       <p className="mb-2 text-xs text-muted-foreground">
         Approving runs this contract once. Policy unchanged.
       </p>
