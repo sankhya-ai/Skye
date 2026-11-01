@@ -65,16 +65,36 @@ def mission_artifacts(mission_dir: Path) -> dict:
     out = {"recorded": True, "repo": record.get("repo", ""),
            "start_truncated": bool(record.get("start_truncated")),
            "complete": end is not None}
-    if end is None:
-        return out
     from ..journey import diff_manifests
-    diff = diff_manifests(start, end)
-    for kind in ("added", "modified", "deleted"):
-        paths = diff[kind]
-        out[kind] = paths[:ARTIFACTS_LIST_LIMIT]
-        if len(paths) > ARTIFACTS_LIST_LIMIT:
-            out[f"{kind}_overflow"] = len(paths) - ARTIFACTS_LIST_LIMIT
-    out["end_truncated"] = bool(record.get("end_truncated"))
+    if end is not None:
+        diff = diff_manifests(start, end)
+        for kind in ("added", "modified", "deleted"):
+            paths = diff[kind]
+            out[kind] = paths[:ARTIFACTS_LIST_LIMIT]
+            if len(paths) > ARTIFACTS_LIST_LIMIT:
+                out[f"{kind}_overflow"] = len(paths) - ARTIFACTS_LIST_LIMIT
+        out["end_truncated"] = bool(record.get("end_truncated"))
+    # Multi-repo missions: the same derived diff per recorded repository, so reviewing what
+    # the team changed covers every repo, not just the default. complete is per repo: a
+    # mission still running has baselines only.
+    if record.get("repos"):
+        per_repo = {}
+        for name, entry in record["repos"].items():
+            r_start = entry.get("start") or {}
+            r_end = entry.get("end")
+            row = {"repo": entry.get("repo", ""),
+                   "start_truncated": bool(entry.get("start_truncated")),
+                   "complete": r_end is not None}
+            if r_end is not None:
+                r_diff = diff_manifests(r_start, r_end)
+                for kind in ("added", "modified", "deleted"):
+                    paths = r_diff[kind]
+                    row[kind] = paths[:ARTIFACTS_LIST_LIMIT]
+                    if len(paths) > ARTIFACTS_LIST_LIMIT:
+                        row[f"{kind}_overflow"] = len(paths) - ARTIFACTS_LIST_LIMIT
+                row["end_truncated"] = bool(entry.get("end_truncated"))
+            per_repo[name] = row
+        out["repos"] = per_repo
     return out
 
 
@@ -95,12 +115,20 @@ def mission_artifacts_record(mission_dir: Path) -> dict:
     return json.loads(artifacts_file.read_text("utf-8"))
 
 
-def artifact_file(state_dir: Path, mission_id: str, rel_path: str) -> tuple[bytes, str]:
+def artifact_file(state_dir: Path, mission_id: str, rel_path: str,
+                  repo_name: str = "") -> tuple[bytes, str]:
     """Serve one file the mission actually changed, for inline preview. Strictly confined:
-    the path must be in the mission's recorded added/modified diff (never an arbitrary
-    path), must resolve inside the mission's repo, and must be a previewable type."""
+    the path must be in the recorded added/modified diff (never an arbitrary path), must
+    resolve inside the mission's repo, and must be a previewable type. With repo_name, the
+    diff and root come from that recorded repository of a multi-repo mission - an unrecorded
+    name is refused, never treated as a path."""
     mission_dir = state_dir / "missions" / mission_id
     artifacts = mission_artifacts(mission_dir)
+    if repo_name:
+        per_repo = artifacts.get("repos") or {}
+        if repo_name not in per_repo:
+            raise KeyError(repo_name)  # unrecorded repo name: not a path, not served
+        artifacts = per_repo[repo_name]
     if not artifacts.get("complete"):
         raise KeyError(rel_path)
     changed = set(artifacts.get("added") or []) | set(artifacts.get("modified") or [])
@@ -121,7 +149,11 @@ def artifact_file(state_dir: Path, mission_id: str, rel_path: str) -> tuple[byte
     # after the mission's end manifest (a later mission, a hand edit), the preview refuses
     # rather than showing unrecorded bytes under the mission's name.
     import hashlib
-    recorded = (mission_artifacts_record(mission_dir).get("end") or {}).get(rel_path)
+    record = mission_artifacts_record(mission_dir)
+    if repo_name:
+        recorded = ((record.get("repos") or {}).get(repo_name, {}).get("end") or {}).get(rel_path)
+    else:
+        recorded = (record.get("end") or {}).get(rel_path)
     current = hashlib.sha256(target.read_bytes()).hexdigest()[:16]
     if not recorded or current != recorded:
         raise FileChangedError(rel_path)
@@ -558,7 +590,9 @@ class UiHandler(BaseHTTPRequestHandler):
                 if url.path.startswith("/api/mission-artifact/"):
                     mission_id = url.path.rsplit("/", 1)[-1]
                     rel_path = (parse_qs(url.query).get("path") or [""])[0]
-                    data, content_type = artifact_file(self.state_dir, mission_id, rel_path)
+                    repo_name = (parse_qs(url.query).get("repo") or [""])[0]
+                    data, content_type = artifact_file(self.state_dir, mission_id, rel_path,
+                                                       repo_name=repo_name)
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Content-Length", str(len(data)))
