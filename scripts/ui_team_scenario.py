@@ -302,6 +302,9 @@ page.wait_for_timeout(2200)
 acked = page.locator("text=acknowledged").count()
 heard_note = page.locator("text=Heard mid-repair").count()
 print("TEAM repair acked mid-run:", "PASS" if acked and heard_note else "FAIL")
+# the ack must clear the wait: no "waiting on" survives on the settled line
+stale_wait = page.locator("text=waiting on:").count()
+print("TEAM waiting_on clears after ack:", "PASS" if stale_wait == 0 else "FAIL")
 page.screenshot(path=str(out_dir / "ui-team-discussion-full.png"), full_page=True)
 
 # reload dedupe: cursor reset re-reads everything, seq-keyed, no duplicates

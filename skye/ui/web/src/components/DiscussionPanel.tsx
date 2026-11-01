@@ -78,13 +78,24 @@ export function DiscussionPanel({ missionId }: { missionId: string }) {
   }, [missionId]);
 
   const ordered = [...entries.values()].sort((a, b) => a.seq - b.seq);
+  // waiting_on is computed here against the panel's FULL seq-keyed history: the server's
+  // per-page value only sees acks inside the same poll page, so a change whose ack arrived
+  // in a later page would stay "waiting on" forever in a long-polling client.
+  const acked = new Set(
+    ordered.filter((e) => e.kind === "ack" && e.ack_of).map((e) => `${e.ack_of}|${e.author}`),
+  );
+  const view = ordered.map((e) =>
+    e.kind === "contract-change"
+      ? { ...e, waiting_on: (e.requires_ack ?? []).filter((r) => !acked.has(`${e.id}|${r}`)) }
+      : e,
+  );
   return (
     <details className="rounded-md border border-border bg-card p-4" open={ordered.length > 0}>
       <summary className="cursor-pointer text-sm font-medium text-foreground">
         Team discussion{ordered.length > 0 ? ` (${ordered.length})` : ""}
       </summary>
       <div className="mt-3 max-h-64 space-y-0.5 overflow-auto">
-        {ordered.map((entry) => (
+        {view.map((entry) => (
           <Entry key={entry.seq} entry={entry} />
         ))}
         {ordered.length === 0 && error && !loaded ? (
