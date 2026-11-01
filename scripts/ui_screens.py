@@ -241,6 +241,19 @@ with sync_playwright() as pw:
             overlap = npage.evaluate(
                 "document.querySelector('main').getBoundingClientRect().left")
             print("NARROW main starts after sidebar:", "INFO left=", overlap)
+            collapsed_top = npage.evaluate(
+                "document.querySelector('main').getBoundingClientRect().top")
+            menu = npage.locator("button", has_text="Menu")
+            if menu.count():
+                menu.click()
+                npage.wait_for_timeout(400)
+                npage.screenshot(path=str(out_dir / "ui-narrow-expanded.png"))
+                expanded_top = npage.evaluate(
+                    "document.querySelector('main').getBoundingClientRect().top")
+                print("NARROW menu toggle:", "PASS" if expanded_top > collapsed_top else "FAIL",
+                      f"main top {collapsed_top}px collapsed, {expanded_top}px expanded")
+            else:
+                print("NARROW menu toggle: FAIL no Menu button at narrow width")
             nctx.close()
             # approval states: the codex-adapter mission paused at the policy gate
             page.goto(ui_url + f"#/mission/{approval_mission}")

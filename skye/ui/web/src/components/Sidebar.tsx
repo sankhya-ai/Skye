@@ -3,7 +3,7 @@
 // (rounded-md, translucent card, 18px backdrop blur), nav rows h-7 px-3 py-1 gap-2 mx-1.5
 // rounded-sm text-sm, and Projects / Chats sections - backed by Skye's real registries:
 // projects are workspaces, chats are missions (their journal is the conversation record).
-import { Folder, Home, ListTodo, MessageSquare, Plus, Settings, Users, Workflow } from "lucide-react";
+import { ChevronDown, Folder, Home, ListTodo, MessageSquare, Plus, Settings, Users, Workflow } from "lucide-react";
 import { useState } from "react";
 import { createProject, type MissionRow, type Project } from "../api";
 import { formatRelative, humanError } from "../lib";
@@ -48,7 +48,7 @@ function NavRow({
   return (
     <div className="mx-1.5">
       {href ? (
-        <a href={href} className={cls} style={style}>
+        <a href={href} onClick={onClick} className={cls} style={style}>
           {inner}
         </a>
       ) : (
@@ -108,6 +108,7 @@ export function Sidebar({
   onProjectsChanged: () => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -135,7 +136,25 @@ export function Sidebar({
 
   return (
     <aside className="fixed top-2 bottom-2 left-2 z-10 flex w-60 flex-col overflow-hidden rounded-md border border-border/60 glass-panel pt-[3px] max-sm:static max-sm:m-2 max-sm:w-auto">
-      <p className="px-3 pt-2 pb-1 text-sm font-semibold tracking-tight">Skye</p>
+      <div className="flex items-center justify-between pr-1.5">
+        <p className="px-3 pt-2 pb-1 text-sm font-semibold tracking-tight">Skye</p>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls="skye-nav-body"
+          className="mt-1 flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:text-foreground sm:hidden"
+        >
+          Menu
+          <ChevronDown
+            className={`size-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      </div>
+      <div
+        id="skye-nav-body"
+        className={`flex min-h-0 flex-1 flex-col ${open ? "" : "max-sm:hidden"}`}
+      >
       <nav className="space-y-0.5">
         {NAV.map((item) => (
           <NavRow
@@ -144,6 +163,7 @@ export function Sidebar({
             icon={item.icon}
             href={`#${item.path}`}
             active={activePath === item.path}
+            onClick={() => setOpen(false)}
           />
         ))}
       </nav>
@@ -233,6 +253,7 @@ export function Sidebar({
       <p className="border-t border-border px-3 py-2 text-xs leading-4 text-muted-foreground">
         Local only. Interrupted work waits for you.
       </p>
+      </div>
     </aside>
   );
 }
