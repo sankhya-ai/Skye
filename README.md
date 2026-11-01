@@ -9,7 +9,11 @@ resell tokens or download an agent for you.
 [Quick start](#quick-start) | [How it works](#how-it-works) | [Workers](#workers) | [Screens](#screens) | [Honest status](#honest-status) | [License](#license)
 
 <p align="center">
-  <img src="docs/assets/readme/mission-done.webp" alt="A finished Skye mission: the workflow graph shows the plan and build steps done, and the changed-files list includes a poster preview the designer worker produced" width="100%">
+  <img src="docs/assets/readme/mission-done.webp" alt="A finished Skye mission for a demo shop: the workflow graph shows the plan and build steps done, and the changed-files list previews a cart poster SVG produced in the run" width="100%">
+</p>
+
+<p align="center">
+  <sub><em>A demo mission in the local UI - scripted, no model calls.</em></sub>
 </p>
 
 ---
