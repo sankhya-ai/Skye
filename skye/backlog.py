@@ -137,8 +137,10 @@ def mark_delivered(mission_id: str, *, journey_ok: bool = False,
     for feature in data["features"]:
         if feature.get("mission_id") == mission_id and feature.get("status") == "approved":
             feature["status"] = "delivered" if journey_ok else "awaiting-verification"
+            previous = feature.get("verification") or {}
             feature["verification"] = {"journey_passed": bool(journey_ok),
-                                       "evidence": evidence[-2000:], "verified_at": time.time()}
+                                       "evidence": evidence[-2000:], "verified_at": time.time(),
+                                       "journey_digest": previous.get("journey_digest", "")}
             changed = True
     if changed:
         _write(target, data)
@@ -166,6 +168,7 @@ def send_back(feature_id: str, *, note: str = "",
 
 
 def record_verification(feature_id: str, passed: bool, *, evidence: str = "",
+                        repo_revision: str = "", journey_digest: str = "",
                         path: str | Path | None = None) -> dict[str, Any]:
     """The outcome of replaying the user journey for a feature. Only a PASS moves a feature
     to delivered; a failure records the evidence and leaves the feature awaiting
@@ -183,8 +186,19 @@ def record_verification(feature_id: str, passed: bool, *, evidence: str = "",
                     f"feature {feature_id} is {feature.get('status')}"
                     f"{' with no mission' if not feature.get('mission_id') else ''}; "
                     "only completed work awaiting verification can be replayed")
-            feature["verification"] = {"journey_passed": bool(passed),
-                                       "evidence": evidence[-2000:], "verified_at": time.time()}
+            previous = feature.get("verification") or {}
+            feature["verification"] = {
+                "journey_passed": bool(passed),
+                "evidence": evidence[-2000:], "verified_at": time.time(),
+                # bound to the actual attempt: the finished mission, the repo tree replayed,
+                # and the check's own digest - a changed digest vs the prior replay means the
+                # CHECK changed between runs (worker could have rewritten it; surfaced, and the
+                # docs say to keep checks outside the writable repo for hard integrity).
+                "mission_id": feature.get("mission_id", ""),
+                "repo_revision": repo_revision,
+                "journey_digest": journey_digest,
+                "journey_changed": bool(journey_digest and previous.get("journey_digest")
+                                        and previous.get("journey_digest") != journey_digest)}
             feature["status"] = "delivered" if passed else "awaiting-verification"
             _write(target, data)
             return feature

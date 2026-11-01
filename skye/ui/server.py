@@ -428,13 +428,18 @@ class UiHandler(BaseHTTPRequestHandler):
                         policy.journey_command, cwd=repo,
                         timeout=policy.journey_timeout_seconds)
                     updated = backlog.record_verification(
-                        feature_id, result["passed"], evidence=result["evidence"])
+                        feature_id, result["passed"], evidence=result["evidence"],
+                        repo_revision=journey_runner.repo_revision(repo),
+                        journey_digest=journey_runner.journey_digest(policy.journey_command, repo))
                 finally:
                     lock.release()
+                verification = updated.get("verification") or {}
                 return self._json({"verified": result["passed"], "feature": updated,
                                    "command": policy.journey_command,
                                    "evidence": result["evidence"],
-                                   "timed_out": result["timed_out"]})
+                                   "timed_out": result["timed_out"],
+                                   "repo_revision": verification.get("repo_revision", ""),
+                                   "journey_changed": verification.get("journey_changed", False)})
             if url.path == "/api/backlog/rework":
                 try:
                     feature = backlog.send_back(str(body.get("feature") or ""),

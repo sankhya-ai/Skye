@@ -551,3 +551,46 @@ def test_verify_times_out_and_serializes_concurrent_replays(ui_server, tmp_path,
         assert "timed out" in stored["verification"]["evidence"]
     finally:
         policy_path_default().unlink(missing_ok=True)
+
+
+def test_verification_is_bound_to_mission_revision_and_check(ui_server, tmp_path, monkeypatch):
+    """Each replay records WHICH finished mission it covers, WHICH repo tree it ran against,
+    and the check's own digest - editing the check between replays is surfaced, not silent."""
+    monkeypatch.setenv("SKYE_BACKLOG", str(tmp_path / "skye.backlog.json"))
+    monkeypatch.setenv("SKYE_PROJECTS", str(tmp_path / "skye.projects.json"))
+    url, _ = ui_server
+    from skye import backlog, journey
+    status, payload = _req(url, "/api/projects", method="POST",
+                           body={"project": {"name": "shop", "repo": str(tmp_path)}})
+    project_id = payload["project"]["id"]
+    (tmp_path / "journey.py").write_text("print('still broken v1')\nraise SystemExit(1)\n")
+    feature = backlog.propose([{"title": "Fix", "brief": "x"}], project=project_id,
+                              mission="seed")[0]
+    backlog.decide(feature["id"], "approved")
+    backlog.mark_started(feature["id"], "m-bound")
+    backlog.mark_delivered("m-bound", journey_ok=False)
+    import json as _json
+    from skye.ui.server import policy_path_default
+    policy_path_default().write_text(_json.dumps(
+        {"journey_command": "python3 journey.py", "journey_timeout_seconds": 5}))
+    try:
+        status, payload = _req(url, "/api/backlog/verify", method="POST",
+                               body={"feature": feature["id"]})
+        assert status == 200
+        v = payload["feature"]["verification"]
+        assert v["mission_id"] == "m-bound"
+        assert v["repo_revision"] and v["journey_digest"]
+        assert v["journey_digest"] == journey.journey_digest("python3 journey.py", str(tmp_path))
+        assert v["journey_changed"] is False
+        # a worker with write access rewrites the check; the next replay must surface it
+        backlog.send_back(feature["id"])
+        backlog.mark_started(feature["id"], "m-bound-2")
+        backlog.mark_delivered("m-bound-2", journey_ok=False)
+        (tmp_path / "journey.py").write_text("print('weakened')\n")
+        status, payload = _req(url, "/api/backlog/verify", method="POST",
+                               body={"feature": feature["id"]})
+        assert status == 200
+        assert payload["journey_changed"] is True
+        assert payload["feature"]["verification"]["journey_changed"] is True
+    finally:
+        policy_path_default().unlink(missing_ok=True)

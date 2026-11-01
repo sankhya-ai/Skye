@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 EVIDENCE_LIMIT = 2000
@@ -29,6 +30,47 @@ def redact(text: str) -> str:
     """Mask secret-looking values so recorded evidence cannot leak credentials."""
     text = _BEARER.sub("Bearer [redacted]", text)
     return _SECRET_ASSIGNMENT.sub(lambda m: f"{m.group(1)}=[redacted]", text)
+
+
+def repo_revision(cwd: str) -> str:
+    """The repo revision a replay ran against: the git HEAD when the repo is git, else a
+    digest manifest of the files - so recorded evidence is bound to an actual tree, never
+    to a bare claim."""
+    import hashlib
+    root = Path(cwd) if cwd else Path.cwd()
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                              text=True, timeout=10)
+        if head.returncode == 0:
+            return "git:" + head.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    digest = hashlib.sha256()
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(path.read_bytes())
+    return "tree:" + digest.hexdigest()[:16]
+
+
+def journey_digest(command: str, cwd: str) -> str:
+    """A digest of the journey CHECK itself: every token of the command that names an existing
+    file is hashed, so a worker quietly rewriting the check inside its writable repo shows up
+    as a changed digest on the next replay. DETECTION, not enforcement - the hard guarantee is
+    keeping the journey script outside the team's writable repo (the command may point anywhere)."""
+    import hashlib
+    root = Path(cwd) if cwd else Path.cwd()
+    digest = hashlib.sha256()
+    found = False
+    for token in command.split():
+        candidate = (root / token).resolve()
+        try:
+            if candidate.is_file():
+                digest.update(token.encode())
+                digest.update(candidate.read_bytes())
+                found = True
+        except OSError:
+            continue
+    return digest.hexdigest()[:16] if found else ""
 
 
 def run_journey(command: str, cwd: str = "",

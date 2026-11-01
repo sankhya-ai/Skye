@@ -169,12 +169,16 @@ def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, brid
                     "detail": "the team policy names no journey command; the journey cannot be replayed"}
         result = journey.run_journey(policy.journey_command, cwd=spec["repo"],
                                      timeout=policy.journey_timeout_seconds)
+        result["repo_revision"] = journey.repo_revision(spec["repo"])
+        result["journey_digest"] = journey.journey_digest(policy.journey_command, spec["repo"])
         return {"gate": "journey", "ok": result["passed"],
                 "detail": ("journey replay passed"
                            if result["passed"]
                            else ("journey replay timed out" if result["timed_out"]
                                  else f"journey replay failed ({result['returncode']})")),
-                "command": policy.journey_command, "evidence": result["evidence"]}
+                "command": policy.journey_command, "evidence": result["evidence"],
+                "repo_revision": result["repo_revision"],
+                "journey_digest": result["journey_digest"]}
     if gate == "tests":
         if not policy.test_command:
             return {"gate": "tests", "ok": False,

@@ -105,6 +105,24 @@ visual exists yet). Long-term scope, deliberately out of this repo's first cut:
 multi-machine teams and the hosted edition (see `docs/editions.md`). This is a working local core,
 not a finished product.
 
+## Journey verification: what is enforced and what is not
+
+Delivery is gated on replaying the owner-configured journey command (`journey_command` in the
+team policy - a plain check such as a smoke test; exit 0 passes). Every replay records, beside
+the bounded and secret-redacted output tail:
+
+- the **mission** whose work it covers (only finished work awaiting verification can be replayed);
+- the **repo revision** it ran against (git HEAD, or a tree digest for non-git repos);
+- the **journey check's own digest** (every command token that names a file is hashed).
+
+Integrity limits, stated plainly: the team WRITES to the project repo, so a worker can also
+rewrite a journey script that lives inside it. Skye detects, not prevents, that: a changed
+check digest between replays is surfaced on the record and in the UI (`journey_changed`). For a
+hard guarantee, keep journey checks OUTSIDE the team's writable repo - the command may point at
+any path - or protect the check in the repo's own review machinery (CODEOWNERS etc.). The
+journey command itself always comes from the owner-managed policy file; workers, requests and
+logs cannot supply or override it.
+
 ## Quick start (local)
 
 ```sh

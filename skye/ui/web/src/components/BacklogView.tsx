@@ -138,6 +138,18 @@ export function BacklogView() {
                       {f.verification.evidence}
                     </pre>
                   ) : null}
+                  {f.verification?.journey_changed ? (
+                    <p className="mt-1 text-xs text-warning">
+                      The journey check itself changed between replays - review what edited it
+                      before trusting this result. For hard integrity, keep the check outside
+                      the team's writable repo.
+                    </p>
+                  ) : null}
+                  {f.verification?.repo_revision ? (
+                    <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                      replayed against {f.verification.repo_revision}
+                    </p>
+                  ) : null}
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {f.brief}
                     {f.status === "awaiting-verification"

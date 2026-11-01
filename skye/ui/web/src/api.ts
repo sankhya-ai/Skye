@@ -128,7 +128,14 @@ export type FeatureRow = {
   decided_at: number | null;
   decision_note: string;
   mission_id: string;
-  verification?: { journey_passed: boolean; evidence: string; verified_at: number };
+  verification?: {
+    journey_passed: boolean;
+    evidence: string;
+    verified_at: number;
+    mission_id?: string;
+    repo_revision?: string;
+    journey_changed?: boolean;
+  };
 };
 
 export const getBacklog = () => api<{ features: FeatureRow[] }>("/api/backlog");
