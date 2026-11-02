@@ -82,7 +82,9 @@ Every goal starts one of three ways from the Home composer:
 
 Teams live in `skye.teams.json` (owner-managed, like the policy and roles files). A team's
 missions snapshot their roster at creation, so editing the team later never retargets work
-already defined.
+already defined. The review gate's reviewer, like the lead, is a policy role that judges work
+and never authors it, so it runs outside the roster by design; the roster constrains who may
+be delegated work.
 
 ## Workers
 

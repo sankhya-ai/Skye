@@ -433,3 +433,57 @@ def test_mixed_proposals_still_complete_with_rejections_visible(tmp_path, monkey
     assert outcome.status == "done"
     journal = (tmp_path / ".skye/missions/m-team/journal.jsonl").read_text()
     assert '"proposal-rejected"' in journal  # visible in the trace, not silent
+
+
+# --- review gate vs roster -------------------------------------------------
+
+def test_review_gate_reviewer_is_a_policy_role_outside_the_roster(tmp_path, monkeypatch):
+    """The review gate's reviewer is a dispatcher-spawned REVIEW-POLICY role, the same
+    class as the lead: it judges diffs and never authors work, so it is not delegation and
+    is NOT required to be a roster member. The roster constrains who may be delegated
+    WORK; Skye's mandatory quality gates stand outside it by design."""
+    calls = []
+
+    def runner(spec):
+        class R:
+            ok = True
+            returncode = 0
+            job_id = ""
+        calls.append(spec["role"])
+        R.output = '{"verdict": "pass"}' if spec["role"] == "reviewer" else "implemented"
+        return R
+
+    mission = _team_mission(tmp_path, monkeypatch, [
+        {"id": "ui", "role": "frontend-dev", "adapter": "root", "goal": "build the page",
+         "gates": ["review"]}])
+    assert "reviewer" not in mission["team"]["members"]
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    outcome = run_mission(mission, policy, runner=runner, state_dir=tmp_path / ".skye")
+    assert outcome.status == "done"
+    assert calls == ["frontend-dev", "reviewer"]  # the gate reviewer ran though off-roster
+
+
+def test_reviewer_cannot_be_delegated_work_outside_the_roster(tmp_path, monkeypatch):
+    """Same reviewer name, different class: as delegated WORK it is off-roster like any
+    other role. An authored reviewer step fails load; a lead proposal for reviewer work is
+    rejected and journaled, and with no member session the mission pauses needs-owner."""
+    with pytest.raises(Exception, match="not part of team"):
+        _team_mission(tmp_path, monkeypatch, [
+            {"id": "rev", "role": "reviewer", "adapter": "root", "goal": "grade"}])
+
+    def runner(spec):
+        class R:
+            ok = True
+            returncode = 0
+            job_id = ""
+            output = json.dumps({"propose_steps": [
+                {"id": "rev", "role": "reviewer", "adapter": "root", "goal": "grade it"}]})
+        return R
+
+    mission = _team_mission(tmp_path, monkeypatch, [
+        {"id": "plan", "role": "pm", "adapter": "root", "goal": "g", "gates": []}])
+    policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
+    outcome = run_mission(mission, policy, runner=runner, state_dir=tmp_path / ".skye")
+    assert outcome.status == "needs-owner"
+    journal = (tmp_path / ".skye/missions/m-team/journal.jsonl").read_text()
+    assert '"proposal-rejected"' in journal and "reviewer" in journal
