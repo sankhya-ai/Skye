@@ -301,3 +301,90 @@ def test_change_record_ignores_gitignored_output(tmp_path):
     diff = journey.diff_manifests(start, end)
     assert not truncated
     assert diff == {"added": ["new.css"], "modified": ["app.js"], "deleted": []}
+
+
+def test_preview_detects_how_a_result_runs(tmp_path):
+    import json as _json
+    from skye import preview
+    (tmp_path / "package.json").write_text(_json.dumps(
+        {"scripts": {"dev": "vite"}, "devDependencies": {"vite": "^6"}}))
+    info = preview.detect(tmp_path)
+    assert info["kind"] == "node" and info["script"] == "dev" and info["framework"] == "vite"
+    assert preview._command(info, 5301)[-5:] == ["--port", "5301", "--strictPort", "--host", "127.0.0.1"]
+    site = tmp_path / "plain"
+    site.mkdir()
+    (site / "index.html").write_text("<h1>hi</h1>")
+    assert preview.detect(site)["kind"] == "static"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert preview.detect(empty)["kind"] == "none"
+
+
+def test_preview_rejects_unsafe_task_ids(tmp_path):
+    import pytest as _pytest
+    from skye import preview
+    for bad in ("../etc", "a/b", ""):
+        with _pytest.raises(KeyError):
+            preview.tree_for(tmp_path, bad)
+
+
+def _preview_task(state_dir, mission_id, record=None, repo=""):
+    import json as _json
+    mission_dir = state_dir / "missions" / mission_id
+    mission_dir.mkdir(parents=True)
+    (mission_dir / "mission.json").write_text(_json.dumps({"id": mission_id, "repo": repo}))
+    if record is not None:
+        from skye import workspaces
+        workspaces._record_path(mission_dir).write_text(_json.dumps(record))
+    return mission_dir
+
+
+def test_preview_says_which_folder_it_runs_in(tmp_path):
+    """A task's own worktree is isolated; a task without one runs in the project folder,
+    and the preview must say so. A cleaned-up worktree is an error, never a quiet switch
+    to the owner's project folder."""
+    import pytest as _pytest
+    from skye import preview
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "index.html").write_text("<h1>project</h1>")
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    (copy / "index.html").write_text("<h1>copy</h1>")
+    state = tmp_path / "state"
+    _preview_task(state, "iso", {"worktree": str(copy), "repo": str(project)})
+    _preview_task(state, "direct", {"worktree": "", "repo": str(project)})
+    _preview_task(state, "gone", {"worktree": str(tmp_path / "missing"), "repo": str(project)})
+    assert preview.status(state, "iso")["isolated"] is True
+    assert preview.tree_for(state, "iso") == copy
+    assert preview.status(state, "direct")["isolated"] is False
+    with _pytest.raises(ValueError, match="cleaned up"):
+        preview.status(state, "gone")
+    assert preview.stop(state, "gone")["status"] == "stopped"
+
+
+def test_preview_starts_and_stops_a_static_site(tmp_path):
+    """End to end on a static site: the preview listens, then Stop leaves no process."""
+    import time as _time
+    import urllib.request as _req
+    from skye import preview
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    (copy / "index.html").write_text("<h1>hello preview</h1>")
+    state = tmp_path / "state"
+    _preview_task(state, "site", {"worktree": str(copy), "repo": str(tmp_path)})
+    preview.start(state, "site")
+    deadline = _time.monotonic() + 20
+    current = preview.status(state, "site")
+    while current["status"] == "starting" and _time.monotonic() < deadline:
+        _time.sleep(0.2)
+        current = preview.status(state, "site")
+    try:
+        assert current["status"] == "ready", current
+        assert b"hello preview" in _req.urlopen(current["url"], timeout=5).read()
+        proc = preview._PREVIEWS["site"]["proc"]
+    finally:
+        stopped = preview.stop(state, "site")
+    assert stopped["status"] == "stopped"
+    assert proc.poll() is not None  # the server process is gone, not orphaned
+    assert "site" not in preview._PREVIEWS

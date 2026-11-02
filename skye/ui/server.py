@@ -1104,6 +1104,15 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json(page)
                 segments = [s for s in url.path.split("/") if s]
                 if len(segments) == 4 and segments[:2] == ["api", "missions"] \
+                        and segments[3] == "preview":
+                    from .. import preview
+                    try:
+                        return self._json(preview.status(self.state_dir, segments[2]))
+                    except KeyError:
+                        return self._json({"error": "unknown task"}, 404)
+                    except ValueError as error:
+                        return self._json({"error": str(error)}, 409)
+                if len(segments) == 4 and segments[:2] == ["api", "missions"] \
                         and segments[3] == "graph":
                     mission_id = segments[2]
                     payload = mission_graph(self.state_dir, mission_id)
@@ -1423,6 +1432,19 @@ class UiHandler(BaseHTTPRequestHandler):
                     path.write_text(json.dumps(current, indent=2) + "\n", "utf-8")
                 return self._json({"saved": True, "path": str(path.resolve()),
                                    "auto_pickup": pickup_module.config(policy)})
+            post_segments = [seg for seg in url.path.split("/") if seg]
+            if len(post_segments) == 4 and post_segments[:2] == ["api", "missions"] \
+                    and post_segments[3] == "preview":
+                # Owner-initiated: runs the project's own dev script in the task's worktree.
+                from .. import preview
+                try:
+                    if body.get("action") == "stop":
+                        return self._json(preview.stop(self.state_dir, post_segments[2]))
+                    return self._json(preview.start(self.state_dir, post_segments[2]))
+                except KeyError:
+                    return self._json({"error": "unknown task"}, 404)
+                except (ValueError, RuntimeError) as error:
+                    return self._json({"error": str(error)}, 400)
             if url.path == "/api/missions":
                 mission_id = create_mission(self.state_dir, body)
                 if body.get("run"):
@@ -1960,4 +1982,6 @@ def serve(state_dir: Path | None = None, port: int = 8787) -> None:
         pass
     finally:
         server._picker_stop = True  # type: ignore[attr-defined]
+        from .. import preview
+        preview.stop_all()  # a preview never outlives the Skye that started it
         token_file.unlink(missing_ok=True)

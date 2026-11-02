@@ -528,3 +528,27 @@ export const initProjectGit = (id: string) =>
     method: "POST",
     body: JSON.stringify({}),
   });
+
+// Live preview of a task's result: the project's own dev server run in the task's worktree.
+export type PreviewState = {
+  mission: string;
+  kind: "node" | "static" | "none";
+  how: string;
+  // true: runs in the task's own copy of the project. false: in the project folder itself
+  // (the task had no separate copy), so an install or build writes there.
+  isolated: boolean;
+  status: "stopped" | "starting" | "ready" | "failed";
+  phase?: string;
+  error?: string;
+  url?: string;
+  port?: number;
+  log?: string[];
+};
+export const getPreview = (id: string) =>
+  api<PreviewState>(`/api/missions/${encodeURIComponent(id)}/preview`);
+export const startPreview = (id: string) =>
+  api<PreviewState>(`/api/missions/${encodeURIComponent(id)}/preview`,
+    { method: "POST", body: JSON.stringify({ action: "start" }) });
+export const stopPreview = (id: string) =>
+  api<PreviewState>(`/api/missions/${encodeURIComponent(id)}/preview`,
+    { method: "POST", body: JSON.stringify({ action: "stop" }) });

@@ -309,10 +309,11 @@ export function TaskCanvas({
           <button
             type="button"
             data-flow-node="result"
-            onClick={() => onSelect(null)}
+            onClick={() => onSelect(selected === RESULT_ID ? null : RESULT_ID)}
             className={cn(
               "absolute flex flex-col overflow-hidden rounded-xl border bg-card text-left shadow-sm transition hover:shadow-md",
               done ? "border-success/45" : failed ? "border-destructive/50" : "border-border",
+              selected === RESULT_ID && "ring-2 ring-foreground/25",
             )}
             style={{ left: p.x, top: p.y, width: CARD_W, height: CARD_H }}
           >
@@ -330,7 +331,9 @@ export function TaskCanvas({
             </div>
             <p className="mx-3 mt-1.5 line-clamp-2 border-t border-dashed border-border pt-1.5 text-[11px] leading-snug text-muted-foreground">
               {done
-                ? "Open to read the answer and bring changes into your project."
+                ? changedFiles
+                  ? "Open to preview the changed project live and bring it in."
+                  : "Open to read the answer."
                 : failed
                   ? "The task stopped. Open the failed agent to see why."
                   : taskState === "needs-owner"

@@ -20,11 +20,12 @@ import {
   type Project,
 } from "../api";
 import { cn, formatTime } from "../lib";
-import { buildSteps, formatDuration, layoutFlow, roleName, type StepView } from "../task/model";
+import { RESULT_ID, buildSteps, formatDuration, layoutFlow, roleName, type StepView } from "../task/model";
 import { AgentPanel, ChatItemView } from "./AgentPanel";
 import { BringIntoProject } from "./BringIntoProject";
 import { DiscussionPanel } from "./DiscussionPanel";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
+import { ResultPanel } from "./ResultPanel";
 import { RoleIcon, StateMark, STATE_LABEL, TaskCanvas } from "./TaskCanvas";
 import { Badge } from "./ui/Badge";
 import { Button } from "./ui/Button";
@@ -331,6 +332,8 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [wide, setWide] = useState(false);
+  const onWide = useCallback((w: boolean) => setWide(w), []);
   const [consoleOpen, setConsoleOpen] = useState(false);
 
   useEffect(() => { setNote(null); setSelected(null); }, [id]);
@@ -524,8 +527,21 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
             onSelect={setSelected}
           />
         </CanvasViewport>
-        <aside className="flex min-h-0 w-[440px] shrink-0 flex-col border-l border-border bg-card max-lg:h-[70vh] max-lg:w-full max-lg:border-t max-lg:border-l-0">
-          {selectedStep ? (
+        <aside className={cn(
+          "flex min-h-0 shrink-0 flex-col border-l border-border bg-card transition-[width] duration-200 max-lg:h-[70vh] max-lg:w-full max-lg:border-t max-lg:border-l-0",
+          selected === RESULT_ID && wide ? "w-[min(62vw,1100px)]" : "w-[440px]",
+        )}>
+          {selected === RESULT_ID ? (
+            <ResultPanel
+              detail={detail}
+              steps={steps}
+              live={live}
+              changedFiles={changedFiles}
+              onClose={() => setSelected(null)}
+              onOpenStep={setSelected}
+              onWide={onWide}
+            />
+          ) : selectedStep ? (
             <AgentPanel
               step={selectedStep}
               steps={steps}
@@ -552,7 +568,7 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
           )}
         </aside>
       </div>
-      <TaskConsole detail={detail} steps={steps} selected={selected}
+      <TaskConsole detail={detail} steps={steps} selected={selected === RESULT_ID ? null : selected}
                    open={consoleOpen} onToggle={() => setConsoleOpen(!consoleOpen)}
                    onOpenStep={setSelected} />
     </div>

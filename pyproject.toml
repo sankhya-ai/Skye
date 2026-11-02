@@ -21,3 +21,8 @@ packages = ["skye", "skye.adapters", "skye.ui"]
 # data, not code: without this a wheel install has a server with no screens.
 [tool.setuptools.package-data]
 "skye.ui" = ["dist/**/*", "NOTICE"]
+
+# `pytest` from the repo root runs Skye's suite. The vendored Root tree carries its own test
+# suite with its own dependencies; it is Root's to run, not collected here.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
