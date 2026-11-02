@@ -250,6 +250,7 @@ export type TeamRow = {
   lead_description?: string;
   member_details?: { name: string; description: string }[];
   project_names?: string[];
+  revision?: number; // bumped on every save; send it back so a stale edit is refused
 };
 
 export const getTeams = () => api<{ teams: TeamRow[] }>("/api/teams");
@@ -261,6 +262,7 @@ export const saveTeam = (team: {
   description?: string;
   handoff?: string;
   projects?: string[];
+  revision?: number;
 }) => api<{ saved: boolean; team: TeamRow }>("/api/teams", {
   method: "POST",
   body: JSON.stringify({ team }),

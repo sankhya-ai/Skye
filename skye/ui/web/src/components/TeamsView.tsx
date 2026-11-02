@@ -67,6 +67,8 @@ export function TeamsView() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The revision the open edit is based on: the server refuses a save over a newer one.
+  const [editingRevision, setEditingRevision] = useState<number | undefined>(undefined);
   const [name, setName] = useState("");
   const [lead, setLead] = useState("");
   const [members, setMembers] = useState<string[]>([]);
@@ -120,8 +122,16 @@ export function TeamsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roles, defs]);
 
+  // The lead plans and is never its own member: picking a role as lead drops it from the
+  // members (its chip is disabled while it leads, so it could not be unticked otherwise).
+  const chooseLead = (role: string) => {
+    setLead(role);
+    setMembers((current) => current.filter((m) => m !== role));
+  };
+
   const reset = () => {
     setEditingId(null);
+    setEditingRevision(undefined);
     setName("");
     setMembers([]);
     setTeamProjects([]);
@@ -130,6 +140,7 @@ export function TeamsView() {
 
   const edit = (team: TeamRow) => {
     setEditingId(team.id);
+    setEditingRevision(team.revision);
     setName(team.name);
     setLead(team.lead);
     setMembers(team.members);
@@ -143,6 +154,7 @@ export function TeamsView() {
     try {
       await saveTeam({
         ...(editingId ? { id: editingId } : {}),
+        ...(editingId && editingRevision !== undefined ? { revision: editingRevision } : {}),
         name: name.trim(),
         lead,
         members,
@@ -264,7 +276,7 @@ export function TeamsView() {
               ariaLabel="Team lead"
               className="flex-1"
               options={leadOptions}
-              onChange={setLead}
+              onChange={chooseLead}
             />
           </label>
         </div>

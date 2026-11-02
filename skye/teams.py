@@ -163,8 +163,25 @@ def add(entry: dict[str, Any], path: str | Path | None = None) -> dict[str, Any]
     atomic and the read-modify-write serialized. Saving runs nothing - the roster constrains
     missions created with it later."""
     record = validate_team(entry, path)
+    expected = entry.get("revision") if isinstance(entry, dict) else None
 
     def _apply(data: dict[str, Any]) -> dict[str, Any]:
+        existing = next((t for t in data["teams"] if t.get("id") == record["id"]), None)
+        clash = next((t for t in data["teams"] if t.get("id") != record["id"]
+                      and str(t.get("name") or "").strip().lower() == record["name"].lower()),
+                     None)
+        if clash is not None:
+            raise TeamError(f"a team named {record['name']!r} already exists; team names are "
+                            "unique (missions may refer to a team by name)")
+        current = int((existing or {}).get("revision") or 0)
+        # Optimistic concurrency: an editor that read revision N may only replace revision N.
+        # A caller that sends no revision (a CLI/file edit) keeps last-writer-wins.
+        if expected is not None and existing is not None and int(expected) != current:
+            raise TeamError(f"team {record['name']!r} changed since it was opened "
+                            f"(revision {current}, you edited {expected}); reload and retry")
+        if existing is not None and "description" not in entry:
+            record["description"] = str(existing.get("description") or "")
+        record["revision"] = current + 1
         data["teams"] = [t for t in data["teams"] if t.get("id") != record["id"]]
         data["teams"].append(record)
         return record
