@@ -106,8 +106,8 @@ def _cmd_approvals() -> int:
 
 def _cmd_mission(args: list[str]) -> int:
     if len(args) < 2 or args[0] not in ("run", "status", "check", "reset", "redispatch",
-                                          "ack-recovery"):
-        print("usage: skye mission run|status|check|reset|redispatch|ack-recovery "
+                                          "handoff", "ack-recovery"):
+        print("usage: skye mission run|status|check|reset|redispatch|handoff|ack-recovery "
               "<mission.json> [--step <id>]", file=sys.stderr)
         return 2
     sub, path = args[0], args[1]
@@ -140,6 +140,21 @@ def _cmd_mission(args: list[str]) -> int:
         print(json.dumps({"acknowledged": True, "branch": record.get("branch", ""),
                           "base_rev": record.get("base_rev", "")}, indent=2))
         return 0
+    if sub == "handoff":
+        # The owner's explicit recovery decision: journal it, then run so the lead answers.
+        if "--step" not in args[2:] or args.index("--step") + 1 >= len(args):
+            print("usage: skye mission handoff <mission.json> --step <id>", file=sys.stderr)
+            return 2
+        from .mission import default_state_dir, handoff_to_lead
+        try:
+            handed = handoff_to_lead(default_state_dir(), mission["id"],
+                                     args[args.index("--step") + 1])
+        except MissionError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        # Not a JSON result of its own: the run below (so the lead answers) prints that.
+        print(f"handed step '{handed['step']}' to '{handed['to']}'; running the mission so "
+              "the lead answers", file=sys.stderr)
     redispatch = None
     redispatch_fresh = False
     if sub == "redispatch":

@@ -86,6 +86,26 @@ already defined. The review gate's reviewer, like the lead, is a policy role tha
 and never authors it, so it runs outside the roster by design; the roster constrains who may
 be delegated work.
 
+## When a step fails
+
+A failed step stays on the record - the mission keeps the attempt, its timing and its error, and
+the mission itself stops instead of pretending the work landed. From there you have two ways
+back:
+
+- **Recover it in place.** Open the failed member and follow up, or reset the step and run it
+  again.
+- **Hand it to the lead.** One click in the UI (or `skye mission handoff <mission.json> --step
+  <id>`) journals a `recovery-handoff` event: the failure is recorded as handed over, the
+  mission no longer counts that step as its own failure, and the lead is queued to answer with
+  the failure in its brief. The lead answers through the ordinary validated path - roster,
+  policy and gates all still apply - so a handoff never widens what may run. The handed-off
+  member never runs again on its own for that step; the record keeps both the failure and who
+  took it over.
+
+Every dispatch of every member is kept as a run - start, end, state, duration and error - so the
+member's inspector and the mission console can show the full history of attempts, not just the
+latest state.
+
 ## Workers
 
 | Worker | What it is |

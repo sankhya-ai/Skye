@@ -3,7 +3,7 @@
 // and a composer to keep talking to it. A message to a running agent is queued on its
 // live input for its next turn; to a finished agent it starts a new run that continues
 // the same recorded session, so the agent answers with its full context.
-import { ArrowUp, ChevronDown, ChevronRight, Copy, RotateCcw, Wrench, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, Copy, RotateCcw, UserCheck, Wrench, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { MissionDetail } from "../api";
 import { cn, formatTime } from "../lib";
@@ -173,11 +173,13 @@ export function AgentPanel({
   detail,
   busy,
   note,
+  lead,
   onClose,
   onOpenStep,
   onFollowUp,
   onRedispatch,
   onRedispatchFresh,
+  onHandoff,
   onChanged,
 }: {
   step: StepView;
@@ -185,14 +187,17 @@ export function AgentPanel({
   detail: MissionDetail;
   busy: boolean;
   note: string | null;
+  /** The step a failure here would hand to: the team lead, or the planner that proposed it. */
+  lead: StepView | null;
   onClose: () => void;
   onOpenStep: (id: string) => void;
   onFollowUp: (step: string, text: string) => Promise<boolean>;
   onRedispatch: (step: string) => void;
   onRedispatchFresh: (step: string) => void;
+  onHandoff: (step: string) => void;
   onChanged: () => void;
 }) {
-  const [tab, setTab] = useState<"chat" | "brief">("chat");
+  const [tab, setTab] = useState<"chat" | "runs" | "brief">("chat");
   const [draft, setDraft] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -250,7 +255,7 @@ export function AgentPanel({
         </button>
       </div>
       <div className="flex gap-1 border-b border-border px-3">
-        {(["chat", "brief"] as const).map((t) => (
+        {(["chat", "runs", "brief"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -260,12 +265,42 @@ export function AgentPanel({
               tab === t ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
-            {t === "chat" ? "Conversation" : "Brief"}
+            {t === "chat" ? "Conversation" : t === "runs" ? "Runs" : "Brief"}
           </button>
         ))}
       </div>
 
-      {tab === "brief" ? (
+      {tab === "runs" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          {step.runs.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No runs yet - this agent starts when the steps before it finish.</p>
+          ) : (
+            <ol className="space-y-2">
+              {[...step.runs].reverse().map((run, i) => (
+                <li key={i} className="rounded-lg border border-border px-3 py-2">
+                  <div className="flex items-center gap-2 text-xs">
+                    <StateMark state={run.state} />
+                    <span className="font-medium text-foreground">{STATE_LABEL[run.state] ?? run.state}</span>
+                    <span className="text-muted-foreground">{run.label}</span>
+                    <span className="flex-1" />
+                    <span className="text-[11px] text-muted-foreground">
+                      {formatTime(run.startedAt)}
+                      {run.endedAt ? ` · ${formatDuration(run.endedAt - run.startedAt)}` : ""}
+                    </span>
+                  </div>
+                  {run.reason && run.state !== "done" ? (
+                    <p className={cn("mt-1 text-[11px] leading-snug",
+                      ["failed", "interrupted", "resume-rejected"].includes(run.state)
+                        ? "text-destructive" : "text-muted-foreground")}>
+                      {run.reason}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      ) : tab === "brief" ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Goal</p>
           <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{step.goal}</p>
@@ -313,6 +348,70 @@ export function AgentPanel({
           {pending ? (
             <ApprovalCard missionId={detail.mission.id} step={step.id} contract={pending}
                           fingerprint={fingerprint} onApproved={onChanged} />
+          ) : null}
+          {!live && step.state === "failed" ? (
+            step.handedTo ? (() => {
+              const leadStep = steps.find((s) => s.id === step.handedTo);
+              const handoffTs = [...detail.journal].reverse()
+                .find((e) => e.event === "recovery-handoff" && e.step === step.id)?.ts ?? 0;
+              const answered = detail.journal.some(
+                (e) => e.event === "recovery-resolved" && e.step === step.id && e.ts > handoffTs);
+              // The lead settled once without answering THIS handoff: the engine will not
+              // re-open it on its own (each handoff buys one paid answer).
+              const unanswered = !answered && detail.journal.some(
+                (e) => e.event === "recovery-unaddressed" && e.step === step.id && e.ts > handoffTs);
+              const working = Boolean(leadStep && leadStep.state === "running");
+              const leadName = step.handedToRole ? roleName(step.handedToRole).toLowerCase() : "lead";
+              return (
+                <div className="rounded-lg border border-amber-400/50 bg-amber-50 p-3">
+                  <p className="text-xs text-amber-900">
+                    Handed to the {leadName} - {answered
+                      ? "it answered."
+                      : working
+                        ? "it is working on the recovery now."
+                        : unanswered
+                          ? "it finished without a recovery or a justified waiver. Hand it over again to have it retry."
+                          : "it has not answered yet - resume the task so it can pick the failure up."}
+                    {" "}The failure stays on the record; this agent does not run again on its own.
+                  </p>
+                  {unanswered && !working ? (
+                    <div className="mt-2">
+                      <Button variant="danger-outline" size="sm" disabled={busy} onClick={() => onHandoff(step.id)}>
+                        <UserCheck className="size-3" /> Hand it to the {leadName} again
+                      </Button>
+                    </div>
+                  ) : null}
+                  {answered ? (
+                    <button type="button" onClick={() => onOpenStep(step.handedTo!)}
+                            className="mt-1.5 text-xs text-amber-900 underline underline-offset-2 hover:text-foreground">
+                      Open the lead's answer
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })() : (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                <p className="text-xs font-medium text-destructive">{step.reason || "This run failed."}</p>
+                {lead ? (
+                  <>
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      Hand it to the {roleName(lead.role).toLowerCase()}: it sees the failure in its
+                      own session and decides the recovery - a revised or replacement step, or the
+                      goal stands without it. Nothing else re-runs.
+                    </p>
+                    <div className="mt-2">
+                      <Button variant="danger-outline" size="sm" disabled={busy} onClick={() => onHandoff(step.id)}>
+                        <UserCheck className="size-3" /> Hand it to the {roleName(lead.role).toLowerCase()}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    This task has no lead to take the failure - reset the task to start over.
+                  </p>
+                )}
+              </div>
+            )
           ) : null}
           {retry ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">

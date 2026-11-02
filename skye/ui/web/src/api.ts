@@ -32,6 +32,9 @@ export type StepStatus = {
   has_session?: boolean;
   followupable?: boolean;
   progress?: string;
+  // Set when the owner handed this failed step to the mission's lead for recovery:
+  // the lead step's id. The failure stays on the record but no longer fails the task.
+  handed_to?: string;
 };
 
 export type JournalEntry = {
@@ -193,6 +196,13 @@ export const redispatchStep = (id: string, step: string, fresh = false) =>
   api<{ redispatched: string; continuity?: string }>(
     `/api/missions/${id}/redispatch`,
     { method: "POST", body: JSON.stringify(fresh ? { step, fresh: true } : { step }) });
+// Hand a failed step to the mission's lead for recovery: journaled, then the lead's
+// session resumes with the failure as context and answers with revised or replacement
+// steps. The failed step never re-runs on its own.
+export const handoffStep = (id: string, step: string) =>
+  api<{ handed: string; to: string; resumed: boolean }>(
+    `/api/missions/${id}/handoff`,
+    { method: "POST", body: JSON.stringify({ step }) });
 // Continue a settled recorded session in a new process, or submit supported live input.
 // A submitted live follow-up is not a provider-consumption receipt.
 export const followUpStep = (id: string, step: string, text: string) =>

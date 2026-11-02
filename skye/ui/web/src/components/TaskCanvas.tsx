@@ -288,9 +288,11 @@ export function TaskCanvas({
                 ? s.goal
                 : s.state === "done"
                   ? s.latest || "Finished"
-                  : s.reason && s.state !== "running"
-                    ? s.reason
-                    : s.latest || "Starting..."}
+                  : s.handedTo
+                    ? `Handed to the lead - ${s.reason || "recovering"}`
+                    : s.reason && s.state !== "running"
+                      ? s.reason
+                      : s.latest || "Starting..."}
             </p>
             <Handle side="left" />
             <Handle side="right" />

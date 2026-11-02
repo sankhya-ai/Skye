@@ -1481,6 +1481,24 @@ class UiHandler(BaseHTTPRequestHandler):
                     from .. import workspaces as _ws
                     goal = str(load_mission(mission_file).get("goal") or mission_id)
                     return self._json(_ws.deliver_to_project(mission_dir, message=goal))
+                if action == "handoff":
+                    # The owner's explicit recovery decision: hand a FAILED step to the
+                    # mission's lead. Journaled first (crash-safe), then the run resumes
+                    # so the lead answers in its own recorded session. Never while live.
+                    step = str(body.get("step") or "")
+                    if not step:
+                        return self._json({"error": "step is required"}, 400)
+                    with _live_lock:
+                        if _live_missions.get(mission_id, {}).get("running"):
+                            return self._json({"error": "the mission is still running"}, 409)
+                    from ..mission import handoff_to_lead
+                    try:
+                        handed = handoff_to_lead(self.state_dir, mission_id, step)
+                    except MissionError as error:
+                        return self._json({"error": str(error)}, 400)
+                    resume_in_thread(self.state_dir, mission_id)
+                    return self._json({"handed": handed["step"], "to": handed["to"],
+                                       "resumed": True})
                 if action == "redispatch":
                     step = body.get("step")
                     if not step:
