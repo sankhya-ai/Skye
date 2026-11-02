@@ -6,6 +6,7 @@ export type MissionRow = {
   id: string;
   goal: string;
   project?: string;
+  team?: string; // saved team name, when the task was staffed by one
   overall: string;
   needs_owner: boolean;
   approved: boolean;
@@ -99,7 +100,8 @@ export type MissionDetail = {
   artifacts?: MissionArtifacts;
   workspace?: WorkspaceInfo;
   mission: { id: string; goal: string; steps: Array<Record<string, unknown>>;
-             project?: string; repos?: Record<string, string>; repos_source?: string };
+             project?: string; repos?: Record<string, string>; repos_source?: string;
+             team?: { id: string; name: string; lead: string; members: string[] } };
   status: { mission: string; status: string; steps: StepStatus[] };
   journal: JournalEntry[];
   dynamic_steps: Array<Record<string, unknown>>;
@@ -237,6 +239,40 @@ export type AgentDefinition = {
 export const getAgentDefinitions = () =>
   api<{ agents: AgentDefinition[] }>("/api/agents");
 
+export type TeamRow = {
+  id: string;
+  name: string;
+  lead: string;
+  members: string[];
+  description: string;
+  handoff: string;
+  projects: string[]; // project ids the team is assigned to (empty: any project)
+  lead_description?: string;
+  member_details?: { name: string; description: string }[];
+  project_names?: string[];
+  revision?: number; // bumped on every save; send it back so a stale edit is refused
+};
+
+export const getTeams = () => api<{ teams: TeamRow[] }>("/api/teams");
+export const saveTeam = (team: {
+  id?: string;
+  name: string;
+  lead: string;
+  members: string[];
+  description?: string;
+  handoff?: string;
+  projects?: string[];
+  revision?: number;
+}) => api<{ saved: boolean; team: TeamRow }>("/api/teams", {
+  method: "POST",
+  body: JSON.stringify({ team }),
+});
+export const deleteTeam = (id: string) =>
+  api<{ deleted: boolean; team: string }>("/api/teams/delete", {
+    method: "POST",
+    body: JSON.stringify({ id }),
+  });
+
 export type AdapterDetail = {
   name: string;
   available: boolean;
@@ -276,6 +312,7 @@ export const createMission = (spec: {
   goal: string;
   plan?: boolean;
   solo?: boolean;
+  team?: string; // saved team id: implies plan, lead plans, roster is enforced
   run?: boolean;
   project?: string;
   repo?: string;

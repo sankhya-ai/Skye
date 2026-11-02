@@ -292,6 +292,11 @@ def _run_gate(gate: str, spec: dict[str, Any], policy: Policy, runner=None, brid
         # concurrency stays one), and its verdict decides the gate: only an explicit "pass"
         # opens it; "block", a missing/malformed/unknown verdict, or a reviewer that never
         # finished all fail.
+        # Saved teams: this reviewer is a REVIEW-POLICY role, the same class as the team
+        # lead - it judges work and never authors it, so it stands outside the saved
+        # roster by design. The roster constrains delegated WORK (authored steps and lead
+        # proposals, enforced in mission.load_mission / _validate_proposal); Skye's
+        # mandatory quality gates are not delegation.
         verdict = dispatch(review.build_review_contract(spec, policy.review_role or "reviewer"),
                            policy, runner=runner, bridge=bridge, approvals_path=approvals_path,
                            event_context=event_context)

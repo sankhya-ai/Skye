@@ -379,8 +379,10 @@ def missions_overview(state_dir: Path) -> list[dict]:
                     return False
                 return (entry.get("status") == "done") == want_done
 
+            team_snap = payload["mission"].get("team") or {}
             rows.append({"id": mission_dir.name, "goal": payload["mission"].get("goal", ""),
                          "project": project_id,
+                         "team": str(team_snap.get("name") or "") if isinstance(team_snap, dict) else "",
                          "overall": status["status"],
                          "needs_owner": bool(payload["pending_contracts"]),
                          "approved": payload["approved"],
@@ -570,6 +572,40 @@ def preferred_adapter() -> str:
     return "root"
 
 
+TEAM_PLANNER_BRIEF = """You are {lead}, the lead of the saved team "{team}", planning this goal:
+
+{goal}
+
+Your team members (the ONLY roles you may delegate to - the engine rejects steps for any
+other role):
+{members}
+
+Decide the SMALLEST use of your team that does this well, then reply with JSON exactly of the
+form {{"propose_steps": [{{"id": "...", "role": "...", "adapter": "{adapter}", "goal": "...",
+"brief": "...", "needs": ["..."]}}]}}.
+
+Every step is a separate coding-agent session that costs the owner real usage, so:
+- If one member can do it (most bug fixes, small features, refactors in one area), propose
+  exactly ONE step. That is the expected answer for most goals.
+- Add a step only when it needs a genuinely different skill or a separate area of the code
+  that can proceed in parallel (e.g. backend API + frontend screen). Rarely more than 3.
+- Do not add review, test or "verify" steps: the team's gates already run tests and
+  review where the owner configured them.
+- Use "adapter": "{adapter}" for every step, and a "role" from your member list above.
+- Each brief must be self-contained: what to change, where, and how to know it is done.
+  Use needs only when a step truly depends on another step's result.
+Look at the repository only as much as you need to plan - do not do the work yourself;
+your reply becomes the workflow. Keep it brief.
+{handoff}
+If you see clearly separate follow-up work beyond this goal, you may list it for the
+owner's backlog: "propose_features": [{{"title": "...", "brief": "..."}}] - proposals wait
+for the owner's approval and cost nothing until approved.
+"""
+
+TEAM_HANDOFF_SECTION = """How this team hands work off (the owner's note for your team):
+{handoff}
+"""
+
 PLANNER_ROUTING_ADDENDUM = """
 This mission spans several owner-declared repositories. Route every step yourself:
 each proposed step MUST carry "repo": "<one declared repository name>" naming where the
@@ -617,6 +653,12 @@ MISSION_SETUP: dict = {
                                   "gates": "list (optional)"}},
         "plan": {"type": "boolean", "required": False,
                  "note": "start with a single planner step that proposes the workflow"},
+        "team": {"type": "string", "required": False,
+                 "note": "saved team id or name: implies plan, makes the team's lead the "
+                         "planner, and constrains every lead-proposed step to the saved "
+                         "members (enforced by the engine, journaled when rejected). Mutually "
+                         "exclusive with solo. A team assigned to projects only composes for "
+                         "those projects."},
         "run": {"type": "boolean", "required": False,
                 "note": "start the mission immediately after creation"},
     },
@@ -681,14 +723,34 @@ def create_mission(state_dir: Path, spec: dict) -> str:
                             f"({'; '.join(notes)})")
     # (Discovery finding no repos changes nothing: the project path stays the default
     # repo exactly as before - the workspace layer owns the fail-closed non-git verdict.)
-    if spec.get("plan"):
+    # Saved team: the mission starts with the team's LEAD planning, and the lead may only
+    # delegate to the saved members (enforced by the mission engine on every proposed step,
+    # not just written into the brief). A team implies the planning flow; solo and team are
+    # mutually exclusive ways to staff a goal.
+    team_record = None
+    team_ref = str(spec.get("team") or "").strip()
+    if team_ref:
+        from .. import teams as teams_module
+        team_record = teams_module.get(team_ref)
+        if team_record is None:
+            raise MissionError(f"unknown team '{team_ref}'")
+        if spec.get("solo"):
+            raise MissionError("choose either Solo (one session) or a saved team, not both")
+        if (team_record.get("projects") and project_id
+                and project_id not in team_record["projects"]):
+            raise MissionError(
+                f"team '{team_record['name']}' is assigned to project(s) "
+                f"{', '.join(team_record['projects'])}, not '{project_id}'; assign it on the "
+                "Teams screen or pick one of its projects")
+    if spec.get("plan") or team_record is not None:
         # The composed planner step is a NONWRITING context step: it proposes the workflow,
         # it never does repo work. Verify the effective planner role's tool catalogue
         # (team file > roles registry > builtin - the same resolution the dispatcher
         # applies) before composing; a writable planner role is rejected here, not after
         # it had write access to the first declared repo.
         from .. import gateway
-        planner_role = str(spec.get("planner_role") or "pm")
+        planner_role = (team_record["lead"] if team_record is not None
+                        else str(spec.get("planner_role") or "pm"))
         try:
             catalogue = gateway.resolve(planner_role)
         except KeyError as error:
@@ -702,8 +764,25 @@ def create_mission(state_dir: Path, spec: dict) -> str:
         adapter = str(spec.get("adapter") or preferred_adapter())
         from .. import roles as _roles
         role_names = [r for r in _roles.known() if r not in ("reviewer", "pm", "explorer")]
-        brief = (PLANNER_BRIEF.replace("{{", "{").replace("}}", "}").replace("{goal}", goal).replace("{adapter}", adapter)
-                 .replace("{roles}", ", ".join(role_names)))
+        if team_record is not None:
+            from .. import agents as _agents
+            member_lines = []
+            for member in team_record["members"]:
+                definition = _agents.definition_for(member) or {}
+                description = str(definition.get("description") or "").strip()
+                member_lines.append(f"- {member}" + (f" - {description}" if description else ""))
+            handoff = str(team_record.get("handoff") or "").strip()
+            handoff_section = (TEAM_HANDOFF_SECTION.replace("{handoff}", handoff)
+                               if handoff else "")
+            brief = (TEAM_PLANNER_BRIEF.replace("{{", "{").replace("}}", "}")
+                     .replace("{goal}", goal).replace("{adapter}", adapter)
+                     .replace("{lead}", planner_role)
+                     .replace("{team}", team_record["name"])
+                     .replace("{members}", "\n".join(member_lines))
+                     .replace("{handoff}", handoff_section))
+        else:
+            brief = (PLANNER_BRIEF.replace("{{", "{").replace("}}", "}").replace("{goal}", goal).replace("{adapter}", adapter)
+                     .replace("{roles}", ", ".join(role_names)))
         if isinstance(repos, dict) and repos:
             from .. import repocontext
             digests = repocontext.repo_digests(repos)
@@ -739,6 +818,8 @@ def create_mission(state_dir: Path, spec: dict) -> str:
     # before.
     default_repo = repo or ("" if repos else os.getcwd())
     mission = {"id": mission_id, "goal": goal, "repo": default_repo, "steps": steps}
+    if team_record is not None:
+        mission["team"] = team_record["id"]
     if repos:
         mission["repos"] = {str(n): str(p) for n, p in repos.items()}
     if repos_source:
@@ -962,6 +1043,30 @@ class UiHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(data)
                     return
+                if url.path == "/api/teams":
+                    # Saved teams (owner-managed registry): the roster a Team task's lead may
+                    # delegate to. Enriched for display with agent descriptions and project
+                    # names; the raw file stays the only write path.
+                    from .. import agents as agents_module
+                    from .. import teams as teams_module
+                    payload = []
+                    for record in teams_module.list_teams():
+                        lead_def = agents_module.definition_for(record["lead"]) or {}
+                        members = []
+                        for member in record["members"]:
+                            definition = agents_module.definition_for(member) or {}
+                            members.append({
+                                "name": member,
+                                "description": str(definition.get("description") or "")})
+                        project_names = []
+                        for project_id in record.get("projects") or []:
+                            project = projects.get(project_id)
+                            project_names.append(project["name"] if project else project_id)
+                        payload.append({**record,
+                                        "lead_description": str(lead_def.get("description") or ""),
+                                        "member_details": members,
+                                        "project_names": project_names})
+                    return self._json({"teams": payload})
                 if url.path == "/api/agents":
                     # The team's agent definitions: builtins, active registry entries and
                     # worker-proposed agents awaiting the owner's promote decision.
@@ -1157,6 +1262,56 @@ class UiHandler(BaseHTTPRequestHandler):
                 except projects.ProjectError as error:
                     return self._json({"error": str(error)}, 400)
                 return self._json({"saved": True, "project": saved})
+            if url.path == "/api/teams":
+                record = body.get("team")
+                if not isinstance(record, dict):
+                    return self._json({"error": "team must be a JSON object"}, 400)
+                from .. import teams as teams_module
+                try:
+                    saved = teams_module.add(record)  # validated; runs nothing by itself
+                except teams_module.TeamError as error:
+                    return self._json({"error": str(error)}, 400)
+                return self._json({"saved": True, "team": saved})
+            if url.path == "/api/teams/delete":
+                from .. import teams as teams_module
+                team_id = str(body.get("id") or "").strip()
+                if teams_module.get(team_id) is None:
+                    return self._json({"error": f"unknown team {team_id!r}"}, 404)
+                # Every mission carries its own roster snapshot, so deleting a team never
+                # changes a run. The guard is for the owner: a team with unsettled work
+                # disappearing from the Teams screen hides who is still staffing it. Block
+                # only what is still live; settled missions keep their snapshot as history.
+                busy = []
+                missions_root = self.state_dir / "missions"
+                if missions_root.exists():
+                    for mission_dir in sorted(missions_root.iterdir()):
+                        snapshot = mission_dir / "mission.json"
+                        if not snapshot.exists():
+                            continue
+                        try:
+                            raw = json.loads(snapshot.read_text("utf-8"))
+                        except (OSError, ValueError):
+                            continue
+                        snap = raw.get("team")
+                        snap_id = (snap.get("id") if isinstance(snap, dict) else snap) or ""
+                        if snap_id != team_id:
+                            continue
+                        try:
+                            overall = mission_status(load_mission(snapshot),
+                                                     state_dir=self.state_dir)["status"]
+                        except Exception:
+                            overall = "unknown"  # cannot prove settled: fail closed
+                        if overall not in ("done", "failed", "gate-failed"):
+                            busy.append(f"{mission_dir.name} ({overall})")
+                if busy:
+                    return self._json(
+                        {"error": f"team still has work in flight: {', '.join(busy)}. "
+                                  "Let it settle (or reset it) before deleting the team."}, 409)
+                try:
+                    removed = teams_module.remove(team_id)
+                except teams_module.TeamError as error:
+                    return self._json({"error": str(error)}, 400)
+                return self._json({"deleted": True, "team": removed["id"]})
             if url.path == "/api/roles":
                 record = body.get("role")
                 if not isinstance(record, dict):

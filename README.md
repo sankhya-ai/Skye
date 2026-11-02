@@ -24,6 +24,10 @@ resell tokens or download an agent for you.
   reviewer, designer, artist, PM, tester, explorer, devops), each with its own instructions and an
   explicit tool catalogue. You can add or refine roles, and workers can propose new specialists,
   which stay inactive until you promote them.
+- **Saved teams with a lead.** Create a team once - a lead plus the members it may delegate to,
+  optionally tied to projects - then pick it when you start a Team task. The lead plans the work
+  and Skye enforces the roster: the lead can only delegate to its members, and every member
+  session still passes the usual policy check or your one-time approval before it runs.
 - **Workflows that grow as they run.** A mission is a persisted workflow of steps with handoffs and
   conditions. A finished step can propose follow-up steps. Independent steps run in parallel, and
   every transition is journaled so a crash resumes instead of restarting.
@@ -60,6 +64,27 @@ gates:        output contract, tests, reviewer verdict, journey check
 4. **Gates** decide whether the result counts: a contract check on the output, your test command,
    and a reviewer who must say pass. Delivery can also require replaying a journey check you own.
 5. Lifecycle events go to a local `events.jsonl`, or to a Chamber line if you configure one.
+
+## Solo, ad-hoc team or saved team
+
+Every goal starts one of three ways from the Home composer:
+
+- **Solo** - one worker session does the goal directly, like driving the CLI yourself. Fewest
+  tokens, no planning session.
+- **Ad-hoc team** - a planning session reads the goal and proposes the smallest workflow, which
+  the engine validates and dispatches step by step.
+- **A saved team** - you pick a team you created on the Teams screen. Its lead runs the planning
+  session and may only delegate to the members you saved into the roster: a proposed step for any
+  other role is rejected and journaled, and if nothing in the roster ran, the task pauses for you
+  instead of pretending it is done. Saving a team runs nothing and grants nothing - membership
+  constrains the lead, it never widens what may run. Handoffs between members are settled
+  outcomes plus the async team line; nobody pushes into a member's running session.
+
+Teams live in `skye.teams.json` (owner-managed, like the policy and roles files). A team's
+missions snapshot their roster at creation, so editing the team later never retargets work
+already defined. The review gate's reviewer, like the lead, is a policy role that judges work
+and never authors it, so it runs outside the roster by design; the roster constrains who may
+be delegated work.
 
 ## Workers
 

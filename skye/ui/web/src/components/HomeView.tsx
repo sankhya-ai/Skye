@@ -10,9 +10,11 @@ import {
   createMission,
   createProject,
   getClaudeUsage,
+  getTeams,
   initProjectGit,
   pickFolder,
   type ClaudeAccount,
+  type TeamRow,
   getBacklog,
   getMissionSetup,
   type FeatureRow,
@@ -123,6 +125,8 @@ export function HomeView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [features, setFeatures] = useState<FeatureRow[]>([]);
+  const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [team, setTeam] = useState(""); // saved team id; "" = ad-hoc (a planner sizes the team)
   const [setup, setSetup] = useState<MissionSetup | null>(null);
   const [discovery, setDiscovery] = useState<ProjectRepoDiscovery["discovery"] | null>(null);
   const [repoRows, setRepoRows] = useState<Array<{ name: string; path: string }>>([]);
@@ -143,6 +147,10 @@ export function HomeView({
   useEffect(() => {
     getMissionSetup().then(setSetup).catch(() => {});
     getClaudeUsage().then((d) => setAccount(d.account)).catch(() => {});
+    const loadTeams = () => getTeams().then((d) => setTeams(d.teams)).catch(() => {});
+    void loadTeams();
+    const timer = setInterval(loadTeams, 10000); // created/edited on the Teams screen
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -153,6 +161,20 @@ export function HomeView({
   useEffect(() => {
     if (!project && projects.length > 0) setProject(projects[projects.length - 1].id);
   }, [projects, project]);
+
+  useEffect(() => {
+    setTeam((current) => {
+      const picked = teams.find((t) => t.id === current);
+      if (picked && picked.projects.length > 0 && project && !picked.projects.includes(project)) {
+        return ""; // this team is assigned elsewhere: ad-hoc, never a guessed widening
+      }
+      if (!picked) {
+        const assigned = teams.filter((t) => project && t.projects.includes(project));
+        if (assigned.length === 1) return assigned[0].id;
+      }
+      return current;
+    });
+  }, [project, teams]);
 
   const addProjectFolder = async () => {
     setError(null);
@@ -232,9 +254,12 @@ export function HomeView({
     setError(null);
     try {
       // A planner mission: the engine grows the real workflow from the goal at runtime.
+      // A saved team staffs it: the team's lead plans and may only delegate to its members.
+      const picked = mode === "team" ? teams.find((t) => t.id === team) : undefined;
       const created = await createMission({
         goal: text,
         ...(mode === "solo" ? { solo: true } : { plan: true }),
+        ...(picked ? { team: picked.id } : {}),
         run: true,
         ...(project ? { project } : {}),
         ...(declared.length > 0
@@ -310,6 +335,24 @@ export function HomeView({
                   + Choose project folder
                 </button>
               )}
+              {mode === "team" ? (
+                <Select
+                  value={team}
+                  ariaLabel="Which team staffs this goal"
+                  className="max-w-[11rem]"
+                  menuMinWidth={280}
+                  onChange={(v) => (v === "__new" ? (window.location.hash = "/teams") : setTeam(v))}
+                  options={[
+                    { value: "", label: "Ad-hoc team", hint: "A planner sizes the team per goal" },
+                    ...teams.map((t) => ({
+                      value: t.id,
+                      label: t.name,
+                      hint: `lead ${t.lead} · ${t.members.join(", ")}`,
+                    })),
+                    { value: "__new", label: "+ New team…", action: true },
+                  ]}
+                />
+              ) : null}
               <div role="radiogroup" aria-label="How to staff this goal" className="flex h-8 items-center rounded-full border border-border bg-card p-0.5 text-xs">
                 {(["team", "solo"] as const).map((m) => (
                   <button
