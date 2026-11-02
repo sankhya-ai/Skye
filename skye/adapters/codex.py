@@ -487,7 +487,8 @@ class CodexAdapter(SessionAdapter):
                              returncode=0 if ok else 1,
                              session_id=session_id, continuity=continuity,
                              protocol="app-server-jsonrpc;guard=shape-only",
-                             resume_rejected=False, usage=usage)
+                             resume_rejected=False, usage=usage,
+                             answer=(texts[-1].strip()[:40000] if ok and texts else ""))
 
 
 class _FallbackToExec(Exception):

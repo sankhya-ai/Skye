@@ -150,7 +150,7 @@ function DiffGroups({ missionId, repo, entry }: {
   if (empty) {
     return (
       <p className="mt-2 text-xs text-muted-foreground">
-        The repo tree is byte-identical before and after this mission - no file changed.
+        The repo tree is byte-identical before and after this task - no file changed.
       </p>
     );
   }
@@ -176,7 +176,7 @@ export function MissionArtifactsPanel({ missionId, artifacts, running = false }:
       <div className="rounded-md border border-border bg-card p-4">
         <h3 className="text-sm font-medium text-foreground">Changed files</h3>
         <p className="mt-2 text-xs text-muted-foreground">
-          {running ? "File changes have not been recorded yet. The final file record is written when the mission finishes." : "No file-change record is available for this mission."}
+          {running ? "File changes have not been recorded yet. The final file record is written when the task finishes." : "No file-change record is available for this task."}
         </p>
       </div>
     );
@@ -200,7 +200,7 @@ export function MissionArtifactsPanel({ missionId, artifacts, running = false }:
               <DiffGroups missionId={missionId} repo={name} entry={entry} />
             ) : (
               <p className="mt-2 text-xs text-muted-foreground">
-                {running ? "File changes have not been recorded yet. The final record is written when the mission finishes." : "No final file record yet. Files may have changed before the mission stopped."}
+                {running ? "File changes have not been recorded yet. The final record is written when the task finishes." : "No final file record yet. Files may have changed before the task stopped."}
               </p>
             )}
           </div>
@@ -215,7 +215,7 @@ export function MissionArtifactsPanel({ missionId, artifacts, running = false }:
       <div className="rounded-md border border-border bg-card p-4">
         <h3 className="text-sm font-medium text-foreground">Changed files</h3>
         <p className="mt-2 text-xs text-muted-foreground">
-          {running ? "File changes have not been recorded yet. The final record is written when the mission finishes." : "No final file record yet. Files may have changed before the mission stopped."}
+          {running ? "File changes have not been recorded yet. The final record is written when the task finishes." : "No final file record yet. Files may have changed before the task stopped."}
         </p>
       </div>
     );

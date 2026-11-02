@@ -42,7 +42,39 @@ export function MarkdownView({ source }: { source: string }) {
   let para: string[] = [];
   let list: string[] = [];
   let code: string[] | null = null;
+  let table: string[][] = [];
+  let ordered = false;
   let key = 0;
+
+  const cells = (row: string) =>
+    row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  const flushTable = () => {
+    if (!table.length) return;
+    const [head, ...body] = table;
+    blocks.push(
+      <div key={key++} className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead className="bg-muted/60">
+            <tr>
+              {head.map((c, j) => (
+                <th key={j} className="px-2.5 py-1.5 font-medium text-foreground">{inline(c, `th${key}-${j}`)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((row, r) => (
+              <tr key={r} className="border-t border-border align-top">
+                {row.map((c, j) => (
+                  <td key={j} className="px-2.5 py-1.5 text-foreground/85">{inline(c, `td${key}-${r}-${j}`)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>,
+    );
+    table = [];
+  };
 
   const flushPara = () => {
     if (para.length) {
@@ -57,13 +89,22 @@ export function MarkdownView({ source }: { source: string }) {
   const flushList = () => {
     if (list.length) {
       blocks.push(
-        <ul key={key++} className="list-disc space-y-0.5 pl-5 text-sm text-foreground/90">
-          {list.map((item, j) => (
-            <li key={j}>{inline(item, `l${key}-${j}`)}</li>
-          ))}
-        </ul>,
+        ordered ? (
+          <ol key={key++} className="list-decimal space-y-0.5 pl-5 text-sm text-foreground/90">
+            {list.map((item, j) => (
+              <li key={j}>{inline(item, `l${key}-${j}`)}</li>
+            ))}
+          </ol>
+        ) : (
+          <ul key={key++} className="list-disc space-y-0.5 pl-5 text-sm text-foreground/90">
+            {list.map((item, j) => (
+              <li key={j}>{inline(item, `l${key}-${j}`)}</li>
+            ))}
+          </ul>
+        ),
       );
       list = [];
+      ordered = false;
     }
   };
 
@@ -88,6 +129,14 @@ export function MarkdownView({ source }: { source: string }) {
       code.push(line);
       continue;
     }
+    if (trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1) {
+      flushPara();
+      flushList();
+      // the |---|---| separator row carries no content
+      if (!/^\|[\s:|-]+\|$/.test(trimmed)) table.push(cells(trimmed));
+      continue;
+    }
+    flushTable();
     const heading = /^(#{1,4})\s+(.*)$/.exec(trimmed);
     if (heading) {
       flushPara();
@@ -106,9 +155,18 @@ export function MarkdownView({ source }: { source: string }) {
       );
       continue;
     }
-    if (/^[-*]\s+/.test(trimmed)) {
+    if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) {
       flushPara();
-      list.push(trimmed.replace(/^[-*]\s+/, ""));
+      const isOrdered = /^\d+[.)]\s+/.test(trimmed);
+      if (list.length && isOrdered !== ordered) flushList();
+      ordered = isOrdered;
+      list.push(trimmed.replace(/^([-*]|\d+[.)])\s+/, ""));
+      continue;
+    }
+    if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
+      flushPara();
+      flushList();
+      blocks.push(<hr key={key++} className="border-border" />);
       continue;
     }
     if (trimmed === "") {
@@ -124,6 +182,7 @@ export function MarkdownView({ source }: { source: string }) {
   }
   flushPara();
   flushList();
+  flushTable();
   if (code !== null) {
     blocks.push(
       <pre key={key++} className="overflow-x-auto rounded-sm bg-muted p-2 font-mono text-xs text-foreground/90">

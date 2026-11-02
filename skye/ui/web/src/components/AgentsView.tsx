@@ -18,9 +18,9 @@ import { Select } from "./ui/Select";
 
 // What each role does in a mission, so the owner can judge where a stronger model pays off.
 const ROLE_HINT: Record<string, string> = {
-  pm: "Planner - sizes the team for every Team mission",
+  pm: "Planner - sizes the team for every Team task",
   reviewer: "Reviews changes when a step has a review gate",
-  developer: "Does the work in Solo missions and most Team steps",
+  developer: "Does the work in Solo tasks and most Team steps",
   explorer: "Read-only research",
 };
 

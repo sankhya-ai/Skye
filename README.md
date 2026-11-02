@@ -146,7 +146,7 @@ tokens. The numbers are as of the last run.
 - No test command is set. Add one (e.g. `pytest -q`) and every step must pass it. Without one,
   the default tests gate is recorded as *skipped*.
 - Workers get exactly their role's tools (`--allowedTools` plus `--permission-mode dontAsk`)
-  and no MCP tools.
+  and no MCP tools. Your interactive Claude Code hooks and MCP servers don't run inside workers.
 
 ### Command line (advanced)
 

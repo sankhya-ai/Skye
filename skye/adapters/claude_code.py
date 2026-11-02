@@ -3,6 +3,19 @@ import json
 from .base import SessionAdapter
 
 
+def _tool_detail(args) -> str:
+    """One short line naming what a tool call touched (the command, file or pattern), for
+    the activity stream. Display only; the server redacts it before it is shown."""
+    if not isinstance(args, dict):
+        return ""
+    for key in ("command", "file_path", "notebook_path", "pattern", "url", "query",
+                "description", "path"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().splitlines()[0][:200]
+    return ""
+
+
 class ClaudeCodeAdapter(SessionAdapter):
     """The user's own Claude Code install (their subscription, their login). Headless print mode.
 
@@ -39,6 +52,15 @@ class ClaudeCodeAdapter(SessionAdapter):
     CLAUDE_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit", "Bash", "NotebookEdit",
                     "WebFetch", "WebSearch", "TodoWrite")
 
+    #: Keep the owner's INTERACTIVE Claude Code setup out of a headless worker. A repo's
+    #: .claude/settings*.json can carry hooks written for a human session; a SessionStart
+    #: hook that blocks (e.g. a long-poll "wait for messages" hook) stalls the worker
+    #: before its first turn, with nothing in Skye's log but "started". MCP servers from
+    #: the owner's config would also spawn and register as the owner's agent, even though
+    #: --disallowedTools already denies their tools. So: no hooks, no MCP servers.
+    #: CLAUDE.md and the owner's login/model settings still apply.
+    ISOLATION_FLAGS = ("--settings", '{"disableAllHooks": true}', "--strict-mcp-config")
+
     def _tool_flags(self, contract: dict) -> list[str]:
         """Scope AND authorize the session's tools in one move.
 
@@ -54,7 +76,8 @@ class ClaudeCodeAdapter(SessionAdapter):
             tools = ["Read", "Glob", "Grep"]
         joined = ",".join(tools)
         flags = ["--tools", joined, "--allowedTools", joined,
-                 "--disallowedTools", "mcp__*", "--permission-mode", "dontAsk"]
+                 "--disallowedTools", "mcp__*", "--permission-mode", "dontAsk",
+                 *self.ISOLATION_FLAGS]
         model = str(contract.get("model") or "").strip()
         if model:
             flags += ["--model", model]
@@ -119,7 +142,8 @@ class ClaudeCodeAdapter(SessionAdapter):
                 if block.get("type") == "text" and block.get("text"):
                     events.append({"kind": "message", "text": str(block["text"])})
                 elif block.get("type") == "tool_use":
-                    events.append({"kind": "tool", "name": str(block.get("name") or "")})
+                    events.append({"kind": "tool", "name": str(block.get("name") or ""),
+                                   "detail": _tool_detail(block.get("input"))})
             return events
         if kind == "rate_limit_event":
             info = data.get("rate_limit_info")
@@ -142,6 +166,8 @@ class ClaudeCodeAdapter(SessionAdapter):
                      "session_id": str(data.get("session_id") or ""), "usage": usage}
             if event["ok"] is False and data.get("result"):
                 event["error"] = str(data["result"])[:500]
+            elif event["ok"] and isinstance(data.get("result"), str):
+                event["answer"] = data["result"]
             return [event]
         if kind == "user":
             # --replay-user-messages echo: the provider's own receipt that a queued

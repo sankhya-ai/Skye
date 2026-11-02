@@ -74,7 +74,7 @@ function Glanceables({
         >
           <p className="text-sm font-medium text-foreground">{project.name}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {live > 0 ? `${live} running` : total > 0 ? `${total} mission${total === 1 ? "" : "s"}` : "no missions yet"}
+            {live > 0 ? `${live} running` : total > 0 ? `${total} task${total === 1 ? "" : "s"}` : "no tasks yet"}
             {needsOwner > 0 ? ` · ${needsOwner} needs you` : ""}
           </p>
           {live > 0 ? (
@@ -200,7 +200,7 @@ export function HomeView({
 
   // The composer never guesses a path: every repository is typed by the owner and validated
   // by the server's mission loader (duplicate realpaths, aliases and same-repo subdirectories
-  // are rejected there, exactly like a mission file).
+  // are rejected there, exactly like a task file).
   const REPO_NAME = /^[A-Za-z0-9._-]+$/;
 
   const submit = async () => {
@@ -246,7 +246,7 @@ export function HomeView({
       });
       onCreated(created.id);
     } catch (e) {
-      setError(humanError(e, "mission"));
+      setError(humanError(e, "task"));
       setBusy(false);
     }
   };
@@ -265,10 +265,13 @@ export function HomeView({
               : <>Claude Code is installed but not logged in. Run <code>claude</code> in a terminal, log in, then reload this page.</>}
           </div>
         ) : null}
-        {/* berd's chat composer: translucent muted pill over the canvas */}
+        {/* The composer is the page's one input: a solid white card that reads as a text
+            field against the gray canvas, with a clear focus ring while typing. */}
         <div
-          className="rounded-composer p-4 backdrop-blur-md transition-colors"
-          style={{ background: "var(--surface-chat-composer)" }}
+          className="cursor-text rounded-composer border border-[#dcdcdc] bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_6px_24px_-8px_rgba(0,0,0,0.12)] transition-[border-color,box-shadow] hover:border-[#c8c8c8] focus-within:border-foreground/40 focus-within:shadow-[0_0_0_4px_rgba(0,0,0,0.06),0_6px_24px_-8px_rgba(0,0,0,0.14)]"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) e.currentTarget.querySelector("textarea")?.focus();
+          }}
         >
           <textarea
             value={goal}
@@ -281,7 +284,8 @@ export function HomeView({
             }}
             placeholder="Describe the goal..."
             rows={3}
-            className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed text-foreground outline-none"
+            autoFocus
+            className="w-full resize-none bg-transparent px-1 text-[15px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
           />
           <div className="flex items-center justify-between pt-2">
             <div className="flex items-center gap-1.5">
@@ -331,7 +335,7 @@ export function HomeView({
               disabled={!goal.trim() || busy}
               aria-busy={busy || undefined}
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-primary px-4 text-sm text-primary-foreground transition disabled:opacity-30"
-              aria-label="Start mission"
+              aria-label="Start task"
             >
               {busy ? <Spinner className="size-4" /> : <ArrowUp className="size-4" />}
             </button>
@@ -449,9 +453,9 @@ export function HomeView({
             ) : null}
             <p className="text-[11px] text-muted-foreground/70">
               Add the folders Skye may work in - any short label and its absolute path.
-              Skye assigns each step to a folder itself and shows why on the mission page;
+              Skye assigns each step to a folder itself and shows why on the task page;
               "Planning runs in" is only where the planning step itself runs. Repositories
-              must be distinct - the server validates them exactly like a mission file.
+              must be distinct - the server validates them exactly like a task file.
             </p>
           </div>
         </details>

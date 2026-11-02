@@ -55,6 +55,8 @@ from .dispatcher import Outcome, dispatch
 from .policy import Policy
 
 OUTPUT_TAIL = 1500
+#: Bound on one streamed worker message in the journal (the chat view shows it whole).
+PROGRESS_MESSAGE_CAP = 6000
 MAX_STEPS = 32  # hard cap on authored + dynamically proposed steps: a runaway proposer stops here
 MAX_PARALLEL_STEPS = 4  # wave width for independent steps; the cross-process concurrency
 # registry in the dispatcher remains the real cap - this only bounds how wide one mission fans out
@@ -434,9 +436,14 @@ def _progress_journaler(journal: "Journal", emit, context: dict[str, Any],
                              "steer-accepted", "steer-unapplied",
                              "approval-declined", "server-request-refused",
                              "server-request-unknown"):
-            fields["text"] = str(event.get("text", ""))[:300]
+            # A worker's message is what the chat view streams: keep it readable whole
+            # (bounded); receipts and errors stay short.
+            cap = PROGRESS_MESSAGE_CAP if event["kind"] == "message" else 300
+            fields["text"] = str(event.get("text", ""))[:cap]
         elif event["kind"] == "tool":
             fields["text"] = str(event.get("name", ""))[:120]
+            if event.get("detail"):
+                fields["detail"] = str(event["detail"])[:200]
         else:
             return  # session/result bookkeeping rides worker-session, not progress
         if run_instance:
@@ -828,6 +835,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             journal.append(target, "settled", status=outcome.status, reason=outcome.reason,
                            run_instance=run_instance,
                            output=outcome.worker_output[-4000:], gates=outcome.gates,
+                           answer=getattr(outcome, "answer", "") or "",
                            worker_job=outcome.worker_job, role=step["role"])
             consumed_path.write_text(str(line_no + 1), "utf-8")
             outcomes[target] = {"status": outcome.status, "reason": outcome.reason,
@@ -1174,6 +1182,7 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             journal.append(step_id, "settled", status=outcome.status, reason=outcome.reason,
                            run_instance=run_instance,
                            output=outcome.worker_output[-4000:], gates=outcome.gates,
+                           answer=getattr(outcome, "answer", "") or "",
                            worker_job=outcome.worker_job, role=step["role"])
             outcomes[step_id] = {"status": outcome.status, "reason": outcome.reason,
                                  "role": step["role"], "output": outcome.worker_output[-4000:],

@@ -12,7 +12,7 @@ import { Button } from "./ui/Button";
 
 const NAV = [
   { path: "/", label: "Home", icon: Home },
-  { path: "/missions", label: "Missions", icon: Workflow },
+  { path: "/missions", label: "Tasks", icon: Workflow },
   { path: "/backlog", label: "Backlog", icon: ListTodo },
   { path: "/agents", label: "Agents", icon: Users },
   { path: "/settings", label: "Settings", icon: Settings },
@@ -260,7 +260,7 @@ export function Sidebar({
       </div>
 
       <div className="mx-3 mt-6 border-t border-border" />
-      <SectionLabel>Chats</SectionLabel>
+      <SectionLabel>Recent tasks</SectionLabel>
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pb-2">
         {chats.map((mission) => (
           <div className="mx-1.5" key={mission.id}>
@@ -270,7 +270,7 @@ export function Sidebar({
             >
               <MessageSquare className="mt-0.5 size-4 shrink-0" />
               <span className="min-w-0 flex-1">
-                <span className="block truncate">{mission.goal || "Untitled mission"}</span>
+                <span className="block truncate">{mission.goal || "Untitled task"}</span>
                 <span className="block truncate text-xs text-muted-foreground">
                   {runNumber.get(mission.id) ? `run ${runNumber.get(mission.id)} · ` : ""}
                   {chatStatus(mission)}
@@ -283,15 +283,12 @@ export function Sidebar({
         {chats.length === 0 ? (
           <p className="px-3 text-xs text-muted-foreground">
             {unavailable && !missionsOk
-              ? "Conversations unavailable - retrying."
-              : "No conversations yet - start one from Home."}
+              ? "Tasks unavailable - retrying."
+              : "No tasks yet - start one from Home."}
           </p>
         ) : null}
       </div>
       <ClaudeUsageCard />
-      <p className="border-t border-border px-3 py-2 text-xs leading-4 text-muted-foreground">
-        Local only. Interrupted work waits for you.
-      </p>
       </div>
     </aside>
   );

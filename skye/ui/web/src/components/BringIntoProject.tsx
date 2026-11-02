@@ -34,7 +34,7 @@ export function BringIntoProject({ missionId, settled }: { missionId: string; se
       setResult(await mergeMission(missionId));
       await load();
     } catch (e) {
-      setError(humanError(e, "mission"));
+      setError(humanError(e, "task"));
     } finally {
       setBusy(false);
     }

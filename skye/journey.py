@@ -55,6 +55,27 @@ def repo_revision(cwd: str) -> str:
 MANIFEST_FILE_LIMIT = 2000
 
 
+def _manifest_paths(root: Path) -> list[Path]:
+    """The files a change record is about. In a git repository: tracked files plus untracked
+    files git does not ignore - so dependency installs and build output (node_modules/,
+    dist/) never flood the record or push it past its limit into fake deletions. Outside
+    git, every file."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, timeout=60)
+        top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        proc = top = None
+    if proc is not None and proc.returncode == 0 and top is not None and top.returncode == 0 \
+            and Path(top.stdout.strip()).resolve() == root.resolve():
+        names = sorted({n for n in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if n})
+        return [p for p in (root / n for n in names) if p.is_file()]
+    return sorted(p for p in root.rglob("*") if p.is_file())
+
+
 def repo_manifest(cwd: str, *, limit: int = MANIFEST_FILE_LIMIT) -> tuple[dict[str, str], bool]:
     """A path -> content-hash map of the repo's files (bounded; .git internals skipped).
 
@@ -69,9 +90,9 @@ def repo_manifest(cwd: str, *, limit: int = MANIFEST_FILE_LIMIT) -> tuple[dict[s
     truncated = False
     if not root.is_dir():
         return manifest, truncated
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in _manifest_paths(root):
         rel = str(path.relative_to(root))
-        if rel.startswith(".git/") or "/.git/" in rel:
+        if rel == ".git" or rel.startswith(".git/") or "/.git/" in rel:
             continue
         if len(manifest) >= limit:
             truncated = True
@@ -85,6 +106,9 @@ def repo_manifest(cwd: str, *, limit: int = MANIFEST_FILE_LIMIT) -> tuple[dict[s
 
 def diff_manifests(start: dict[str, str], end: dict[str, str]) -> dict[str, list[str]]:
     """added/modified/deleted path lists between two repo_manifest snapshots, sorted."""
+    # A worktree's ".git" is a pointer FILE, which older records hashed; it is never work.
+    start = {p: h for p, h in start.items() if p != ".git"}
+    end = {p: h for p, h in end.items() if p != ".git"}
     added = sorted(p for p in end if p not in start)
     deleted = sorted(p for p in start if p not in end)
     modified = sorted(p for p in end if p in start and end[p] != start[p])

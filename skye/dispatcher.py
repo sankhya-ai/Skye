@@ -44,6 +44,7 @@ class Outcome:
     resume_rejected: bool = False
     protocol: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
+    answer: str = ""  # the worker's final reply, whole (session adapters)
 
 
 def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: int | None = None,
@@ -182,7 +183,8 @@ def dispatch(contract: dict[str, Any], policy: Policy | None = None, running: in
                               "cancelled": result.cancelled,
                               "resume_rejected": result.resume_rejected,
                               "protocol": getattr(result, "protocol", "") or "",
-                              "usage": result.usage}
+                              "usage": result.usage,
+                              "answer": getattr(result, "answer", "") or ""}
         if getattr(result, "duplicate_live", False):
             # A worker for this exact step may still be running after a crash: fail
             # closed, never run two processes into one session/repo.

@@ -51,6 +51,9 @@ class SessionResult(Result):
     #: "exec-json-fallback:<reason>") - journaled on worker-session for honest reporting.
     protocol: str = ""
     usage: dict = field(default_factory=dict)
+    #: The worker's final reply to the person, whole - what a chat surface shows. Distinct
+    #: from ``output`` (every streamed text, tail-capped): that one is for diagnosis.
+    answer: str = ""
 
 
 # Live session processes, so the UI server's cancel/follow-up endpoints can reach an
@@ -58,6 +61,10 @@ class SessionResult(Result):
 # and protocol-framed stdin writes only - the registry never touches another mission's
 # processes, and steering uses the vendor's own message frame, never terminal injection.
 _LIVE_LOCK = threading.Lock()
+
+#: A final reply is kept whole up to this size (a long report still fits; a runaway dump
+#: does not bloat the journal).
+ANSWER_CAP = 40000
 _LIVE: dict[str, dict] = {}  # run_key -> {proc, cancel, adapter, steers, closing, lock}
 
 
@@ -528,6 +535,7 @@ class SessionAdapter(Adapter):
         session_id = ""
         usage: dict = {}
         result_ok: bool | None = None
+        final_answer = ""
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -550,6 +558,8 @@ class SessionAdapter(Adapter):
                             session_id = event["session_id"]
                         if event.get("usage"):
                             usage = event["usage"]
+                        if event.get("answer"):
+                            final_answer = str(event["answer"])
                         # Turn finished. A steer written during it queues a NEW turn
                         # (documented stream-json behavior), so one steered message means
                         # one more result to wait for; with none pending, closing stdin
@@ -621,7 +631,11 @@ class SessionAdapter(Adapter):
             output = (output + "\n" + result_error).strip()[-8000:]
         if stderr_tail and not ok:
             output = (output + "\n" + stderr_tail).strip()[-8000:]
+        # The final reply: the vendor's own result text when it reports one, else the last
+        # message the worker wrote (protocols without a result payload).
+        answer = (final_answer or (texts[-1] if texts else "")).strip() if ok else ""
         return SessionResult(ok=ok, output=output, command=command, returncode=returncode,
                              session_id=session_id,
                              continuity="resumed" if resume_session_id else "fresh",
-                             resume_rejected=rejected, usage=usage)
+                             resume_rejected=rejected, usage=usage,
+                             answer=answer[:ANSWER_CAP])

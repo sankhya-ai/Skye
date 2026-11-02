@@ -79,6 +79,12 @@ def test_claude_adapter_carries_the_tool_catalogue():
     assert command[command.index("--allowedTools") + 1] == "Read,Grep"
     assert command[command.index("--permission-mode") + 1] == "dontAsk"
     assert "--disallowedTools" in command and "mcp__*" in command
+    # The owner's interactive hooks and MCP servers never run inside a worker: a blocking
+    # SessionStart hook in the repo's .claude settings once stalled a step before turn one.
+    assert json.loads(command[command.index("--settings") + 1]) == {"disableAllHooks": True}
+    assert "--strict-mcp-config" in command
+    session = adapters.ClaudeCodeAdapter().build_session_command(_contract(tools=["Read"]), None)
+    assert "--strict-mcp-config" in session and "--settings" in session
 
 
 def test_claude_adapter_drops_tools_claude_code_does_not_have():
@@ -274,3 +280,24 @@ def test_fail_closed_review_terminal_state_survives_resume(tmp_path, monkeypatch
     resumed = run_mission(load_mission(path), _policy(), runner=runner, state_dir=state_dir)
     assert resumed.status == "gate-failed"
     assert calls["dev"] == 1  # the settled failure replays; no phantom redo
+
+
+def test_change_record_ignores_gitignored_output(tmp_path):
+    # An `npm install` / build inside a mission worktree must not flood the change record:
+    # ignored folders are not the team's changes and used to push it past its file limit.
+    import subprocess
+    from skye import journey
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("node_modules/\ndist/\n")
+    (tmp_path / "app.js").write_text("one")
+    start, _ = journey.repo_manifest(str(tmp_path))
+    (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
+    (tmp_path / "node_modules" / "pkg" / "index.js").write_text("dep")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "out.js").write_text("built")
+    (tmp_path / "app.js").write_text("two")
+    (tmp_path / "new.css").write_text("x")
+    end, truncated = journey.repo_manifest(str(tmp_path))
+    diff = journey.diff_manifests(start, end)
+    assert not truncated
+    assert diff == {"added": ["new.css"], "modified": ["app.js"], "deleted": []}

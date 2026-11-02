@@ -63,7 +63,7 @@ export function MissionsOverview({
 }) {
   if (loading && missions.length === 0) {
     return (
-      <div className="animate-pulse space-y-2" aria-label="loading missions">
+      <div className="animate-pulse space-y-2" aria-label="loading tasks">
         <div className="h-16 rounded-md bg-muted" />
         <div className="h-16 rounded-md bg-muted" />
       </div>
@@ -75,22 +75,22 @@ export function MissionsOverview({
     if (unavailable) {
       return (
         <div className="rounded-md border border-dashed border-border bg-card/50 p-10 text-center">
-          <p className="text-sm font-medium text-foreground">Missions unavailable</p>
+          <p className="text-sm font-medium text-foreground">Tasks unavailable</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Can't load missions right now - retrying in the background.
+            Can't load tasks right now - retrying in the background.
           </p>
         </div>
       );
     }
     return (
       <div className="rounded-md border border-dashed border-border bg-card/50 p-10 text-center">
-        <p className="text-sm font-medium text-foreground">No missions yet</p>
+        <p className="text-sm font-medium text-foreground">No tasks yet</p>
         <p className="mt-1 text-sm text-muted-foreground">Approved work runs here.</p>
       </div>
     );
   }
   return (
-    <section aria-label="Missions" className="space-y-2">
+    <section aria-label="Tasks" className="space-y-2">
       {missions.map((row) => (
         <MissionRowButton key={row.id} row={row} onOpen={() => onOpen(row.id)} />
       ))}

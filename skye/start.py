@@ -106,25 +106,31 @@ def preflight() -> list[str]:
     return problems
 
 
+def _bindable(port: int) -> bool:
+    """Whether the UI server could bind this port. Same SO_REUSEADDR as the server itself
+    (http.server sets it), so a just-closed connection lingering in TIME_WAIT - a browser
+    tab polling the old server - does not look like a taken port; a live listener still does."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
 def _free_port(preferred: int) -> int:
     """The preferred port, else the next free one. A just-stopped server can hold its port
     for a moment, so wait briefly for the preferred one before moving on."""
     for _ in range(15):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind(("127.0.0.1", preferred))
-                return preferred
-            except OSError:
-                time.sleep(0.2)
+        if _bindable(preferred):
+            return preferred
+        time.sleep(0.2)
     # 8788 is the vendored Root server's default port - never take it from Root.
     for port in [p for p in [preferred] + list(range(preferred + 1, preferred + 20))
                  if p != 8788 or p == preferred]:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
+        if _bindable(port):
+            return port
     raise SystemExit(f"no free port near {preferred}; pass --port")
 
 

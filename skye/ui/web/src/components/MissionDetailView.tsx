@@ -1,24 +1,32 @@
-import { ArrowLeft, Play, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+// A task, laid out like a flow editor: the workflow canvas in the middle (your request ->
+// the agents -> the result), a side panel on the right (the task overview, or the agent
+// whose card you clicked, with its conversation), and a console of every recorded event
+// along the bottom. Polls the server; the journal is the source of truth for all of it.
+import { ArrowLeft, ChevronDown, ChevronUp, Maximize, Minus, Play, Plus, RefreshCw, Square, Terminal } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  ackRecovery,
   cancelMission,
   followUpStep,
   getMission,
+  getMissionGraph,
+  getProjects,
+  getRoles,
   redispatchStep,
-  ackRecovery,
   resumeMission,
   type MissionDetail,
-  getProjects,
+  type MissionGraph,
   type Project,
 } from "../api";
-import { Button } from "./ui/Button";
-import { MissionArtifactsPanel } from "./MissionArtifacts";
+import { cn, formatTime } from "../lib";
+import { buildSteps, layoutFlow, roleName, type StepView } from "../task/model";
+import { AgentPanel, ChatItemView } from "./AgentPanel";
 import { BringIntoProject } from "./BringIntoProject";
-import { MissionFlow } from "./MissionFlow";
 import { DiscussionPanel } from "./DiscussionPanel";
-import { MissionRunTrace } from "./MissionRunTrace";
+import { MissionArtifactsPanel } from "./MissionArtifacts";
+import { RoleIcon, TaskCanvas } from "./TaskCanvas";
 import { Badge } from "./ui/Badge";
-import { formatTime, formatRelative } from "../lib";
+import { Button } from "./ui/Button";
 
 const POLL_MS = 1500;
 
@@ -38,7 +46,6 @@ export function overallBadge(overall: string, live?: boolean, approved?: boolean
     case "not-started":
       return <Badge variant="secondary">not started</Badge>;
     default:
-      // An unrecognized status is unknown, not a raw enum.
       return <Badge variant="outline">unknown</Badge>;
   }
 }
@@ -47,43 +54,245 @@ export function overallBadge(overall: string, live?: boolean, approved?: boolean
 const EVENT_LABEL: Record<string, string> = {
   dispatched: "started",
   settled: "finished",
-  "needs-owner": "waiting on owner",
-  redispatch: "re-run by owner",
+  "needs-owner": "waiting on you",
+  redispatch: "run again by you",
   reattached: "reattached after restart",
   skipped: "skipped",
-  "step-accepted": "step accepted",
+  "step-accepted": "added to the workflow",
   "proposal-rejected": "proposal rejected",
   "feature-proposed": "backlog proposal",
-  "review-round": "review round",
+  "review-round": "sent back by the reviewer",
   "claim-held": "waiting - another step holds these files",
   "blocked-claims": "blocked on claimed files",
   "agent-accepted": "agent proposal accepted",
   "agent-rejected": "agent proposal rejected",
   "discussion-folded": "discussion folded into brief",
   "worker-job": "worker job recorded",
+  "worker-session": "session recorded",
   "features-rejected": "proposals rejected",
   "gate-failed": "gate failed",
   "request-changes": "changes requested",
+  "follow-up": "your message",
+  "follow-up-submitted": "message delivered to the running agent",
 };
+
+function consoleLine(e: MissionDetail["journal"][number]): string {
+  if (e.event === "worker-progress") {
+    const text = typeof e.text === "string" ? e.text : "";
+    if (e.kind === "tool") return `${text}${typeof e.detail === "string" ? `  ${e.detail}` : ""}`;
+    if (e.kind === "steer-ack") return `received: ${text.split("\n")[0]}`;
+    return text.split("\n").find((l) => l.trim()) ?? "";
+  }
+  const label = EVENT_LABEL[e.event] ?? e.event;
+  const extra = e.status ? ` (${e.status})` : e.event === "follow-up" && typeof e.text === "string" ? `: ${e.text}` : "";
+  return label + extra;
+}
+
+function TaskConsole({ detail, steps, selected, open, onToggle }: {
+  detail: MissionDetail;
+  steps: StepView[];
+  selected: string | null;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const pinned = useRef(true);
+  const roleOf = new Map(steps.map((s) => [s.id, s.role]));
+  const rows = detail.journal.filter((e) => !selected || e.step === selected);
+  useEffect(() => {
+    const el = ref.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [rows.length, open]);
+  return (
+    <div className={cn("flex shrink-0 flex-col border-t border-border bg-card", open ? "h-56" : "h-9")}>
+      <button type="button" onClick={onToggle}
+              className="flex h-9 shrink-0 items-center gap-2 px-4 text-xs text-muted-foreground hover:text-foreground">
+        <Terminal className="size-3.5" />
+        <span className="font-medium text-foreground">Console</span>
+        <span>{rows.length} events{selected ? ` · ${selected}` : ""}</span>
+        <span className="flex-1" />
+        {open ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+      </button>
+      {open ? (
+        <div
+          ref={ref}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+          className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 font-mono text-[11px]"
+        >
+          {rows.map((e, i) => (
+            <div key={i} className="flex gap-3 py-px">
+              <span className="w-[136px] shrink-0 text-muted-foreground/70">{formatTime(e.ts)}</span>
+              <span className="flex w-40 shrink-0 items-center gap-1.5 truncate text-foreground/80">
+                {e.step ? <RoleIcon role={roleOf.get(e.step) ?? ""} size="sm" /> : null}
+                <span className="truncate">{e.step || "task"}</span>
+              </span>
+              <span className={cn("min-w-0 flex-1 truncate",
+                e.kind === "tool" ? "text-muted-foreground" : "text-foreground/85",
+                e.event === "settled" && e.status !== "done" && "text-destructive")}>
+                {consoleLine(e)}
+              </span>
+            </div>
+          ))}
+          {rows.length === 0 ? <p className="py-2 text-muted-foreground">Nothing recorded yet.</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Fit-to-view like a flow editor: the whole flow is visible by default, and the owner can
+// zoom in or out from the controls in the corner (Fit returns to the whole flow).
+function CanvasViewport({ width, height, children, footer }: {
+  width: number;
+  height: number;
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  const [zoom, setZoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const fit = box.w ? Math.max(0.45, Math.min(1, (box.w - 32) / width, (box.h - 32) / height)) : 1;
+  const scale = zoom ?? fit;
+  const step = (d: number) => setZoom(Math.min(1.5, Math.max(0.4, Math.round((scale + d) * 10) / 10)));
+  return (
+    <div className="relative min-h-[320px] min-w-0 flex-1">
+      <div ref={ref} className="bg-dot-grid absolute inset-0 overflow-auto">
+        <div className="flex min-h-full min-w-full items-center justify-center p-4"
+             style={{ width: width * scale + 32, height: height * scale + 32 }}>
+          <div style={{ width: width * scale, height: height * scale }}>
+            <div style={{ width, height, transform: `scale(${scale})`, transformOrigin: "0 0" }}>{children}</div>
+          </div>
+        </div>
+      </div>
+      <div className="absolute bottom-3 left-3 flex items-center overflow-hidden rounded-lg border border-border bg-card text-muted-foreground shadow-sm">
+        <button type="button" aria-label="Zoom out" onClick={() => step(-0.1)} className="p-1.5 hover:bg-muted hover:text-foreground"><Minus className="size-3.5" /></button>
+        <button type="button" onClick={() => setZoom(null)} title="Fit the whole flow"
+                className="min-w-12 px-1 text-[11px] tabular-nums hover:text-foreground">{Math.round(scale * 100)}%</button>
+        <button type="button" aria-label="Zoom in" onClick={() => step(0.1)} className="p-1.5 hover:bg-muted hover:text-foreground"><Plus className="size-3.5" /></button>
+        <button type="button" aria-label="Fit" onClick={() => setZoom(null)} className="border-l border-border p-1.5 hover:bg-muted hover:text-foreground"><Maximize className="size-3.5" /></button>
+      </div>
+      {footer}
+    </div>
+  );
+}
+
+function RequestBubble({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 420;
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[90%] rounded-2xl rounded-br-md bg-foreground px-3 py-2">
+        <p className={cn("whitespace-pre-wrap break-words text-sm text-background", long && !open && "line-clamp-[8]")}>{text}</p>
+        {long ? (
+          <button type="button" onClick={() => setOpen(!open)} className="mt-1 text-[11px] text-background/60 hover:text-background">
+            {open ? "Show less" : "Show all"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TaskOverview({ detail, steps, live, onOpenStep }: {
+  detail: MissionDetail;
+  steps: StepView[];
+  live: boolean;
+  onOpenStep: (id: string) => void;
+}) {
+  // The task's answer: the newest finished agent that is not just the planner.
+  const answering = [...steps].reverse().find((s) => s.state === "done" && s.answer && s.role !== "pm")
+    ?? [...steps].reverse().find((s) => s.state === "done" && s.answer);
+  const waiting = steps.filter((s) => s.state === "needs-owner");
+  const failed = steps.filter((s) => ["failed", "interrupted", "resume-rejected"].includes(s.state));
+  const working = steps.filter((s) => s.state === "running");
+  const answerItem = answering?.items.slice().reverse().find((i) => i.type === "answer");
+  return (
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <RequestBubble text={detail.mission.goal} />
+      {waiting.map((s) => (
+        <button key={s.id} type="button" onClick={() => onOpenStep(s.id)}
+                className="w-full rounded-lg border border-amber-400/60 bg-amber-50 px-3 py-2 text-left text-xs text-amber-900">
+          The {roleName(s.role).toLowerCase()} is waiting for your decision. Open it to answer.
+        </button>
+      ))}
+      {failed.map((s) => (
+        <button key={s.id} type="button" onClick={() => onOpenStep(s.id)}
+                className="w-full rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-left text-xs text-destructive">
+          The {roleName(s.role).toLowerCase()} stopped: {s.reason || "see its conversation"}. Open it to run it again.
+        </button>
+      ))}
+      {answering && answerItem ? (
+        <div>
+          <button type="button" onClick={() => onOpenStep(answering.id)}
+                  className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground">
+            <RoleIcon role={answering.role} size="sm" />
+            {roleName(answering.role)} answered · open its conversation
+          </button>
+          <ChatItemView item={answerItem} step={answering} proposed={[]} onOpenStep={onOpenStep} />
+        </div>
+      ) : working.length ? (
+        <div className="space-y-2">
+          {working.map((s) => (
+            <button key={s.id} type="button" onClick={() => onOpenStep(s.id)}
+                    className="flex w-full items-center gap-2 rounded-lg border border-info/30 bg-info/5 px-3 py-2 text-left">
+              <RoleIcon role={s.role} size="sm" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-medium text-foreground">{roleName(s.role)} is working</span>
+                <span className="block truncate text-[11px] text-info">{s.latest || "Starting..."}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">The answer appears here when the agents finish.</p>
+      )}
+      <BringIntoProject
+        missionId={detail.mission.id}
+        settled={!live && ["done", "delivered", "awaiting-verification"].includes(detail.status.status)}
+      />
+      <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} running={live} />
+      <DiscussionPanel missionId={detail.mission.id} />
+    </div>
+  );
+}
 
 export function MissionDetailView({ id, onBack }: { id: string; onBack: () => void }) {
   const [detail, setDetail] = useState<MissionDetail | null>(null);
-  // Stop feedback preserves the server's confirmed / unconfirmed / dispatch-marker states.
-  const [stopNote, setStopNote] = useState<string | null>(null);
-  const [followNote, setFollowNote] = useState<string | null>(null);
-  useEffect(() => { setStopNote(null); setFollowNote(null); }, [id]);
-  useEffect(() => {
-    if (detail && !detail.live?.running) setFollowNote(null);
-  }, [detail]);
+  const [graph, setGraph] = useState<MissionGraph | null>(null);
+  const [roleModels, setRoleModels] = useState<Record<string, string>>({});
   const [projects, setProjects] = useState<Project[]>([]);
-  useEffect(() => { getProjects().then((d) => setProjects(d.projects)).catch(() => {}); }, []);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+
+  useEffect(() => { setNote(null); setSelected(null); }, [id]);
+  useEffect(() => {
+    getProjects().then((d) => setProjects(d.projects)).catch(() => {});
+    getRoles()
+      .then((d) => setRoleModels(Object.fromEntries(d.roles.filter((r) => r.model).map((r) => [r.name, r.model!]))))
+      .catch(() => {});
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
-      setDetail(await getMission(id));
+      const [d, g] = await Promise.all([getMission(id), getMissionGraph(id).catch(() => null)]);
+      setDetail(d);
+      if (g) setGraph(g);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -91,10 +300,16 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
   }, [id]);
 
   useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, POLL_MS);
+    void refresh();
+    const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  const steps = useMemo(
+    () => (detail ? buildSteps(detail, graph, roleModels) : []),
+    [detail, graph, roleModels],
+  );
+  const layout = useMemo(() => layoutFlow(steps, graph), [steps, graph]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setActionError(null);
@@ -111,56 +326,60 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
     }
   };
 
-  // A failed refresh must not wipe a mission we already rendered: keep the last known
-  // state (the app banner reports the outage) and show the error only when nothing loaded.
   if (error && !detail) return <p className="p-6 text-sm text-destructive">{error}</p>;
   if (!detail) {
     return (
-      <div className="animate-pulse space-y-4 p-6" aria-label="loading mission">
+      <div className="animate-pulse space-y-4 p-6" aria-label="loading task">
         <div className="h-4 w-40 rounded-sm bg-muted" />
         <div className="h-7 w-2/3 rounded-sm bg-muted" />
-        <div className="h-20 rounded-md bg-muted" />
-        <div className="h-20 rounded-md bg-muted" />
+        <div className="h-64 rounded-md bg-muted" />
       </div>
     );
   }
 
   const live = Boolean(detail.live?.running);
-  // Lost-tree recovery, from the AUTHORITATIVE workspace record in the payload (not journal
-  // scans or client-local state): pending exactly while a lost-tree rebuild waits on the
-  // operator's explicit ack - a reload after acking shows resolved, never a stale pending.
   const workspace = detail.workspace;
   const recoveryPending = Boolean(workspace?.recovery_pending);
   const recoveryAcked = Boolean(workspace?.recovery_acknowledged);
-  // An acknowledged recovery offers Resume only while the mission is still waiting to run;
-  // once it has settled, a Resume button and "resume when ready" copy would be stale.
-  const missionDone = detail.status.status === "done";
+  const taskDone = detail.status.status === "done";
   const hasStoppedStep = detail.status.steps.some((s) => ["cancelled", "resume-rejected"].includes(s.state));
-  const resumable = !hasStoppedStep && !live && (["needs-owner", "interrupted", "failed"].includes(detail.status.status)
-                              || (recoveryAcked && !missionDone));
-  // Backlog-started missions compose the goal as "Title: brief". Split that
-  // composition into a kicker + heading so the title isn't repeated into one
-  // long sentence. Direct goals without a title-like prefix render whole.
-  const goal = detail.mission.goal;
-  const splitAt = goal.indexOf(": ");
-  const prefix = splitAt > 0 ? goal.slice(0, splitAt) : "";
-  const hasTitle =
-    splitAt > 0 && prefix.length <= 60 && prefix.split(" ").length <= 8 && !/[.!?]$/.test(prefix);
-  const steps = detail.status.steps ?? [];
-  const settled = steps.filter((s) => s.state === "settled" && s.status === "done").length;
+  const resumable = !hasStoppedStep && !live
+    && (["needs-owner", "interrupted", "failed"].includes(detail.status.status) || (recoveryAcked && !taskDone));
+  const project = projects.find((p) => p.id === detail.mission.project);
+  const art = detail.artifacts;
+  const changedFiles = art?.recorded
+    ? (art.repos
+        ? Object.values(art.repos).reduce((n, r) => n + (r.added?.length ?? 0) + (r.modified?.length ?? 0) + (r.deleted?.length ?? 0), 0)
+        : (art.added?.length ?? 0) + (art.modified?.length ?? 0) + (art.deleted?.length ?? 0))
+    : null;
+  const selectedStep = steps.find((s) => s.id === selected) ?? null;
+  const taskState = live ? "running" : detail.status.status;
+
+  const followUp = async (step: string, text: string) =>
+    act(async () => {
+      const res = await followUpStep(id, step, text);
+      setNote(res.delivery === "submitted"
+        ? "Sent. The agent reads it at its next turn."
+        : "Sent. The agent is picking the conversation back up.");
+    });
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-4" /> Missions
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-2.5">
+        <button type="button" onClick={onBack}
+                className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="size-4" /> Tasks
         </button>
+        <span className="h-4 w-px bg-border" />
+        <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={detail.mission.goal}>
+          {detail.mission.goal}
+        </h2>
+        {workspace?.mode === "worktree" && workspace.branch ? (
+          <span className="hidden font-mono text-[11px] text-muted-foreground lg:inline" title="Runs in its own Git worktree">
+            {workspace.branch}
+          </span>
+        ) : null}
         {overallBadge(detail.status.status, live, detail.approved)}
-        <span className="flex-1" />
         {live ? (
           <Button
             variant="danger-outline"
@@ -169,217 +388,91 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
             onClick={() =>
               act(async () => {
                 const res = await cancelMission(id);
-                // The server's exact vocabulary: "stopped" is verified process exit,
-                // "stop-unconfirmed" is named plainly, "marked" means nothing was live.
-                setStopNote(
-                  res.cancel === "stopped"
-                    ? `Stop confirmed - ${res.steps.length} running step${res.steps.length === 1 ? "" : "s"} stopped${res.steps.length ? ` (${res.steps.join(", ")})` : ""}. Remaining steps stay resumable.`
-                    : res.cancel === "stop-unconfirmed"
-                      ? `Stop signal sent to ${res.steps.length} step${res.steps.length === 1 ? "" : "s"}, but their exit is unconfirmed. Watch the activity log before relying on the stop.`
-                      : "Stop requested between steps. No live worker was registered to signal; waiting for the mission to stop dispatching.");
+                setNote(res.cancel === "stopped"
+                  ? "Stopped. Unfinished agents stay resumable."
+                  : res.cancel === "stop-unconfirmed"
+                    ? "Stop sent, but the agents' exit is unconfirmed. Watch the console."
+                    : "Stop requested between steps.");
               })}
           >
-            Stop
+            <Square className="size-3" /> Stop
           </Button>
         ) : null}
         {resumable ? (
-          <Button size="sm" loading={busy} disabled={recoveryPending}
-                  onClick={() => act(() => resumeMission(id))}>
+          <Button size="sm" loading={busy} disabled={recoveryPending} onClick={() => act(() => resumeMission(id))}>
             <Play className="size-3" /> Resume
           </Button>
         ) : null}
-        <Button variant="outline" size="sm" loading={busy} onClick={() => refresh()}>
-          <RefreshCw className="size-3" /> Refresh
+        <Button variant="outline" size="sm" loading={busy} onClick={() => void refresh()} aria-label="Refresh">
+          <RefreshCw className="size-3" />
         </Button>
-      </div>
-      {recoveryPending || recoveryAcked ? (
-        <div className="rounded-md border border-warning/40 bg-warning/5 p-4 text-xs">
-          <p className="font-medium text-foreground">
-            {recoveryPending
-              ? "Workspace recovery needs your review"
-              : missionDone
-                ? "Workspace was recovered during this mission"
-                : "Workspace recovery acknowledged"}
-          </p>
-          {workspace?.repos ? (
-            <>
-              <p className="mt-1 text-muted-foreground">
-                A worktree was lost and rebuilt from its branch. Committed work survived;
-                uncommitted worker changes are unrecoverable.
-                {missionDone ? " The mission has already finished." : " Review the rebuilt trees before continuing."}
-              </p>
-              <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground/70">
-                {Object.entries(workspace.repos).map(([name, r]) => (
-                  <li key={name}>
-                    {name}: {r.branch || "?"} (base {String(r.base_rev || "?").slice(0, 12)})
-                    {r.uncommitted_lost ? " - uncommitted changes lost" : ""}
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <>
-              <p className="mt-1 text-muted-foreground">
-                The mission's workspace was rebuilt from branch{" "}
-                <span className="font-mono">{workspace?.branch || "?"}</span> after its
-                worktree was lost. Committed work survived; uncommitted worker changes are
-                unrecoverable.
-                {missionDone ? " The mission has already finished." : " Review the rebuilt tree before continuing."}
-              </p>
-              <p className="mt-1 font-mono text-[11px] text-muted-foreground/70">
-                base {String(workspace?.base_rev || "?").slice(0, 12)}
-              </p>
-            </>
-          )}
-          {recoveryAcked ? (
-            <p className="mt-2 text-muted-foreground">
-              Recovery acknowledged{workspace?.recovery_acknowledged?.by
-                ? ` by ${workspace.recovery_acknowledged.by}` : ""}
-              {missionDone ? "." : " - resume when ready."}
+      </header>
+
+      {recoveryPending ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs">
+          <span className="flex-1">
+            The task's worktree was lost and rebuilt from branch{" "}
+            <span className="font-mono">{workspace?.branch || "?"}</span>. Committed work survived;
+            uncommitted changes did not. Review it before continuing.
+          </span>
+          <Button size="sm" loading={busy} onClick={() => act(() => ackRecovery(id))}>I reviewed it</Button>
+        </div>
+      ) : null}
+      {detail.live?.error || actionError ? (
+        <p className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-xs text-destructive">
+          {actionError || detail.live?.error}
+        </p>
+      ) : null}
+
+      <div className="flex min-h-0 flex-1 max-lg:flex-col">
+        <CanvasViewport
+          width={layout.width}
+          height={layout.height}
+          footer={steps.length <= 1 && detail.mission.steps.some((s) => s.role === "pm") && live ? (
+            <p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground shadow-sm">
+              The planner is choosing which agents this task needs...
             </p>
-          ) : (
-            <Button
-              size="sm"
-              className="mt-2"
-              loading={busy}
-              onClick={() => act(() => ackRecovery(id))}
-            >
-              I reviewed the rebuilt workspace - acknowledge
-            </Button>
-          )}
-        </div>
-      ) : null}
-      {detail.mission.repos_source ? (
-        // Where the repo map came from - provenance the owner should never have to guess.
-        // The stored string names the project by id; the surface names it by its name.
-        <p className="text-xs text-muted-foreground/80">
-          {(() => {
-            const source = detail.mission.repos_source as string;
-            const pid = detail.mission.project;
-            const name = pid ? projects.find((p) => p.id === pid)?.name : undefined;
-            if (source.startsWith("discovered in project") && name) {
-              return <>Repositories discovered automatically in project {name}&apos;s folder.</>;
-            }
-            return <>Repositories {source}.</>;
-          })()}
-        </p>
-      ) : null}
-      {workspace?.mode === "multi-worktree" && workspace.repos ? (
-        <div className="text-xs text-muted-foreground">
-          <p>
-            Runs in separate Git worktrees across{" "}
-            {Object.keys(workspace.repos).length} repositories:
-          </p>
-          <ul className="mt-0.5 space-y-0.5">
-            {Object.entries(workspace.repos).map(([name, r]) => (
-              <li key={name}>
-                <span className="font-medium text-foreground">{name}</span>
-                {detail.mission.repos?.[name] ? (
-                  <span className="font-mono"> {detail.mission.repos[name]}</span>
-                ) : null}
-                {" - "}
-                {r.mode === "worktree" ? (
-                  <>branch <span className="font-mono">{r.branch || "?"}</span></>
-                ) : (
-                  <>shared tree{r.reason ? ` (${r.reason})` : ""}</>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : workspace ? (
-        <p className="text-xs text-muted-foreground">
-          {workspace.mode === "worktree" ? (
-            <>
-              Runs in a separate Git worktree on branch{" "}
-              <span className="font-mono">{workspace.branch || "?"}</span>.
-            </>
+          ) : null}
+        >
+          <TaskCanvas
+            steps={steps}
+            layout={layout}
+            goal={detail.mission.goal}
+            projectName={project?.name}
+            taskState={taskState}
+            changedFiles={changedFiles}
+            selected={selected}
+            onSelect={setSelected}
+          />
+        </CanvasViewport>
+        <aside className="flex min-h-0 w-[440px] shrink-0 flex-col border-l border-border bg-card max-lg:h-[70vh] max-lg:w-full max-lg:border-t max-lg:border-l-0">
+          {selectedStep ? (
+            <AgentPanel
+              step={selectedStep}
+              steps={steps}
+              detail={detail}
+              busy={busy}
+              note={note}
+              onClose={() => setSelected(null)}
+              onOpenStep={setSelected}
+              onFollowUp={followUp}
+              onRedispatch={(step) => void act(() => redispatchStep(id, step))}
+              onRedispatchFresh={(step) => void act(() => redispatchStep(id, step, true))}
+              onChanged={() => void refresh()}
+            />
           ) : (
             <>
-              Runs on the shared tree - no separate worktree
-              {workspace.reason ? ` (${workspace.reason})` : ""}.
+              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+                <p className="flex-1 text-sm font-medium text-foreground">Task</p>
+                <span className="text-[11px] text-muted-foreground">Click an agent to open its conversation</span>
+              </div>
+              <TaskOverview detail={detail} steps={steps} live={live} onOpenStep={setSelected} />
             </>
           )}
-        </p>
-      ) : null}
-      {/* product-first: the goal is the headline; activity reads as relative time */}
-      <div>
-        {hasTitle ? (
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {prefix}
-          </p>
-        ) : null}
-        <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-          {hasTitle ? goal.slice(splitAt + 2) : goal}
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground/70">
-          {detail.journal.length > 0
-            ? `updated ${formatRelative(detail.journal[detail.journal.length - 1].ts)}`
-            : `${settled} of ${steps.length} steps done`}
-        </p>
+        </aside>
       </div>
-      {detail.live?.error ? (
-        <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-          {detail.live.error}
-        </p>
-      ) : null}
-      {followNote ? (
-        <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-          {followNote}
-        </p>
-      ) : null}
-      {stopNote ? (
-        <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-          {stopNote}
-        </p>
-      ) : null}
-      {actionError ? (
-        <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-          {actionError}
-        </p>
-      ) : null}
-      <BringIntoProject
-        missionId={detail.mission.id}
-        settled={!live && ["done", "delivered", "awaiting-verification"].includes(detail.status.status)}
-      />
-      <MissionFlow missionId={detail.mission.id} />
-      <MissionRunTrace
-        busy={busy}
-        detail={detail}
-        onChanged={refresh}
-        onRedispatch={(step) => act(() => redispatchStep(id, step))}
-        onRedispatchFresh={(step) => act(() => redispatchStep(id, step, true))}
-        onFollowUp={async (step, text) => {
-          return await act(async () => {
-            const res = await followUpStep(id, step, text);
-            // "submitted" = queued on the running process's input for a later turn, never a
-            // guarantee the model consumed it; "queued" = a new run resumes the session.
-            setFollowNote(
-              res.delivery === "submitted"
-                ? `Follow-up sent to running step ${step} - submitted to its input for a later turn, not mid-tool-call. Provider receipt is still unconfirmed.`
-                : `Follow-up queued for step ${step} - a new run resumes its recorded session with your text.`);
-          });
-        }}
-      />
-      <DiscussionPanel missionId={detail.mission.id} />
-      <MissionArtifactsPanel missionId={detail.mission.id} artifacts={detail.artifacts} running={live} />
-      <details className="rounded-md border border-border bg-card p-4">
-        <summary className="cursor-pointer text-sm font-medium text-foreground">
-          Activity ({detail.journal.length} events)
-        </summary>
-        <div className="mt-3 max-h-72 space-y-1 overflow-auto font-mono text-xs text-muted-foreground">
-          {[...detail.journal].reverse().map((entry, i) => (
-            <div key={i} className="flex gap-2">
-              <span className="shrink-0 text-muted-foreground/70">{formatTime(entry.ts)}</span>
-              <span className="shrink-0 text-foreground/80">{entry.step}</span>
-              <span>{EVENT_LABEL[entry.event] ?? entry.event}</span>
-              {entry.status ? <span>({entry.status})</span> : null}
-            </div>
-          ))}
-          {detail.journal.length === 0 ? <p>No recorded activity yet.</p> : null}
-        </div>
-      </details>
+      <TaskConsole detail={detail} steps={steps} selected={selected}
+                   open={consoleOpen} onToggle={() => setConsoleOpen(!consoleOpen)} />
     </div>
   );
 }
-

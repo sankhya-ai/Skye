@@ -8,8 +8,8 @@ interaction patterns:
 block/buzz @ acf56fff6fbfece9f143de3f096cb1d258fb9a9f
   https://github.com/block/buzz
   - desktop/src/features/workflows/ui/WorkflowRunTrace.tsx
-    -> web/src/components/MissionRunTrace.tsx (per-step trace cards, status
-       icon + badge, monospace step ids, output blocks)
+    -> web/src/components/AgentPanel.tsx and TaskCanvas.tsx (per-step status
+       marks, monospace step ids, output blocks; originally MissionRunTrace.tsx)
   - desktop/src/features/workflows/ui/WorkflowApprovalCard.tsx
     -> web/src/components/ApprovalCard.tsx (buzz's card is read-only; Skye's
        is functional: it records the one-time, fingerprint-bound approval)

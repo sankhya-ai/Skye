@@ -19,12 +19,12 @@ function MissionsView({ missions, projects, loading, unavailable }: { missions: 
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-medium">{project ? project.name : "Missions"}</h2>
+        <h2 className="text-lg font-medium">{project ? project.name : "Tasks"}</h2>
         {project ? (
           <p className="text-sm text-muted-foreground">
             <code className="text-xs">{project.repo}</code> ·{" "}
             <a href="#/missions" className="underline">
-              all missions
+              all tasks
             </a>
           </p>
         ) : null}
@@ -107,8 +107,10 @@ export default function App() {
       ) : null}
       <div key={route} className="view-enter">
         {isDetail && detailId ? (
-          <div className="mx-auto max-w-3xl px-4 py-8">
-            <MissionDetailView id={detailId} onBack={() => (window.location.hash = "/missions")} />
+          <div className="h-screen py-3 pr-3 max-sm:pl-3">
+            <div className="h-full overflow-hidden rounded-xl border border-border bg-card/80 shadow-sm backdrop-blur">
+              <MissionDetailView id={detailId} onBack={() => (window.location.hash = "/missions")} />
+            </div>
           </div>
         ) : path === "/missions" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
