@@ -324,6 +324,13 @@ def extract_proposals(output: str) -> list[dict[str, Any]]:
     return _extract_structured(output, "propose_steps")
 
 
+def extract_recovery_dispositions(output: str) -> list[dict[str, Any]]:
+    """A lead's explicit dispositions for handed-off failures ("recovery": [{"step",
+    "disposition": "waive", "reason"}]). A handoff closes ONLY on accepted replacement
+    steps or a justified waive - never on a lead merely settling with nothing to say."""
+    return _extract_structured(output, "recovery")
+
+
 def extract_deferred(output: str) -> list[dict[str, Any]]:
     """Work the planner deliberately left UNROUTED ("deferred": [{"goal", "reason"}]). Not a
     silent omission: each entry goes to the owner's backlog queue and the mission pauses
@@ -420,6 +427,22 @@ def _handoff_brief(step: dict[str, Any], outcomes: dict[str, dict[str, Any]], *,
     if step.get("review_feedback"):
         parts += ["", "## Review feedback - the reviewer sent this back; address every point",
                   str(step["review_feedback"])[:OUTPUT_TAIL]]
+    if step.get("recovery"):
+        parts += ["", "## Recovery - failed work the owner handed back to you",
+                  "Decide the recovery for each failed step below: propose a revised or "
+                  "replacement step (a NEW id - the failed one stays on the record and "
+                  "never runs again on its own), or - only if the goal truly stands "
+                  "without it - waive it explicitly with a JSON block like "
+                  "{\"recovery\": [{\"step\": \"<id>\", \"disposition\": \"waive\", "
+                  "\"reason\": \"why the goal stands without it\"}]}. A replacement "
+                  "step names the failure it answers with \"recovers\": \"<failed step "
+                  "id>\" - an unnamed proposal is ordinary new work and never closes a "
+                  "handoff. Settling with neither leaves the "
+                  "handoff open and the task paused. You may only propose roles this "
+                  "mission already allows."]
+        for item in step["recovery"][:4]:
+            parts.append(f"- step '{item.get('id')}' ({item.get('role', '?')}) failed: "
+                         f"{str(item.get('reason') or '')[:300]}")
     if unacked:
         parts += ["", "## Unacked contract changes for your role",
                   "Read each one and ack with `skye ack` before building on it - or object on "
@@ -659,6 +682,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     states = journal.step_states()
     outcomes: dict[str, dict[str, Any]] = {}
     worklist = list(mission["steps"]) + journal.accepted_steps()  # authored, then dynamic (journaled)
+    handoffs = {sid: h for sid, h in _recovery_handoffs(journal.entries()).items()
+                if str(h.get("to") or "") in {s["id"] for s in worklist}}
     # Lead proposals refused for naming a role outside the saved roster (this run; older
     # rejections are read back from the journal at the done check below).
     roster_rejections: list[str] = []
@@ -682,6 +707,13 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                     continue
                 outcomes[step_id] = state  # the recorded outcome feeds later briefs
                 continue
+            handoff = handoffs.get(step_id)
+            if handoff is not None:
+                # Handed to the lead by the operator: the failure stays on the record but
+                # no longer fails the mission, and the step never re-runs on its own -
+                # the lead's recovery decides what (if anything) replaces it.
+                outcomes[step_id] = {**state, "handed_to": str(handoff.get("to") or "")}
+                continue
             reason = (f"step '{step_id}' previously settled as {state.get('status')}: "
                       f"{state.get('reason', '')}. Fix the cause, then `skye mission reset` and run again.")
             emit(events.make_event("mission", {}, status="failed", reason=reason, **context))
@@ -696,6 +728,16 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             pending[step_id] = {**step, "review_feedback": state.get("feedback", "")}
             continue
         pending[step_id] = step
+
+    # Recovery handoffs the lead has not answered since: re-open the lead's planning
+    # session (its recorded vendor session resumes in the wave loop like any rework) with
+    # the failure as context. The lead's proposals rebuild the work through the ordinary
+    # validated propose-steps path - nothing is re-dispatched blindly.
+    for lead_id, items in _open_recovery_handoffs(journal.entries(),
+                                                  {s["id"] for s in worklist}).items():
+        lead_step = next(s for s in worklist if s["id"] == lead_id)  # ids validated above
+        outcomes.pop(lead_id, None)
+        pending[lead_id] = {**lead_step, "recovery": items}
 
     # Operator follow-ups: continue a SETTLED step in its recorded vendor session. Each one
     # re-dispatches the step's contract (same gates, same policy path) with the follow-up
@@ -1290,6 +1332,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
             # Dynamic growth: a settled step may propose follow-up steps. Validated, capped,
             # journaled BEFORE they join the workflow - and dispatched later through the same
             # policy gate.
+            accepted_step_ids: list[str] = []
+            accepted_recovers: list[tuple[str, str]] = []
             for proposal in extract_proposals(outcome.worker_output):
                 known = {s["id"] for s in worklist} | {
                     str(p.get("id")) for p in journal.accepted_steps()}
@@ -1316,6 +1360,9 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 emit(events.make_event("mission-step", spec, status="step-accepted", **context))
                 worklist.append(spec)
                 pending[spec["id"]] = spec
+                accepted_step_ids.append(str(spec["id"]))
+                accepted_recovers.append((str(spec["id"]),
+                                          str(proposal.get("recovers") or "").strip()))
             # Deliberately unrouted work ("deferred"): journaled and queued for the owner's
             # decision, never silently dropped - the mission pauses needs-owner below instead
             # of reporting done with work missing.
@@ -1345,6 +1392,39 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 journal.append("", "work-deferred", goal=goal_text[:200],
                                reason=reason_text[:400], from_step=step_id,
                                feature_id=features[0]["id"] if features else "")
+            # Recovery handoffs this step was re-opened to answer close ONLY on an
+            # explicit outcome: accepted replacement steps ("replaced") or a justified
+            # waiver ("waived"). A lead that settles with neither has not answered -
+            # journal that plainly and leave the handoff open, so the mission pauses
+            # needs-owner instead of reporting done with a failure silently dropped.
+            recovery_items = step.get("recovery") or []
+            if outcome.status == "done" and recovery_items:
+                dispositions = extract_recovery_dispositions(outcome.worker_output)
+                for item in recovery_items:
+                    failed_id = str(item.get("id") or "")
+                    if not failed_id:
+                        continue
+                    disp = next((d for d in dispositions
+                                 if str(d.get("step") or "") == failed_id), None)
+                    # Association is explicit, always: a replacement resolves only the
+                    # failure it NAMES ("recovers"). An unnamed proposal is ordinary new
+                    # work - it never closes a handoff, however many are open.
+                    named = [sid for sid, recovers in accepted_recovers
+                             if recovers == failed_id]
+                    if named:
+                        journal.append(failed_id, "recovery-resolved", by=step_id,
+                                       resolution="replaced", replaced_by=named[:8])
+                    elif (disp is not None
+                          and str(disp.get("disposition") or "") == "waive"
+                          and str(disp.get("reason") or "").strip()):
+                        journal.append(failed_id, "recovery-resolved", by=step_id,
+                                       resolution="waived",
+                                       reason=str(disp.get("reason") or "")[:400])
+                    else:
+                        journal.append(failed_id, "recovery-unaddressed", by=step_id,
+                                       reason=("the lead finished without recovery steps or "
+                                               "an explicit justified waiver for this "
+                                               "failure; the handoff stays open"))
         if wave_cancelled is not None:
             step_id, _outcome = wave_cancelled
             session_note = (f" Its recorded session "
@@ -1400,6 +1480,19 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    **context))
             return MissionOutcome(status="needs-owner", mission_id=mission["id"],
                                   reason=reason, steps=outcomes)
+    open_recoveries = _open_recovery_handoffs(journal.entries(),
+                                              {s["id"] for s in worklist})
+    if open_recoveries:
+        unresolved = ", ".join(f"'{item['id']}'" for items in open_recoveries.values()
+                               for item in items)
+        reason = (f"the lead has not answered the recovery handoff for {unresolved}: no "
+                  "replacement steps ran and no explicit justified waiver was given. The "
+                  "task pauses rather than reporting done with a failure unaddressed - "
+                  "resume it so the lead can answer.")
+        emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
+                               **context))
+        return MissionOutcome(status="needs-owner", mission_id=mission["id"],
+                              reason=reason, steps=outcomes)
     deferred_open = _unresolved_deferred(journal)
     if deferred_open:
         goals = "; ".join(str(d.get("goal", ""))[:60] for d in deferred_open[:5])
@@ -1434,6 +1527,94 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     return MissionOutcome(status="done", mission_id=mission["id"], steps=outcomes)
 
 
+def _recovery_handoffs(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Operator recovery handoffs, failed step id -> its latest handoff entry. A handoff is
+    the owner's explicit decision that a FAILED step's recovery belongs to the mission's
+    lead: the failed step stays on the record, stops failing the mission and never re-runs
+    on its own; the lead answers with revised or replacement steps (or closes the goal
+    without them). Journaled, so a crash replays it like any other operator decision."""
+    handoffs: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if entry.get("event") == "recovery-handoff" and entry.get("step"):
+            handoffs[str(entry["step"])] = entry
+    return handoffs
+
+
+def _open_recovery_handoffs(entries: list[dict[str, Any]],
+                            worklist_ids: set[str]) -> dict[str, list[dict[str, Any]]]:
+    """Handoffs the lead has not terminally answered since, lead step id -> the failed
+    steps handed to it. A handoff to a step outside the mission is not recoverable here
+    and is left out - the failed step keeps its ordinary fail-fast treatment."""
+    latest: dict[str, tuple[int, dict[str, Any]]] = {}
+    for i, entry in enumerate(entries):
+        if entry.get("event") == "recovery-handoff" and entry.get("step"):
+            latest[str(entry["step"])] = (i, entry)
+    open_by_lead: dict[str, list[dict[str, Any]]] = {}
+    for failed_id, (i, hand) in latest.items():
+        lead = str(hand.get("to") or "")
+        if lead not in worklist_ids:
+            continue
+        answered = any(e.get("step") == failed_id and e.get("event") == "recovery-resolved"
+                       for e in entries[i + 1:])
+        if not answered:
+            open_by_lead.setdefault(lead, []).append(
+                {"id": failed_id, "role": hand.get("role", ""),
+                 "reason": str(hand.get("reason") or "")})
+    return open_by_lead
+
+
+def _lead_step_id(mission: dict[str, Any], worklist: list[dict[str, Any]],
+                  journal: "Journal", step_id: str) -> str | None:
+    """Who a failure hands back to: the saved team's lead role for a team mission; the
+    planner step that proposed this step; else the mission's planning step. Authored
+    workflows with no planner have no lead - the operator redispatches or resets instead."""
+    team = mission.get("team") or {}
+    if team.get("lead"):
+        lead = next((s for s in worklist if s["role"] == team["lead"] and s["id"] != step_id),
+                    None)
+        return str(lead["id"]) if lead else None
+    for entry in journal.entries():
+        if (entry.get("event") == "step-accepted" and isinstance(entry.get("spec"), dict)
+                and entry["spec"].get("id") == step_id and entry.get("step")):
+            proposer = str(entry["step"])
+            if proposer != step_id and any(s["id"] == proposer for s in worklist):
+                return proposer
+    for candidate in ("plan",):
+        if candidate != step_id and any(s["id"] == candidate for s in worklist):
+            return candidate
+    pm = next((s for s in worklist if s["role"] == "pm" and s["id"] != step_id), None)
+    return str(pm["id"]) if pm else None
+
+
+def handoff_to_lead(state_dir: str | Path, mission_id: str, step_id: str) -> dict[str, str]:
+    """Journal the operator's decision to hand a FAILED step to the mission's lead for
+    recovery. Records the decision only - running it is the caller's next step, exactly
+    like a redispatch. Validates against the journal, never memory: the step must be a
+    real step of this mission whose latest record is a non-done settle."""
+    state_dir = Path(state_dir)
+    mission_dir = state_dir / "missions" / mission_id
+    mission = load_mission(mission_dir / "mission.json")
+    journal = Journal(mission_dir / "journal.jsonl")
+    worklist = list(mission["steps"]) + journal.accepted_steps()
+    step = next((s for s in worklist if s["id"] == step_id), None)
+    if step is None:
+        raise MissionError(f"unknown step '{step_id}' in mission '{mission_id}'")
+    state = journal.step_states().get(step_id, {})
+    if state.get("event") != "settled" or state.get("status") == "done":
+        raise MissionError(
+            f"step '{step_id}' has no recorded failure to hand back "
+            f"(latest record: {state.get('event', 'none')} {state.get('status', '')}). "
+            "An interrupted or cancelled step takes a redispatch instead.".strip())
+    lead_id = _lead_step_id(mission, worklist, journal, step_id)
+    if lead_id is None:
+        raise MissionError(
+            "this task has no lead to hand the failure to - redispatch the step or "
+            "reset the task instead")
+    journal.append(step_id, "recovery-handoff", to=lead_id, role=step["role"],
+                   reason=str(state.get("reason") or "")[:500])
+    return {"step": step_id, "to": lead_id}
+
+
 def _unresolved_deferred(journal: "Journal") -> list[dict[str, Any]]:
     """Deferred work still waiting on the owner: work-deferred journal records whose linked
     backlog feature is still pending (or which never got one). An owner decision on the
@@ -1466,15 +1647,22 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
             sessions[str(entry.get("step") or "")] = entry
         elif entry.get("event") == "worker-progress" and entry.get("text"):
             progress[str(entry.get("step") or "")] = str(entry["text"])
+    all_ids = {s["id"] for s in all_steps}
+    handoffs = {sid: h for sid, h in _recovery_handoffs(journal.entries()).items()
+                if str(h.get("to") or "") in all_ids}
+    open_recoveries = _open_recovery_handoffs(journal.entries(), all_ids)
     steps = []
     for step in all_steps:
         state = states.get(step["id"], {})
         session = sessions.get(step["id"], {})
         settled = state.get("event") == "settled"
+        handoff = handoffs.get(step["id"])
+        handed_off = bool(handoff) and settled and state.get("status") != "done"
         steps.append({"id": step["id"], "role": step["role"], "adapter": step["adapter"],
                       "state": state.get("event", "pending"),
                       "status": state.get("status", ""),
                       "reason": state.get("reason", ""),
+                      "handed_to": str(handoff.get("to") or "") if handed_off else "",
                       "continuity": (session.get("continuity") or ("fresh" if session else "")),
                       "model": str(session.get("model") or ""),
                       "has_session": bool(session.get("session_id")),
@@ -1487,7 +1675,10 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
         # Aggregate, not "last step wins": with parallel waves an early step can pause
         # needs-owner while a later independent step settles done - the mission is still paused.
         kinds = [s["state"] for s in steps]
-        settled_not_done = [s for s in steps if s["state"] == "settled" and s["status"] != "done"]
+        # A handed-off failure stopped counting against the mission when the operator
+        # handed it over; what counts now is the lead's recovery.
+        settled_not_done = [s for s in steps if s["state"] == "settled" and s["status"] != "done"
+                            and not s["handed_to"]]
         if "needs-owner" in kinds:
             overall = "needs-owner"
         elif any(k in ("dispatched", "reattached", "redispatch") for k in kinds):
@@ -1496,7 +1687,12 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
             overall = "needs-owner"  # an explicit operator decision is the way out
         elif settled_not_done:
             overall = settled_not_done[0]["status"] or "failed"
-        elif all(s["state"] == "settled" and s["status"] == "done" for s in steps):
+        elif open_recoveries:
+            # A failure was handed to the lead but the lead has not answered since:
+            # the recovery needs a run, so this is a pause, not a completion.
+            overall = "needs-owner"
+        elif all((s["state"] == "settled" and s["status"] == "done") or s["handed_to"]
+                 for s in steps):
             overall = "done"
         elif any(s["state"] == "skipped" for s in steps) and all(
                 s["state"] in ("settled", "skipped") for s in steps):

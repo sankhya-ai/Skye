@@ -12,6 +12,7 @@ import {
   getMissionGraph,
   getProjects,
   getRoles,
+  handoffStep,
   redispatchStep,
   resumeMission,
   type MissionDetail,
@@ -19,12 +20,12 @@ import {
   type Project,
 } from "../api";
 import { cn, formatTime } from "../lib";
-import { buildSteps, layoutFlow, roleName, type StepView } from "../task/model";
+import { buildSteps, formatDuration, layoutFlow, roleName, type StepView } from "../task/model";
 import { AgentPanel, ChatItemView } from "./AgentPanel";
 import { BringIntoProject } from "./BringIntoProject";
 import { DiscussionPanel } from "./DiscussionPanel";
 import { MissionArtifactsPanel } from "./MissionArtifacts";
-import { RoleIcon, TaskCanvas } from "./TaskCanvas";
+import { RoleIcon, StateMark, STATE_LABEL, TaskCanvas } from "./TaskCanvas";
 import { Badge } from "./ui/Badge";
 import { Button } from "./ui/Button";
 
@@ -88,32 +89,83 @@ function consoleLine(e: MissionDetail["journal"][number]): string {
   return label + extra;
 }
 
-function TaskConsole({ detail, steps, selected, open, onToggle }: {
+function TaskConsole({ detail, steps, selected, open, onToggle, onOpenStep }: {
   detail: MissionDetail;
   steps: StepView[];
   selected: string | null;
   open: boolean;
   onToggle: () => void;
+  onOpenStep: (id: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const [view, setView] = useState<"events" | "runs">("events");
   const roleOf = new Map(steps.map((s) => [s.id, s.role]));
   const rows = detail.journal.filter((e) => !selected || e.step === selected);
+  // Every recorded attempt at every step, oldest first - the execution history with
+  // each agent's timing and its error, like a flow editor's run log.
+  const runs = steps
+    .filter((s) => !selected || s.id === selected)
+    .flatMap((s) => s.runs.map((run) => ({ step: s, run })))
+    .sort((a, b) => a.run.startedAt - b.run.startedAt);
   useEffect(() => {
     const el = ref.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [rows.length, open]);
+  }, [rows.length, runs.length, open, view]);
   return (
     <div className={cn("flex shrink-0 flex-col border-t border-border bg-card", open ? "h-56" : "h-9")}>
-      <button type="button" onClick={onToggle}
-              className="flex h-9 shrink-0 items-center gap-2 px-4 text-xs text-muted-foreground hover:text-foreground">
-        <Terminal className="size-3.5" />
-        <span className="font-medium text-foreground">Console</span>
-        <span>{rows.length} events{selected ? ` · ${selected}` : ""}</span>
+      <div className="flex h-9 shrink-0 items-center gap-2 px-4 text-xs text-muted-foreground">
+        <button type="button" onClick={onToggle} className="flex items-center gap-2 hover:text-foreground">
+          <Terminal className="size-3.5" />
+          <span className="font-medium text-foreground">Console</span>
+        </button>
+        {(["events", "runs"] as const).map((v) => (
+          <button key={v} type="button" onClick={() => { setView(v); if (!open) onToggle(); }}
+                  className={cn("rounded-full px-2 py-0.5 capitalize",
+                    view === v ? "bg-muted font-medium text-foreground" : "hover:text-foreground")}>
+            {v === "events" ? `${rows.length} events` : `${runs.length} runs`}
+          </button>
+        ))}
+        {selected ? <span>{selected}</span> : null}
         <span className="flex-1" />
-        {open ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
-      </button>
-      {open ? (
+        <button type="button" onClick={onToggle} className="hover:text-foreground" aria-label={open ? "Collapse console" : "Expand console"}>
+          {open ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+        </button>
+      </div>
+      {open && view === "runs" ? (
+        <div
+          ref={ref}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+          className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 text-[11px]"
+        >
+          {runs.map(({ step, run }, i) => (
+            <button key={i} type="button" onClick={() => onOpenStep(step.id)}
+                    className="flex w-full items-center gap-3 py-0.5 text-left hover:bg-muted/40">
+              <span className="w-[136px] shrink-0 font-mono text-muted-foreground/70">{formatTime(run.startedAt)}</span>
+              <span className="flex w-40 shrink-0 items-center gap-1.5 truncate text-foreground/80">
+                <RoleIcon role={step.role} size="sm" />
+                <span className="truncate">{step.id}</span>
+              </span>
+              <span className="flex w-24 shrink-0 items-center gap-1.5">
+                <StateMark state={run.state} />
+                <span className={cn(["failed", "interrupted", "resume-rejected"].includes(run.state) ? "text-destructive" : "text-foreground/85")}>
+                  {STATE_LABEL[run.state] ?? run.state}
+                </span>
+              </span>
+              <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
+                {run.endedAt ? formatDuration(run.endedAt - run.startedAt) : run.state === "running" ? "..." : ""}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-muted-foreground" title={run.reason}>
+                {run.state !== "done" ? run.reason || "" : ""}
+              </span>
+            </button>
+          ))}
+          {runs.length === 0 ? <p className="py-2 text-muted-foreground">Nothing recorded yet.</p> : null}
+        </div>
+      ) : open ? (
         <div
           ref={ref}
           onScroll={(e) => {
@@ -215,7 +267,8 @@ function TaskOverview({ detail, steps, live, onOpenStep }: {
   const answering = [...steps].reverse().find((s) => s.state === "done" && s.answer && s.role !== "pm")
     ?? [...steps].reverse().find((s) => s.state === "done" && s.answer);
   const waiting = steps.filter((s) => s.state === "needs-owner");
-  const failed = steps.filter((s) => ["failed", "interrupted", "resume-rejected"].includes(s.state));
+  const failed = steps.filter((s) => ["failed", "interrupted", "resume-rejected"].includes(s.state)
+    && !s.handedTo);
   const working = steps.filter((s) => s.state === "running");
   const answerItem = answering?.items.slice().reverse().find((i) => i.type === "answer");
   return (
@@ -230,7 +283,7 @@ function TaskOverview({ detail, steps, live, onOpenStep }: {
       {failed.map((s) => (
         <button key={s.id} type="button" onClick={() => onOpenStep(s.id)}
                 className="w-full rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-left text-xs text-destructive">
-          The {roleName(s.role).toLowerCase()} stopped: {s.reason || "see its conversation"}. Open it to run it again.
+          The {roleName(s.role).toLowerCase()} stopped: {s.reason || "see its conversation"}. Open it to recover.
         </button>
       ))}
       {answering && answerItem ? (
@@ -363,6 +416,24 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         : "Sent. The agent is picking the conversation back up.");
     });
 
+  // Who takes a failure: the saved team's lead, else the planner that proposed the step,
+  // else the mission's planning step - mirroring the engine's own resolution.
+  const leadFor = (s: StepView): StepView | null => {
+    const teamLead = detail.mission.team?.lead;
+    if (teamLead) return steps.find((x) => x.role === teamLead && x.id !== s.id) ?? null;
+    if (s.proposedBy) return steps.find((x) => x.id === s.proposedBy) ?? null;
+    return steps.find((x) => x.id === "plan" && x.id !== s.id)
+      ?? steps.find((x) => x.role === "pm" && x.id !== s.id)
+      ?? null;
+  };
+
+  const handoff = async (step: string) =>
+    act(async () => {
+      const res = await handoffStep(id, step);
+      const lead = steps.find((s) => s.id === res.to);
+      setNote(`Handed to the ${lead ? roleName(lead.role).toLowerCase() : "lead"} - it is picking the failure up in its own session.`);
+    });
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-2.5">
@@ -461,11 +532,13 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
               detail={detail}
               busy={busy}
               note={note}
+              lead={leadFor(selectedStep)}
               onClose={() => setSelected(null)}
               onOpenStep={setSelected}
               onFollowUp={followUp}
               onRedispatch={(step) => void act(() => redispatchStep(id, step))}
               onRedispatchFresh={(step) => void act(() => redispatchStep(id, step, true))}
+              onHandoff={(step) => void handoff(step)}
               onChanged={() => void refresh()}
             />
           ) : (
@@ -480,7 +553,8 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
         </aside>
       </div>
       <TaskConsole detail={detail} steps={steps} selected={selected}
-                   open={consoleOpen} onToggle={() => setConsoleOpen(!consoleOpen)} />
+                   open={consoleOpen} onToggle={() => setConsoleOpen(!consoleOpen)}
+                   onOpenStep={setSelected} />
     </div>
   );
 }

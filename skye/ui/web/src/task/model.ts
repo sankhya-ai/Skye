@@ -6,6 +6,17 @@ import type { GraphNode, JournalEntry, MissionDetail, MissionGraph } from "../ap
 
 export type ToolCall = { name: string; detail?: string };
 
+// One attempt at a step: a dispatch paired with its terminal record. A step that was run
+// again (a follow-up, a recovery) keeps every attempt - the Runs tab reads this.
+export type StepRun = {
+  startedAt: number;
+  endedAt?: number;
+  label: string;
+  /** running | done | failed | needs-owner | interrupted | cancelled | skipped | resume-rejected */
+  state: string;
+  reason?: string;
+};
+
 export type ChatItem =
   | { type: "run"; ts: number; label: string }
   | { type: "user"; ts: number; text: string }
@@ -36,6 +47,10 @@ export type StepView = {
   reason?: string;
   followupable: boolean;
   hasSession: boolean;
+  /** The lead step this failed step was handed to for recovery, if the owner did that. */
+  handedTo?: string;
+  handedToRole?: string;
+  runs: StepRun[];
 };
 
 const RUN_LABEL: Record<string, string> = {
@@ -53,6 +68,15 @@ function firstLine(text: string): string {
     if (line && !/^\|?[-:| ]+\|?$/.test(line)) return line;
   }
   return "";
+}
+
+function closeRun(step: StepView, ts: number, state: string, reason?: string) {
+  const open = [...step.runs].reverse().find((r) => r.state === "running" && !r.endedAt);
+  if (open) {
+    open.endedAt = ts;
+    open.state = state;
+    open.reason = reason;
+  }
 }
 
 export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
@@ -86,9 +110,13 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
       toolCount: 0,
       followupable: Boolean(status?.followupable),
       hasSession: Boolean(status?.has_session),
+      handedTo: status?.handed_to || undefined,
+      runs: [],
     });
   }
 
+  let unaddressedItems: Map<string, number[]> | undefined;
+  const resolvedSteps = new Set<string>();
   for (const e of detail.journal as JournalEntry[]) {
     const step = e.step ? steps.get(e.step) : undefined;
     if (!step) continue;
@@ -103,6 +131,7 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         step.endedAt = undefined;
         step.reason = undefined;
         step.items.push({ type: "run", ts, label: RUN_LABEL[e.event] });
+        step.runs.push({ startedAt: ts, label: RUN_LABEL[e.event], state: "running" });
         break;
       case "follow-up":
       case "follow-up-submitted": {
@@ -140,6 +169,7 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         const done = e.status === "done";
         step.state = done ? "done" : "failed";
         step.reason = e.reason || undefined;
+        closeRun(step, ts, step.state, e.reason || undefined);
         const answer = typeof e.answer === "string" && e.answer ? e.answer : "";
         const output = typeof e.output === "string" ? e.output : "";
         const text = answer || output;
@@ -168,6 +198,7 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
       case "needs-owner":
         step.state = "needs-owner";
         step.reason = e.reason;
+        closeRun(step, ts, "needs-owner", e.reason || undefined);
         step.items.push({ type: "status", ts, tone: "warn",
                           text: (e.reason ?? "Waiting for you").split(" Contract fingerprint")[0] });
         break;
@@ -177,12 +208,39 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         step.state = e.event;
         step.endedAt = ts;
         step.reason = e.reason;
+        closeRun(step, ts, e.event, e.reason || undefined);
         step.items.push({ type: "status", ts, tone: e.event === "cancelled" ? "warn" : "error",
                           text: e.reason || (e.event === "cancelled" ? "Stopped by you" : "Interrupted") });
         break;
       case "skipped":
         step.state = "skipped";
+        closeRun(step, ts, "skipped", e.reason || undefined);
         step.items.push({ type: "status", ts, tone: "info", text: e.reason || "Skipped" });
+        break;
+      case "recovery-handoff": {
+        // The owner handed this failed step to the mission's lead: recorded here so the
+        // card and panel can say so, and the conversation shows the decision in place.
+        const lead = e.to ? steps.get(String(e.to)) : undefined;
+        step.handedTo = String(e.to || "") || undefined;
+        step.handedToRole = lead?.role;
+        step.items.push({ type: "status", ts, tone: "warn",
+                          text: `You handed this failure to the ${lead ? roleName(lead.role).toLowerCase() : "lead"} to recover.` });
+        break;
+      }
+      case "recovery-resolved": {
+        resolvedSteps.add(step.id);
+        const how = e.resolution === "waived"
+          ? `waived it${e.reason ? `: ${e.reason}` : ""}`
+          : "proposed recovery work for it.";
+        step.items.push({ type: "status", ts, tone: "info",
+                          text: `The lead answered the handoff - ${how}` });
+        break;
+      }
+      case "recovery-unaddressed":
+        step.items.push({ type: "status", ts, tone: "warn",
+                          text: "The lead finished without addressing this failure - the handoff stays open." });
+        (unaddressedItems ??= new Map()).set(step.id,
+          [...(unaddressedItems.get(step.id) ?? []), step.items.length - 1]);
         break;
       case "review-round":
         step.items.push({ type: "status", ts, tone: "info",
@@ -193,11 +251,27 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
     }
   }
 
+  // A handoff the lead later answered: earlier "unaddressed" warnings are history,
+  // not the current state - keep them on the record, but quiet and past-tense.
+  for (const stepId of resolvedSteps) {
+    const step = steps.get(stepId);
+    for (const idx of unaddressedItems?.get(stepId) ?? []) {
+      const item = step?.items[idx];
+      if (item?.type === "status") {
+        item.tone = "info";
+        item.text = "Earlier, the lead finished without addressing this failure - the handoff stayed open until the answer below.";
+      }
+    }
+  }
+
   // A dispatch recorded before the task stopped can never settle: show the task's
-  // outcome rather than a spinner implying live work.
+  // outcome rather than a spinner implying live work. The open run closes as
+  // interrupted with no end time - the attempt is on the record, its duration unknown.
   for (const step of steps.values()) {
     if (step.state === "running" && !live && ["interrupted", "failed"].includes(overall)) {
       step.state = "interrupted";
+      const open = [...step.runs].reverse().find((r) => r.state === "running" && !r.endedAt);
+      if (open) open.state = "interrupted";
     }
   }
   return [...steps.values()];
