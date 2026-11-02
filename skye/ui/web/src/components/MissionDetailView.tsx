@@ -379,6 +379,14 @@ export function MissionDetailView({ id, onBack }: { id: string; onBack: () => vo
             {workspace.branch}
           </span>
         ) : null}
+        {detail.mission.team ? (
+          <span
+            className="hidden rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground md:inline"
+            title={`Saved team - lead ${detail.mission.team.lead}, members: ${detail.mission.team.members.join(", ")}. The lead may only delegate to these members.`}
+          >
+            {detail.mission.team.name}
+          </span>
+        ) : null}
         {overallBadge(detail.status.status, live, detail.approved)}
         {live ? (
           <Button

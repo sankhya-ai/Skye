@@ -97,6 +97,40 @@ def load_mission(path: str | Path) -> dict[str, Any]:
         raise MissionError(f"cannot read the mission file: {error}") from error
     if not isinstance(raw, dict):
         raise MissionError("a mission is a JSON object")
+    # Saved team: the roster this mission's lead may delegate to. Resolved from the
+    # owner-managed registry at load (a mission file may carry the id/name or a previously
+    # snapshotted {"id": ...} object) and snapshotted into the mission dict, so a later team
+    # edit cannot silently retarget this run. Authored steps must name the lead or a member;
+    # lead-PROPOSED steps are constrained to members in _validate_proposal.
+    team_snapshot: dict[str, Any] | None = None
+    team_field = raw.get("team")
+    if isinstance(team_field, dict) and team_field.get("members") is not None:
+        # A roster snapshotted at compose/load time (what mission.json on disk carries). It is
+        # AUTHORITATIVE for this run: reloading after the owner edited or deleted the saved
+        # team must not resnapshot - the recorded definition of the run stands. Shape-checked
+        # like anything else read from a file; it can only NARROW who runs (the contract
+        # validator still requires every role to be known and active), never widen it.
+        members = team_field.get("members")
+        if (not isinstance(members, list) or not members
+                or any(not isinstance(m, str) or not m for m in members)):
+            raise MissionError("a team snapshot needs a non-empty members list of role names")
+        team_snapshot = {"id": str(team_field.get("id") or "").strip(),
+                         "name": str(team_field.get("name") or "").strip(),
+                         "lead": str(team_field.get("lead") or "").strip(),
+                         "members": [str(m) for m in members]}
+        if not team_snapshot["lead"]:
+            raise MissionError("a team snapshot needs a lead")
+    elif team_field:
+        from . import teams as teams_module
+        team_ref = (str(team_field.get("id") or "").strip() if isinstance(team_field, dict)
+                    else str(team_field).strip())
+        record = teams_module.get(team_ref)
+        if record is None:
+            raise MissionError(
+                f"unknown team '{team_ref}'; saved teams live in {teams_module.DEFAULT_PATH} "
+                "(the Teams screen manages them)")
+        team_snapshot = {"id": record["id"], "name": record["name"],
+                         "lead": record["lead"], "members": list(record["members"])}
     steps = raw.get("steps")
     if not isinstance(steps, list) or not steps:
         raise MissionError("a mission needs a non-empty steps list")
@@ -122,6 +156,15 @@ def load_mission(path: str | Path) -> dict[str, Any]:
                     or when.get("status") not in ("done", "failed", "gate-failed", "skipped")):
                 raise MissionError(
                     f"step '{step_id}': when must name an earlier step and a settled status")
+        if team_snapshot is not None:
+            step_role = str(step.get("role") or "").strip()
+            allowed = [team_snapshot["lead"], *team_snapshot["members"]]
+            if step_role not in allowed:
+                raise MissionError(
+                    f"step '{step_id}' names role '{step_role}', which is not part of team "
+                    f"'{team_snapshot['name']}' (lead '{team_snapshot['lead']}', members: "
+                    f"{', '.join(team_snapshot['members'])}); a saved team constrains who may "
+                    "run, it never widens it")
         candidate = {**step, "repo": _resolve_repo(raw, step.get("repo") or raw.get("repo", ""))}
         try:
             validate(candidate)
@@ -171,6 +214,8 @@ def load_mission(path: str | Path) -> dict[str, Any]:
                "repo": str(raw.get("repo") or "").strip(), "steps": steps,
                "project": str(raw.get("project") or "").strip(),
                "max_review_rounds": max_rounds}
+    if team_snapshot is not None:
+        mission["team"] = team_snapshot
     if repos is not None:
         mission["repos"] = {str(n): str(p) for n, p in repos.items()}
     if raw.get("repos_source"):
@@ -321,6 +366,16 @@ def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[
         return "a proposed step needs an id"
     if step_id in known_ids:
         return f"proposed step id '{step_id}' already exists"
+    team = mission.get("team") or {}
+    if team.get("members"):
+        # The saved-team constraint is ENFORCED here, not just written into the lead's brief:
+        # the lead may only delegate to the owner's saved roster. The member session still
+        # passes the ordinary dispatcher gates (policy/approval, cap, catalogue, gates) below.
+        role = str(step.get("role") or "").strip()
+        if role not in team["members"]:
+            return (f"proposed step '{step_id}' names role '{role}', which is not a member of "
+                    f"team '{team.get('name', '?')}' (members: {', '.join(team['members'])}); "
+                    "the lead may only delegate to the saved roster")
     needs = step.get("needs") or []
     if not isinstance(needs, list) or any(n not in known_ids for n in needs):
         return f"proposed step '{step_id}' needs unknown step(s): {needs}"
@@ -604,6 +659,9 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     states = journal.step_states()
     outcomes: dict[str, dict[str, Any]] = {}
     worklist = list(mission["steps"]) + journal.accepted_steps()  # authored, then dynamic (journaled)
+    # Lead proposals refused for naming a role outside the saved roster (this run; older
+    # rejections are read back from the journal at the done check below).
+    roster_rejections: list[str] = []
 
     # Seed from the journal: states a prior run already settled are carried, never re-run.
     pending: dict[str, dict[str, Any]] = {}
@@ -1242,6 +1300,8 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    proposal_id=proposal_id)
                     emit(events.make_event("mission-step", {}, status="proposal-rejected",
                                            reason=problem, **context))
+                    if "not a member of team" in problem:
+                        roster_rejections.append(proposal_id)
                     continue
                 if len(worklist) >= MAX_STEPS:
                     journal.append(step_id, "proposal-rejected", proposal_id=proposal_id,
@@ -1316,6 +1376,30 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    reason=f"step '{step_id}': {outcome.reason}", **context))
             return MissionOutcome(status=outcome.status, mission_id=mission["id"],
                                   reason=f"step '{step_id}': {outcome.reason}", steps=outcomes)
+    if mission.get("team"):
+        rejected_ids = set(roster_rejections) | {
+            str(e.get("proposal_id") or "") for e in journal.entries()
+            if e.get("event") == "proposal-rejected"
+            and "not a member of team" in str(e.get("reason") or "")}
+        rejected_ids.discard("")
+        lead_role = mission["team"].get("lead", "")
+        member_ran = any(record.get("status") == "done" and record.get("role") != lead_role
+                         for record in outcomes.values())
+        if rejected_ids and not member_ran:
+            # The lead tried to staff the goal outside its saved roster and nothing else ran:
+            # reporting done would hide missing work. Pause for the owner - widen the team on
+            # the Teams screen (an explicit owner grant), then reset and re-run; or approve a
+            # redispatch. The rejection itself stays journaled either way.
+            team_name = mission["team"].get("name", "?")
+            reason = (f"the lead of team '{team_name}' proposed work for roles outside its "
+                      f"saved roster ({', '.join(sorted(rejected_ids))} were rejected) and no "
+                      "member session ran, so the goal is NOT done. Add the role to the team "
+                      "on the Teams screen and reset this task, or rework the goal with the "
+                      "current roster.")
+            emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
+                                   **context))
+            return MissionOutcome(status="needs-owner", mission_id=mission["id"],
+                                  reason=reason, steps=outcomes)
     deferred_open = _unresolved_deferred(journal)
     if deferred_open:
         goals = "; ".join(str(d.get("goal", ""))[:60] for d in deferred_open[:5])
