@@ -356,6 +356,10 @@ export function AgentPanel({
                 .find((e) => e.event === "recovery-handoff" && e.step === step.id)?.ts ?? 0;
               const answered = detail.journal.some(
                 (e) => e.event === "recovery-resolved" && e.step === step.id && e.ts > handoffTs);
+              // The lead settled once without answering THIS handoff: the engine will not
+              // re-open it on its own (each handoff buys one paid answer).
+              const unanswered = !answered && detail.journal.some(
+                (e) => e.event === "recovery-unaddressed" && e.step === step.id && e.ts > handoffTs);
               const working = Boolean(leadStep && leadStep.state === "running");
               const leadName = step.handedToRole ? roleName(step.handedToRole).toLowerCase() : "lead";
               return (
@@ -365,9 +369,18 @@ export function AgentPanel({
                       ? "it answered."
                       : working
                         ? "it is working on the recovery now."
-                        : "it has not answered yet - resume the task so it can pick the failure up."}
+                        : unanswered
+                          ? "it finished without a recovery or a justified waiver. Hand it over again to have it retry."
+                          : "it has not answered yet - resume the task so it can pick the failure up."}
                     {" "}The failure stays on the record; this agent does not run again on its own.
                   </p>
+                  {unanswered && !working ? (
+                    <div className="mt-2">
+                      <Button variant="danger-outline" size="sm" disabled={busy} onClick={() => onHandoff(step.id)}>
+                        <UserCheck className="size-3" /> Hand it to the {leadName} again
+                      </Button>
+                    </div>
+                  ) : null}
                   {answered ? (
                     <button type="button" onClick={() => onOpenStep(step.handedTo!)}
                             className="mt-1.5 text-xs text-amber-900 underline underline-offset-2 hover:text-foreground">

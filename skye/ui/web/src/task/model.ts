@@ -116,7 +116,6 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
   }
 
   let unaddressedItems: Map<string, number[]> | undefined;
-  const resolvedSteps = new Set<string>();
   for (const e of detail.journal as JournalEntry[]) {
     const step = e.step ? steps.get(e.step) : undefined;
     if (!step) continue;
@@ -228,17 +227,28 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         break;
       }
       case "recovery-resolved": {
-        resolvedSteps.add(step.id);
-        const how = e.resolution === "waived"
-          ? `waived it${e.reason ? `: ${e.reason}` : ""}`
-          : "proposed recovery work for it.";
-        step.items.push({ type: "status", ts, tone: "info",
-                          text: `The lead answered the handoff - ${how}` });
+        // "Unaddressed" warnings recorded BEFORE this answer are history now: keep them,
+        // quiet and past-tense. Later ones (after another handoff) stay current.
+        for (const idx of unaddressedItems?.get(step.id) ?? []) {
+          const item = step.items[idx];
+          if (item?.type === "status") {
+            item.tone = "info";
+            item.text = "Earlier, the lead finished without addressing this failure - the handoff stayed open until the answer below.";
+          }
+        }
+        unaddressedItems?.delete(step.id);
+        const replacements = Array.isArray(e.replaced_by) ? e.replaced_by.map(String) : [];
+        // A replacement is accepted work, not finished work: it runs (and can fail) like
+        // any other step, so say what happened without claiming the failure is fixed.
+        const text = e.resolution === "waived"
+          ? `The lead waived this failure${e.reason ? `: ${e.reason}` : "."}`
+          : `The lead proposed replacement work for this failure${replacements.length ? ` (${replacements.join(", ")})` : ""}; it runs like any other step.`;
+        step.items.push({ type: "status", ts, tone: "info", text });
         break;
       }
       case "recovery-unaddressed":
         step.items.push({ type: "status", ts, tone: "warn",
-                          text: "The lead finished without addressing this failure - the handoff stays open." });
+                          text: "The lead finished without addressing this failure - the handoff stays open. Hand it to the lead again to retry." });
         (unaddressedItems ??= new Map()).set(step.id,
           [...(unaddressedItems.get(step.id) ?? []), step.items.length - 1]);
         break;
@@ -248,19 +258,6 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         break;
       default:
         break;
-    }
-  }
-
-  // A handoff the lead later answered: earlier "unaddressed" warnings are history,
-  // not the current state - keep them on the record, but quiet and past-tense.
-  for (const stepId of resolvedSteps) {
-    const step = steps.get(stepId);
-    for (const idx of unaddressedItems?.get(stepId) ?? []) {
-      const item = step?.items[idx];
-      if (item?.type === "status") {
-        item.tone = "info";
-        item.text = "Earlier, the lead finished without addressing this failure - the handoff stayed open until the answer below.";
-      }
     }
   }
 

@@ -366,6 +366,13 @@ def extract_feature_proposals(output: str) -> list[dict[str, Any]]:
     return []
 
 
+def _off_roster(step: dict[str, Any], mission: dict[str, Any]) -> bool:
+    """True when a saved team constrains this mission and the step's role is not a member."""
+    team = mission.get("team") or {}
+    return bool(team.get("members")) and (
+        str(step.get("role") or "").strip() not in team["members"])
+
+
 def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[str, Any]) -> str:
     """Why a proposed step cannot join the workflow, or '' when it can."""
     step_id = str(step.get("id") or "").strip()
@@ -374,15 +381,14 @@ def _validate_proposal(step: dict[str, Any], known_ids: set[str], mission: dict[
     if step_id in known_ids:
         return f"proposed step id '{step_id}' already exists"
     team = mission.get("team") or {}
-    if team.get("members"):
+    if _off_roster(step, mission):
         # The saved-team constraint is ENFORCED here, not just written into the lead's brief:
         # the lead may only delegate to the owner's saved roster. The member session still
         # passes the ordinary dispatcher gates (policy/approval, cap, catalogue, gates) below.
         role = str(step.get("role") or "").strip()
-        if role not in team["members"]:
-            return (f"proposed step '{step_id}' names role '{role}', which is not a member of "
-                    f"team '{team.get('name', '?')}' (members: {', '.join(team['members'])}); "
-                    "the lead may only delegate to the saved roster")
+        return (f"proposed step '{step_id}' names role '{role}', which is not a member of "
+                f"team '{team.get('name', '?')}' (members: {', '.join(team['members'])}); "
+                "the lead may only delegate to the saved roster")
     needs = step.get("needs") or []
     if not isinstance(needs, list) or any(n not in known_ids for n in needs):
         return f"proposed step '{step_id}' needs unknown step(s): {needs}"
@@ -684,9 +690,6 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     worklist = list(mission["steps"]) + journal.accepted_steps()  # authored, then dynamic (journaled)
     handoffs = {sid: h for sid, h in _recovery_handoffs(journal.entries()).items()
                 if str(h.get("to") or "") in {s["id"] for s in worklist}}
-    # Lead proposals refused for naming a role outside the saved roster (this run; older
-    # rejections are read back from the journal at the done check below).
-    roster_rejections: list[str] = []
 
     # Seed from the journal: states a prior run already settled are carried, never re-run.
     pending: dict[str, dict[str, Any]] = {}
@@ -733,11 +736,18 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
     # session (its recorded vendor session resumes in the wave loop like any rework) with
     # the failure as context. The lead's proposals rebuild the work through the ordinary
     # validated propose-steps path - nothing is re-dispatched blindly.
+    # Each handoff buys ONE lead answer: once the lead has settled without answering it
+    # (recovery-unaddressed), later resumes - including ones for unrelated reasons - do not
+    # re-open the lead on their own. Another paid session takes the owner handing the
+    # failure over again.
     for lead_id, items in _open_recovery_handoffs(journal.entries(),
                                                   {s["id"] for s in worklist}).items():
+        fresh = [item for item in items if not item.get("attempted")]
+        if not fresh:
+            continue
         lead_step = next(s for s in worklist if s["id"] == lead_id)  # ids validated above
         outcomes.pop(lead_id, None)
-        pending[lead_id] = {**lead_step, "recovery": items}
+        pending[lead_id] = {**lead_step, "recovery": fresh}
 
     # Operator follow-ups: continue a SETTLED step in its recorded vendor session. Each one
     # re-dispatches the step's contract (same gates, same policy path) with the follow-up
@@ -1340,12 +1350,28 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                 problem = _validate_proposal(proposal, known, mission)
                 proposal_id = str(proposal.get("id") or "?")
                 if problem:
+                    roster_fields: dict[str, Any] = {}
+                    raw_id = str(proposal.get("id") or "").strip()
+                    if raw_id and raw_id not in known and _off_roster(proposal, mission):
+                        # Off-roster work is MISSING work, not noise: queue it for the owner's
+                        # decision in the backlog (like deferred work) and mark the rejection
+                        # structurally, so the done check never relies on message wording.
+                        from . import backlog
+                        role = str(proposal.get("role") or "").strip()
+                        features = backlog.propose(
+                            [{"title": str(proposal.get("goal") or proposal_id)[:120],
+                              "brief": (f"The lead of team '{mission['team'].get('name', '?')}' "
+                                        f"proposed this for role '{role}', which is outside the "
+                                        f"saved roster (mission {mission['id']}, step "
+                                        f"'{step_id}'). Approve after adding the role to the "
+                                        "team, or reject to drop the work.")}],
+                            project=mission.get("project", ""), mission=mission["id"])
+                        roster_fields = {"kind": "roster", "role": role,
+                                         "feature_id": features[0]["id"] if features else ""}
                     journal.append(step_id, "proposal-rejected", reason=problem,
-                                   proposal_id=proposal_id)
+                                   proposal_id=proposal_id, **roster_fields)
                     emit(events.make_event("mission-step", {}, status="proposal-rejected",
                                            reason=problem, **context))
-                    if "not a member of team" in problem:
-                        roster_rejections.append(proposal_id)
                     continue
                 if len(worklist) >= MAX_STEPS:
                     journal.append(step_id, "proposal-rejected", proposal_id=proposal_id,
@@ -1456,39 +1482,39 @@ def run_mission(mission: dict[str, Any], policy: Policy | None = None, *, runner
                                    reason=f"step '{step_id}': {outcome.reason}", **context))
             return MissionOutcome(status=outcome.status, mission_id=mission["id"],
                                   reason=f"step '{step_id}': {outcome.reason}", steps=outcomes)
-    if mission.get("team"):
-        rejected_ids = set(roster_rejections) | {
-            str(e.get("proposal_id") or "") for e in journal.entries()
-            if e.get("event") == "proposal-rejected"
-            and "not a member of team" in str(e.get("reason") or "")}
-        rejected_ids.discard("")
+    roster_open = _unresolved_roster_rejections(journal) if mission.get("team") else []
+    if roster_open:
+        # The lead proposed work outside its saved roster. Whether or not other members ran,
+        # that work is missing: reporting done would hide it. Each rejection waits in the
+        # owner backlog; an owner decision on it (approve after widening the team, or reject
+        # to drop the work) clears the pause. The rejection itself stays journaled.
+        rejected_ids = sorted({str(e.get("proposal_id") or "?") for e in roster_open})
         lead_role = mission["team"].get("lead", "")
         member_ran = any(record.get("status") == "done" and record.get("role") != lead_role
                          for record in outcomes.values())
-        if rejected_ids and not member_ran:
-            # The lead tried to staff the goal outside its saved roster and nothing else ran:
-            # reporting done would hide missing work. Pause for the owner - widen the team on
-            # the Teams screen (an explicit owner grant), then reset and re-run; or approve a
-            # redispatch. The rejection itself stays journaled either way.
-            team_name = mission["team"].get("name", "?")
-            reason = (f"the lead of team '{team_name}' proposed work for roles outside its "
-                      f"saved roster ({', '.join(sorted(rejected_ids))} were rejected) and no "
-                      "member session ran, so the goal is NOT done. Add the role to the team "
-                      "on the Teams screen and reset this task, or rework the goal with the "
-                      "current roster.")
-            emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
-                                   **context))
-            return MissionOutcome(status="needs-owner", mission_id=mission["id"],
-                                  reason=reason, steps=outcomes)
+        team_name = mission["team"].get("name", "?")
+        ran_note = ("other member work ran, but" if member_ran
+                    else "no member session ran, so")
+        reason = (f"the lead of team '{team_name}' proposed work for roles outside its "
+                  f"saved roster ({', '.join(rejected_ids)} were rejected); {ran_note} the "
+                  "goal is NOT done. Decide each rejected item in the backlog: approve it "
+                  "as follow-up work (add the role to the team on the Teams screen first), "
+                  "or reject it to drop the work.")
+        emit(events.make_event("mission", {}, status="needs-owner", reason=reason, **context))
+        return MissionOutcome(status="needs-owner", mission_id=mission["id"],
+                              reason=reason, steps=outcomes)
     open_recoveries = _open_recovery_handoffs(journal.entries(),
                                               {s["id"] for s in worklist})
     if open_recoveries:
-        unresolved = ", ".join(f"'{item['id']}'" for items in open_recoveries.values()
-                               for item in items)
+        open_items = [item for items in open_recoveries.values() for item in items]
+        unresolved = ", ".join(f"'{item['id']}'" for item in open_items)
+        retry = ("hand the failure to the lead again to have it retry, or reset the task"
+                 if all(item.get("attempted") for item in open_items)
+                 else "resume it so the lead can answer")
         reason = (f"the lead has not answered the recovery handoff for {unresolved}: no "
-                  "replacement steps ran and no explicit justified waiver was given. The "
-                  "task pauses rather than reporting done with a failure unaddressed - "
-                  "resume it so the lead can answer.")
+                  "replacement step was proposed for it and no explicit justified waiver "
+                  "was given. The task pauses rather than reporting done with a failure "
+                  f"unaddressed - {retry}.")
         emit(events.make_event("mission", {}, status="needs-owner", reason=reason,
                                **context))
         return MissionOutcome(status="needs-owner", mission_id=mission["id"],
@@ -1554,12 +1580,14 @@ def _open_recovery_handoffs(entries: list[dict[str, Any]],
         lead = str(hand.get("to") or "")
         if lead not in worklist_ids:
             continue
-        answered = any(e.get("step") == failed_id and e.get("event") == "recovery-resolved"
-                       for e in entries[i + 1:])
-        if not answered:
-            open_by_lead.setdefault(lead, []).append(
-                {"id": failed_id, "role": hand.get("role", ""),
-                 "reason": str(hand.get("reason") or "")})
+        since = [e for e in entries[i + 1:] if e.get("step") == failed_id]
+        if any(e.get("event") == "recovery-resolved" for e in since):
+            continue
+        open_by_lead.setdefault(lead, []).append(
+            {"id": failed_id, "role": hand.get("role", ""),
+             "reason": str(hand.get("reason") or ""),
+             # The lead already settled once without answering THIS handoff.
+             "attempted": any(e.get("event") == "recovery-unaddressed" for e in since)})
     return open_by_lead
 
 
@@ -1579,9 +1607,8 @@ def _lead_step_id(mission: dict[str, Any], worklist: list[dict[str, Any]],
             proposer = str(entry["step"])
             if proposer != step_id and any(s["id"] == proposer for s in worklist):
                 return proposer
-    for candidate in ("plan",):
-        if candidate != step_id and any(s["id"] == candidate for s in worklist):
-            return candidate
+    if step_id != "plan" and any(s["id"] == "plan" for s in worklist):
+        return "plan"
     pm = next((s for s in worklist if s["role"] == "pm" and s["id"] != step_id), None)
     return str(pm["id"]) if pm else None
 
@@ -1613,6 +1640,20 @@ def handoff_to_lead(state_dir: str | Path, mission_id: str, step_id: str) -> dic
     journal.append(step_id, "recovery-handoff", to=lead_id, role=step["role"],
                    reason=str(state.get("reason") or "")[:500])
     return {"step": step_id, "to": lead_id}
+
+
+def _unresolved_roster_rejections(journal: "Journal") -> list[dict[str, Any]]:
+    """Off-roster lead proposals still waiting on the owner: roster rejections whose backlog
+    feature is still pending (or which never got one). An owner decision either way resolves
+    the blocker; the rejection stays in the journal as history."""
+    rejected = [e for e in journal.entries()
+                if e.get("event") == "proposal-rejected" and e.get("kind") == "roster"]
+    if not rejected:
+        return []
+    from . import backlog
+    open_features = {f.get("id") for f in backlog.list_features()
+                     if f.get("status") in ("pending", "reopened")}
+    return [e for e in rejected if not e.get("feature_id") or e["feature_id"] in open_features]
 
 
 def _unresolved_deferred(journal: "Journal") -> list[dict[str, Any]]:
@@ -1700,9 +1741,10 @@ def mission_status(mission: dict[str, Any], state_dir: str | Path | None = None)
         else:
             overall = "running"
     deferred_open = _unresolved_deferred(journal)
-    if deferred_open and overall in ("done", "running"):
-        # All steps may be settled, but deliberately unrouted work is still the owner's call:
-        # that is a pause, not a completion.
+    roster_open = _unresolved_roster_rejections(journal) if mission.get("team") else []
+    if (deferred_open or roster_open) and overall in ("done", "running"):
+        # All steps may be settled, but deliberately unrouted work (or off-roster work the
+        # lead proposed) is still the owner's call: that is a pause, not a completion.
         overall = "needs-owner"
     result = {"mission": mission["id"], "status": overall, "steps": steps}
     if deferred_open:

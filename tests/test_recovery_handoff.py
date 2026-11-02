@@ -34,8 +34,10 @@ def _mission(tmp_path, monkeypatch, steps, mid="m-rec", **extra):
 
 def _team_mission(tmp_path, monkeypatch, steps, **extra):
     _env(tmp_path, monkeypatch)
-    teams.add({"name": "website", "lead": "pm", "members": ["designer", "frontend-dev"]})
-    team_id = teams.list_teams()[0]["id"]
+    existing = teams.get("website")  # team names are unique: re-saving edits the team
+    teams.add({**({"id": existing["id"]} if existing else {}), "name": "website",
+               "lead": "pm", "members": ["designer", "frontend-dev"]})
+    team_id = teams.get("website")["id"]
     return _mission(tmp_path, monkeypatch, steps, team=team_id, **extra)
 
 
@@ -222,12 +224,16 @@ def test_handoff_constrains_recovery_proposals_to_the_roster(tmp_path, monkeypat
         return _ok("built")
 
     outcome = run_mission(mission, POLICY, runner=runner, state_dir=state_dir)
-    assert outcome.status == "done"
+    # The in-roster replacement answers the handoff, but the off-roster proposal is
+    # missing work: the task pauses for the owner's decision on it, never quiet done.
+    assert outcome.status == "needs-owner"
+    assert "outside its saved roster" in outcome.reason
     journal = (state_dir / "missions" / mission["id"] / "journal.jsonl").read_text()
-    rejected = [json.loads(line) for line in journal.splitlines()
-                if '"proposal-rejected"' in line]
-    assert any("devops" in r["reason"] and "not a member of team" in r["reason"]
-               for r in rejected)
+    entries = [json.loads(line) for line in journal.splitlines()]
+    rejected = [e for e in entries if e.get("event") == "proposal-rejected"]
+    assert any(r.get("kind") == "roster" and r.get("role") == "devops" for r in rejected)
+    assert any(e.get("event") == "recovery-resolved" and e.get("step") == "ui"
+               for e in entries)
 
 
 # --- UI endpoint -----------------------------------------------------------
@@ -412,9 +418,23 @@ def test_unaddressed_handoff_stays_open(tmp_path, monkeypatch):
     status = mission_status(mission, state_dir)
     assert status["status"] == "needs-owner"
 
-    # A bare waive with no justification is not an answer either: the next run must
-    # re-open the lead (recovery brief again) rather than closing on the malformed
-    # disposition.
+    # One handoff buys one lead answer: resuming again (for any reason) does NOT start
+    # another paid lead session on its own - the owner hands it over again to retry.
+    calls = []
+
+    def counting_runner(spec):
+        calls.append(spec["role"])
+        return _ok("built")
+
+    outcome = run_mission(mission, POLICY, runner=counting_runner, state_dir=state_dir)
+    assert outcome.status == "needs-owner"
+    assert calls == []
+    assert "hand the failure to the lead again" in outcome.reason
+
+    # A bare waive with no justification is not an answer either: after the owner hands
+    # it over again, the lead re-opens (recovery brief again) and the malformed
+    # disposition does not close the handoff.
+    handoff_to_lead(state_dir, mission["id"], "ui")
     def bare_waive_runner(spec):
         if spec["role"] == "pm":
             assert "handed back" in spec.get("brief", "")
@@ -424,6 +444,7 @@ def test_unaddressed_handoff_stays_open(tmp_path, monkeypatch):
 
     outcome = run_mission(mission, POLICY, runner=bare_waive_runner, state_dir=state_dir)
     assert outcome.status == "needs-owner"
+    handoff_to_lead(state_dir, mission["id"], "ui")
 
     def waive_runner(spec):
         if spec["role"] == "pm":
@@ -474,6 +495,10 @@ def test_unnamed_proposal_cannot_pick_among_several_handoffs(tmp_path, monkeypat
     assert outcome.status == "needs-owner"  # ambiguous: nothing resolved
     journal = Journal(state_dir / "missions" / mission["id"] / "journal.jsonl")
     assert not [e for e in journal.entries() if e.get("event") == "recovery-resolved"]
+
+    # The lead used its answer; another attempt is the owner's explicit decision.
+    handoff_to_lead(state_dir, mission["id"], "ui")
+    handoff_to_lead(state_dir, mission["id"], "art")
 
     def named_runner(spec):
         if spec["role"] == "pm":

@@ -31,6 +31,9 @@ def _save(tmp_path, monkeypatch, **overrides):
     _env(tmp_path, monkeypatch)
     record = {"name": "website", "lead": "pm",
               "members": ["designer", "frontend-dev"], **overrides}
+    existing = teams.get(record["name"])
+    if existing is not None:  # re-saving in one test edits the team (names are unique)
+        record = {"id": existing["id"], **record}
     return teams.add(record)
 
 
@@ -50,6 +53,24 @@ def test_team_roundtrip_and_upsert(tmp_path, monkeypatch):
     assert teams.list_teams() == []
     with pytest.raises(teams.TeamError):
         teams.remove(saved["id"])
+
+
+def test_team_edits_are_revision_checked_and_names_unique(tmp_path, monkeypatch):
+    """Two editors of one team cannot silently overwrite each other, a second team cannot
+    reuse a name (missions may refer to a team by name), and an edit that does not send a
+    description keeps the stored one."""
+    saved = _save(tmp_path, monkeypatch, description="site crew")
+    assert saved["revision"] == 1
+    first = teams.add({"id": saved["id"], "name": "website", "lead": "pm",
+                       "members": ["designer"], "revision": 1})
+    assert first["revision"] == 2
+    assert first["description"] == "site crew"  # not sent, so kept
+    with pytest.raises(teams.TeamError, match="changed since"):
+        teams.add({"id": saved["id"], "name": "website", "lead": "pm",
+                   "members": ["artist"], "revision": 1})  # stale editor
+    assert teams.get(saved["id"])["members"] == ["designer"]
+    with pytest.raises(teams.TeamError, match="already exists"):
+        teams.add({"name": "Website", "lead": "pm", "members": ["artist"]})
 
 
 def test_team_validation_rejects_unknown_roles_and_lead_overlap(tmp_path, monkeypatch):
@@ -153,7 +174,7 @@ def test_lead_proposals_are_constrained_to_members(tmp_path, monkeypatch):
     policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}],
                      "max_concurrent": 2})
     outcome = run_mission(mission, policy, runner=runner, state_dir=tmp_path / ".skye")
-    assert outcome.status == "done"
+    assert outcome.status == "needs-owner"  # the rejected work is missing, never quiet done
     assert dispatched == ["pm", "frontend-dev"]
     journal = (tmp_path / ".skye/missions/m-team/journal.jsonl").read_text()
     rejected = [json.loads(line) for line in journal.splitlines()
@@ -411,9 +432,10 @@ def test_all_off_roster_proposals_pause_instead_of_quiet_success(tmp_path, monke
     assert journal.count('"proposal-rejected"') == 2
 
 
-def test_mixed_proposals_still_complete_with_rejections_visible(tmp_path, monkeypatch):
-    """One member step accepted + one off-roster rejection: the mission completes (the owner
-    sees the rejection in the trace), and the rejection stays journaled."""
+def test_mixed_proposals_pause_until_owner_decides_rejected_work(tmp_path, monkeypatch):
+    """One member step accepted + one off-roster rejection: the member work runs, but the
+    rejected work is missing, so the mission pauses needs-owner (never a quiet "done"). The
+    rejection is queued in the backlog; the owner's decision on it clears the pause."""
     def runner(spec):
         class R:
             ok = True
@@ -429,10 +451,32 @@ def test_mixed_proposals_still_complete_with_rejections_visible(tmp_path, monkey
     mission = _team_mission(tmp_path, monkeypatch, [
         {"id": "plan", "role": "pm", "adapter": "root", "goal": "g", "gates": []}])
     policy = Policy({"allow_unattended": [{"adapter": "root", "role": "*"}]})
-    outcome = run_mission(mission, policy, runner=runner, state_dir=tmp_path / ".skye")
+    calls = []
+    original = runner
+
+    def counting(spec):
+        calls.append(spec["role"])
+        return original(spec)
+
+    outcome = run_mission(mission, policy, runner=counting, state_dir=tmp_path / ".skye")
+    assert outcome.status == "needs-owner"
+    assert "other member work ran" in outcome.reason and "ship" in outcome.reason
+    assert calls == ["pm", "frontend-dev"]  # the in-roster member still ran
+    journal_path = tmp_path / ".skye/missions/m-team/journal.jsonl"
+    rejections = [json.loads(line) for line in journal_path.read_text().splitlines()
+                  if '"proposal-rejected"' in line]
+    assert len(rejections) == 1 and rejections[0]["kind"] == "roster"
+    assert rejections[0]["role"] == "devops"
+    from skye import backlog
+    from skye.mission import mission_status
+    feature = backlog.list_features()[0]
+    assert feature["id"] == rejections[0]["feature_id"] and feature["status"] == "pending"
+    assert mission_status(mission, state_dir=tmp_path / ".skye")["status"] == "needs-owner"
+    backlog.decide(feature["id"], "rejected")  # the owner drops the off-roster work
+    outcome = run_mission(mission, policy, runner=counting, state_dir=tmp_path / ".skye")
     assert outcome.status == "done"
-    journal = (tmp_path / ".skye/missions/m-team/journal.jsonl").read_text()
-    assert '"proposal-rejected"' in journal  # visible in the trace, not silent
+    assert calls == ["pm", "frontend-dev"]  # nothing re-ran on resume
+    assert mission_status(mission, state_dir=tmp_path / ".skye")["status"] == "done"
 
 
 # --- review gate vs roster -------------------------------------------------

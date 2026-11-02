@@ -1277,9 +1277,10 @@ class UiHandler(BaseHTTPRequestHandler):
                 team_id = str(body.get("id") or "").strip()
                 if teams_module.get(team_id) is None:
                     return self._json({"error": f"unknown team {team_id!r}"}, 404)
-                # Deleting a team with work still in flight would orphan its missions'
-                # recorded roster (their next resume re-validates against the registry).
-                # Settled missions keep their snapshot; block only what is still live.
+                # Every mission carries its own roster snapshot, so deleting a team never
+                # changes a run. The guard is for the owner: a team with unsettled work
+                # disappearing from the Teams screen hides who is still staffing it. Block
+                # only what is still live; settled missions keep their snapshot as history.
                 busy = []
                 missions_root = self.state_dir / "missions"
                 if missions_root.exists():

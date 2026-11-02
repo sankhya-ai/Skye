@@ -142,7 +142,7 @@ def _cmd_mission(args: list[str]) -> int:
         return 0
     if sub == "handoff":
         # The owner's explicit recovery decision: journal it, then run so the lead answers.
-        if "--step" not in args[2:]:
+        if "--step" not in args[2:] or args.index("--step") + 1 >= len(args):
             print("usage: skye mission handoff <mission.json> --step <id>", file=sys.stderr)
             return 2
         from .mission import default_state_dir, handoff_to_lead
@@ -152,7 +152,9 @@ def _cmd_mission(args: list[str]) -> int:
         except MissionError as error:
             print(str(error), file=sys.stderr)
             return 2
-        print(json.dumps({"handed": handed["step"], "to": handed["to"]}, indent=2))
+        # Not a JSON result of its own: the run below (so the lead answers) prints that.
+        print(f"handed step '{handed['step']}' to '{handed['to']}'; running the mission so "
+              "the lead answers", file=sys.stderr)
     redispatch = None
     redispatch_fresh = False
     if sub == "redispatch":
