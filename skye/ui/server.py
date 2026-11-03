@@ -968,10 +968,28 @@ class UiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _maritime_chat(self) -> None:
+        """Maritime's contract for a custom agent: ``POST /chat {"message"}`` -> ``{"response"}``
+        within 30 s. Only on a worker machine (SKYE_ROLE=worker), which Maritime keeps private:
+        its front door - reachable with the operator's key only - is the gate, so no token here."""
+        from .. import chat
+        bot = chat.bot()
+        if bot is None:
+            return self._deny(404)
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(min(length, 1_000_000)) or b"{}")
+        except json.JSONDecodeError:
+            body = {}
+        message = str((body or {}).get("message") or "") if isinstance(body, dict) else ""
+        self._json({"response": bot.reply(message)})
+
     # --- routes ---
     def do_GET(self) -> None:
         url = urlparse(self.path)
         query = parse_qs(url.query)
+        if url.path == "/health":
+            return self._json({"ok": True})
         if url.path.startswith("/api/"):
             if not self._authorized(query, allow_query_token=False):
                 return self._deny()
@@ -1138,6 +1156,8 @@ class UiHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         url = urlparse(self.path)
         query = parse_qs(url.query)
+        if url.path == "/chat":
+            return self._maritime_chat()
         if not self._authorized(query, allow_query_token=False):
             return self._deny()
         origin = self.headers.get("Origin") or self.headers.get("Referer")
@@ -1966,13 +1986,23 @@ def serve(state_dir: Path | None = None, port: int = 8787) -> None:
     token_file = state_dir / "ui-token"
     token_file.write_text(token + "\n", "utf-8")
     os.chmod(token_file, 0o600)
-    server = ThreadingHTTPServer(("127.0.0.1", port), UiHandler)
+    # 127.0.0.1 unless the owner says otherwise. SKYE_UI_HOST is for a machine reached only
+    # through a front door that already signs people in (e.g. a Maritime VM); the session
+    # token still guards every API call.
+    host = os.environ.get("SKYE_UI_HOST", "").strip() or "127.0.0.1"
+    server = ThreadingHTTPServer((host, port), UiHandler)
     server.state_dir = state_dir  # type: ignore[attr-defined]
     server.token = token  # type: ignore[attr-defined]
     url = f"http://127.0.0.1:{port}/?token={token}"
     print(f"skye ui {__version__} serving {state_dir}")
     print(f"open: {url}")
-    print("localhost only; the URL carries this run's session token.")
+    if host == "127.0.0.1":
+        print("localhost only; the URL carries this run's session token.")
+    else:
+        print(f"listening on {host}:{port} (SKYE_UI_HOST); every API call still needs the token.")
+    from .. import chat, telegram
+    telegram.start(state_dir)
+    chat.start(state_dir)
     picker = threading.Thread(target=_picker_loop, args=(server,),
                               name="skye-pickup", daemon=True)
     picker.start()

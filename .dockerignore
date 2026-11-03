@@ -1,0 +1,9 @@
+# Only what the image needs: the Skye package and the start script.
+*
+!pyproject.toml
+!LICENSE
+!README.md
+!skye
+!deploy/maritime/start.py
+skye/ui/web
+**/__pycache__
