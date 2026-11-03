@@ -443,3 +443,56 @@ def deliver_to_project(mission_dir: Path, *, message: str) -> dict[str, Any]:
     (Path(mission_dir) / "delivered-to-project.json").write_text(
         json.dumps(summary, indent=2) + "\n", "utf-8")
     return summary
+
+
+def open_pull_request(mission_dir: Path, *, title: str, body: str = "") -> dict[str, Any]:
+    """The remote counterpart of ``deliver_to_project``, for a Skye on a machine of its own
+    (a VM driven from chat): commit the worker's changes on the mission branch, push that
+    branch to the repo's ``origin``, and open a pull request with ``gh``. Nothing is merged
+    and the default branch is never pushed to - the pull request is the hand-off."""
+    from .start import git_identity_args
+    record = read_record(Path(mission_dir)) or {}
+    results: dict[str, Any] = {}
+    for name, rec in _records(record).items():
+        worktree, repo, branch = rec.get("worktree"), rec.get("repo"), rec.get("branch")
+        if not (worktree and repo and branch) or not Path(worktree).exists():
+            results[name] = {"ok": False, "detail": "this task has no worktree to push"}
+            continue
+        wt = Path(worktree)
+        if _worker_changes(wt):
+            _git(wt, "add", "-A", "--", ".", *JUNK_PATHSPECS)
+            commit = subprocess.run(["git", "-C", str(wt), *git_identity_args(repo), "commit",
+                                     "-q", "-m", title[:200]], capture_output=True, text=True)
+            if commit.returncode != 0:
+                results[name] = {"ok": False, "detail": "could not commit the worker's changes: "
+                                 + (commit.stderr or commit.stdout).strip()[-300:]}
+                continue
+        base = _git(Path(repo), "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        ahead = int(_git(Path(repo), "rev-list", "--count", f"{base}..{branch}").stdout.strip() or 0)
+        if ahead == 0:
+            results[name] = {"ok": False, "detail": "nothing to push - the task changed no files"}
+            continue
+        push = subprocess.run(["git", "-C", str(wt), "push", "-u", "origin", f"{branch}:{branch}"],
+                              capture_output=True, text=True, timeout=180)
+        if push.returncode != 0:
+            results[name] = {"ok": False, "detail": "git push failed: "
+                             + (push.stderr or push.stdout).strip()[-300:]}
+            continue
+        create = subprocess.run(["gh", "pr", "create", "--head", branch, "--base", base,
+                                 "--title", title[:200], "--body", body or title],
+                                cwd=str(wt), capture_output=True, text=True, timeout=120)
+        url = create.stdout.strip().splitlines()[-1] if create.returncode == 0 and create.stdout.strip() else ""
+        if not url:
+            # Already open from an earlier push: report that one instead of failing.
+            view = subprocess.run(["gh", "pr", "view", branch, "--json", "url", "--jq", ".url"],
+                                  cwd=str(wt), capture_output=True, text=True, timeout=60)
+            url = view.stdout.strip() if view.returncode == 0 else ""
+        if not url:
+            results[name] = {"ok": False, "branch": branch, "detail": "pushed, but gh could not "
+                             "open the pull request: " + (create.stderr or create.stdout).strip()[-300:]}
+            continue
+        results[name] = {"ok": True, "branch": branch, "base": base, "commits": ahead, "url": url}
+    summary = {"at": time.time(), "repos": results,
+               "ok": bool(results) and all(r.get("ok") for r in results.values())}
+    (Path(mission_dir) / "pull-request.json").write_text(json.dumps(summary, indent=2) + "\n", "utf-8")
+    return summary
