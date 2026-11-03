@@ -664,7 +664,7 @@ class DeskHandler(BaseHTTPRequestHandler):
             machine = desk.machine(key)
             out: dict[str, Any] = {"email": user["email"], "machine": machine,
                                    "plan": desk.plan(key), "pay_url": desk.pay_url(),
-                                   "price": _env("SKYE_PRICE") or "$12 / month",
+                                   "price": _env("SKYE_PRICE") or "$5 / month",
                                    "linked": key in (desk.state.get("conversations") or {})}
             if machine["status"] == "ready":
                 try:
