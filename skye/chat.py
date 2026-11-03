@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -42,6 +43,10 @@ Then just write the goal, e.g. "add a dark mode toggle". The team plans, builds 
 • approve - let a waiting step run, once
 • pr - open the pull request for the last finished task
 • projects - your repositories; /use <name> to switch"""
+
+
+# Words that go straight to the machine's commands, even before Claude is signed in.
+SETUP_WORDS = {"claude", "github", "repo", "status", "projects", "use", "web", "approve", "pr", "skip"}
 
 
 def enabled() -> bool:
@@ -92,6 +97,41 @@ class ChatBot(Bot):
             import traceback
             traceback.print_exc()
             self.say(f"Something went wrong: {error}")
+
+    # -- a guided setup: Claude first, then GitHub, then a repository ----------------------
+    def on_text(self, text: str) -> None:
+        plain = text.strip()
+        word = plain.lower().lstrip("/").split("@")[0]
+        if word == "skip" and not logins.github_status()["logged_in"]:
+            if self.github_login is not None:
+                self.github_login.stop()
+                self.github_login = None
+            return self.say("OK, no GitHub for now: I can work on public repositories, and you can send "
+                            "github any time.\n\nLast step: send repo owner/name.")
+        login_open = self.claude_login is not None and self.claude_login.alive \
+            and not self.claude_login.expired()
+        is_code = login_open and re.fullmatch(r"\S{8,}", plain)
+        is_command = word.split(" ")[0] in SETUP_WORDS or (
+            plain.startswith("/") and word not in ("start", "help"))
+        if not is_code and not is_command and not logins.claude_status()["logged_in"] \
+                and not os.environ.get("SKYE_ALLOW_UNSIGNED"):
+            # A greeting, help, or a goal before Claude is signed in: start with the sign-in.
+            if login_open:
+                return self.say("Paste the code from the Claude sign-in page here "
+                                "(or send claude for a new link).")
+            intro = self.help_text + "\n\n" if word in ("start", "help") else ""
+            self.say(intro + "First, let's sign in to your Claude. Skye runs Claude Code on your own "
+                     "Pro or Max plan; you sign in on Anthropic's page, and Skye never sees your password.")
+            return self._claude("")
+        return super().on_text(text)
+
+    def _claude_code(self, code: str) -> None:
+        super()._claude_code(code)
+        if logins.claude_status()["logged_in"] and not logins.github_status()["logged_in"] \
+                and self.github_login is None:
+            self.say("Next, GitHub, so I can push my branch and open the pull request "
+                     "(I never push to main). Or reply skip to use public repositories only.")
+            self._github("")
 
     def setup_state(self) -> dict[str, Any]:
         """What the website's setup page shows: which sign-ins are done, which repository."""

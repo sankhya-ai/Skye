@@ -221,6 +221,7 @@ class Desk:
         self._busy: dict[str, threading.Lock] = {}
         self.stop = threading.Event()
         self.state = self._load()
+        self.telegram: "TelegramFront | None" = None
 
     # -- state -----------------------------------------------------------------------------
     def _load(self) -> dict[str, Any]:
@@ -261,25 +262,35 @@ class Desk:
                                  name=f"desk-turn-{turn.get('turnId')}").start()
 
     def answer(self, turn: dict) -> None:
-        """Run one claimed turn and always settle it."""
+        """Run one claimed Keiki turn and always settle it."""
         conversation = str(turn.get("conversationId") or "")
+        done = threading.Event()
+        sent = 0
+
+        def send(text: str) -> None:
+            nonlocal sent
+            sent += 1
+            self.keiki.send(turn, text, key=f"{turn.get('turnId')}:{sent}")
+
+        text = "\n".join(str(m.get("text") or "").strip() for m in turn.get("messages") or []
+                         if isinstance(m, dict) and not m.get("silent")).strip()
+        threading.Thread(target=self._keep_alive, args=(turn, done), daemon=True).start()
+        try:
+            ok, error = self.handle(conversation, text, send)
+        finally:
+            done.set()
+        try:
+            self.keiki.complete(turn, ok=ok, error=error)
+        except HttpError as failure:
+            print(f"desk: turn {turn.get('turnId')} not settled: {failure}", flush=True)
+
+    def handle(self, conversation: str, text: str, send: Callable[[str], None]) -> tuple[bool, str]:
+        """One message from a person, on any channel: their news first, then their machine's answer."""
         lock = self._busy.setdefault(conversation, threading.Lock())
         with lock:
-            done = threading.Event()
-            threading.Thread(target=self._keep_alive, args=(turn, done), daemon=True).start()
-            sent = 0
-
-            def send(text: str) -> None:
-                nonlocal sent
-                sent += 1
-                self.keiki.send(turn, text, key=f"{turn.get('turnId')}:{sent}")
-
-            ok, error = True, ""
             try:
                 for note in self._take_notes(conversation):
                     send(note)
-                text = "\n".join(str(m.get("text") or "").strip() for m in turn.get("messages") or []
-                                 if isinstance(m, dict) and not m.get("silent")).strip()
                 linked = LINK.fullmatch(text)
                 if linked:
                     send(self.link(conversation, linked.group(1)))
@@ -289,19 +300,14 @@ class Desk:
                     reply = self._ask_worker(conversation, text, send)
                     if reply:
                         send(reply)
-            except Exception as failure:  # noqa: BLE001 - the turn is always settled
+                return True, ""
+            except Exception as failure:  # noqa: BLE001 - the person always hears back
                 traceback.print_exc()
-                ok, error = False, str(failure)[:300]
                 try:
                     send("I couldn't reach your machine just now. Try again in a minute.")
-                except HttpError:
+                except Exception:  # noqa: BLE001
                     pass
-            finally:
-                done.set()
-            try:
-                self.keiki.complete(turn, ok=ok, error=error)
-            except HttpError as failure:
-                print(f"desk: turn {turn.get('turnId')} not settled: {failure}", flush=True)
+                return False, str(failure)[:300]
 
     def _keep_alive(self, turn: dict, done: threading.Event) -> None:
         while not done.is_set():
@@ -541,12 +547,93 @@ class Desk:
             notes = state.setdefault("notes", {}).setdefault(conversation, [])
             notes.append(text.strip()[:3800])
             del notes[:-NOTE_LIMIT]
+        if self.telegram is not None and conversation.startswith(TelegramFront.PREFIX):
+            try:
+                self.telegram.send(conversation, text.strip())
+                return True
+            except HttpError as error:
+                print(f"desk: telegram news not sent: {error}", flush=True)
         self._update(add)
         self.keiki.notice(conversation)  # a turn opens and carries the note; else the next message does
         return True
 
     def _take_notes(self, conversation: str) -> list[str]:
         return self._update(lambda s: (s.setdefault("notes", {}).pop(conversation, None) or []))
+
+
+class TelegramFront:
+    """Skye's own Telegram bot: everyone who messages it gets their own machine, as through Keiki."""
+
+    PREFIX = "tg:"
+    LIMIT = 4000
+    START_LINK = re.compile(r"/start(?:@\w+)?\s+(?:link[-_])?([A-Za-z0-9]{6})")
+
+    def __init__(self, desk: "Desk", token: str, base: str = "https://api.telegram.org") -> None:
+        self.desk, self.token, self.base = desk, token, base.rstrip("/")
+        self.offset = 0
+        desk.telegram = self
+
+    def api(self, method: str, body: dict | None = None, timeout: float = 40) -> Any:
+        data = http("POST", f"{self.base}/bot{self.token}/{method}", body=body or {}, timeout=timeout)
+        return (data or {}).get("result")
+
+    def send(self, conversation: str, text: str) -> None:
+        chat = conversation[len(self.PREFIX):]
+        text = text or "..."
+        for start in range(0, len(text), self.LIMIT):
+            self.api("sendMessage", {"chat_id": chat, "text": text[start:start + self.LIMIT],
+                                     "disable_web_page_preview": True})
+
+    def poll_once(self, wait: int = 25) -> int:
+        updates = self.api("getUpdates", {"offset": self.offset, "timeout": wait,
+                                          "allowed_updates": ["message"]}, timeout=wait + 20) or []
+        for update in updates:
+            self.offset = max(self.offset, int(update.get("update_id", 0)) + 1)
+            message = update.get("message") or {}
+            chat = message.get("chat") or {}
+            text = str(message.get("text") or "").strip()
+            if chat.get("type") != "private" or not text or chat.get("id") is None:
+                continue
+            threading.Thread(target=self.on_message, args=(f"{self.PREFIX}{chat['id']}", text),
+                             daemon=True, name=f"desk-tg-{chat['id']}").start()
+        return len(updates)
+
+    def on_message(self, conversation: str, text: str) -> None:
+        started = self.START_LINK.fullmatch(text)
+        if started:
+            text = f"link {started.group(1).upper()}"
+        elif re.fullmatch(r"/start(?:@\w+)?", text):
+            text = "help"
+        done = threading.Event()
+
+        def typing() -> None:
+            while not done.is_set():
+                try:
+                    self.api("sendChatAction", {"chat_id": conversation[len(self.PREFIX):],
+                                                "action": "typing"}, timeout=10)
+                except HttpError:
+                    pass
+                done.wait(5)
+        threading.Thread(target=typing, daemon=True).start()
+        try:
+            self.desk.handle(conversation, text, lambda reply: self.send(conversation, reply))
+        finally:
+            done.set()
+
+    def run(self) -> None:
+        attempt = 0
+        try:
+            self.api("deleteWebhook", {})
+        except HttpError:
+            pass
+        while not self.desk.stop.is_set():
+            try:
+                self.poll_once()
+                attempt = 0
+            except HttpError as error:
+                print(f"desk: telegram: {error}", flush=True)
+                self.desk.stop.wait(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+                attempt += 1
 
 
 URL = re.compile(r"https://\S+")
@@ -727,11 +814,14 @@ def main() -> None:
     port = int(_env("PORT") or 8080)
     server = ThreadingHTTPServer(("0.0.0.0", port), DeskHandler)
     server.desk = desk  # type: ignore[attr-defined]
-    missing = [n for n in ("KEIKI_HARNESS_KEY", "MARITIME_API_KEY", "SKYE_WORKER_IMAGE", "SKYE_DESK_URL")
+    missing = [n for n in ("MARITIME_API_KEY", "SKYE_WORKER_IMAGE", "SKYE_DESK_URL")
                if not _env(n)]
     print(f"skye front desk on :{port}" + (f" - missing: {', '.join(missing)}" if missing else ""), flush=True)
     if _env("KEIKI_HARNESS_KEY"):
         threading.Thread(target=desk.run, name="desk-inbox", daemon=True).start()
+    if _env("SKYE_DESK_TELEGRAM_TOKEN"):
+        front = TelegramFront(desk, _env("SKYE_DESK_TELEGRAM_TOKEN"))
+        threading.Thread(target=front.run, name="desk-telegram", daemon=True).start()
     server.serve_forever()
 
 

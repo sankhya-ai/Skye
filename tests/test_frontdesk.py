@@ -26,6 +26,8 @@ class Fake:
         self.agents: dict[str, dict] = {}
         self.env: dict[str, dict] = {}
         self.chats: list[tuple[str, str]] = []
+        self.tg_updates: list[dict] = []
+        self.tg_sent: list[tuple[str, str]] = []
         self.answer = lambda agent_id, message: f"echo: {message}"
         fake = self
 
@@ -87,6 +89,14 @@ class Fake:
                     return self._out({"ok": True})
                 if path.endswith("/restart"):
                     return self._out({"ok": True})
+                if path.startswith("/botdesk-token/"):
+                    method = path.rsplit("/", 1)[1]
+                    if method == "getUpdates":
+                        ready = [u for u in fake.tg_updates if u["update_id"] >= body.get("offset", 0)]
+                        return self._out({"ok": True, "result": ready})
+                    if method == "sendMessage":
+                        fake.tg_sent.append((str(body["chat_id"]), body["text"]))
+                    return self._out({"ok": True, "result": True})
                 if path.startswith("/bot") and path.endswith("/getMe"):
                     if "good" not in path:
                         return self._out({"ok": False}, 401)
@@ -243,6 +253,16 @@ def worker(tmp_path, monkeypatch):
     monkeypatch.setenv(chat.ROLE_ENV, "worker")
     monkeypatch.setattr(logins, "claude_status", lambda: {"installed": True, "logged_in": False})
     monkeypatch.setattr(logins, "github_status", lambda: {"installed": True, "logged_in": False})
+
+    class Login:  # never a real `claude` process in tests
+        alive = True
+
+        def expired(self):
+            return False
+
+        def stop(self):
+            self.alive = False
+    monkeypatch.setattr(logins, "claude_begin", lambda: (Login(), "https://claude.ai/oauth/test"))
     state = tmp_path / "state"
     state.mkdir()
     return state
@@ -276,7 +296,7 @@ def test_worker_replies_in_the_request_and_pushes_later_news(worker, monkeypatch
     monkeypatch.setattr(chat, "REPLY_WITHIN", 0.5)
     bot = chat.ChatBot(worker)
     reply = bot.reply("help")
-    assert "claude - sign in" in reply and "Claude Code: not signed in" in reply
+    assert "claude - sign in" in reply and "https://claude.ai/oauth/test" in reply  # help, then sign-in
 
     release = threading.Event()
     monkeypatch.setattr(bot, "_status", lambda: (release.wait(5), bot.say("late news")))
@@ -479,3 +499,83 @@ def test_admin_activate_needs_the_key(tmp_path, fake, monkeypatch):
     finally:
         server.shutdown()
     assert desk.plan("skye-" + "a" * 32)["status"] == "active"
+
+
+def tg(update_id: int, chat_id: int, text: str, kind: str = "private") -> dict:
+    return {"update_id": update_id, "message": {"chat": {"id": chat_id, "type": kind}, "text": text}}
+
+
+def test_skye_telegram_bot_gives_each_person_a_machine(tmp_path, fake, monkeypatch):
+    monkeypatch.setattr(frontdesk.time, "sleep", lambda s: None)
+    desk = make_desk(tmp_path, fake)
+    front = frontdesk.TelegramFront(desk, "desk-token", base=fake.url)
+    fake.tg_updates += [tg(1, 101, "/start"), tg(2, 202, "claude"), tg(3, -5, "hi", kind="group")]
+    assert front.poll_once(wait=0) == 3
+    assert front.offset == 4
+    assert wait_until(lambda: len(fake.tg_sent) >= 4)
+    by_chat = {}
+    for chat_id, text in fake.tg_sent:
+        by_chat.setdefault(chat_id, []).append(text)
+    assert by_chat["101"] == [frontdesk.WELCOME, "echo: help"]  # /start alone is help
+    assert by_chat["202"] == [frontdesk.WELCOME, "echo: claude"]
+    assert "-5" not in by_chat and len(fake.agents) == 2  # groups are ignored
+
+    # The machine's later news goes straight to that person's chat.
+    key = frontdesk.external_id("tg:101")
+    fake.tg_sent.clear()
+    assert desk.notify(key, desk.token_for(key), "Task done. Reply pr")
+    assert fake.tg_sent == [("101", "Task done. Reply pr")]
+    assert fake.notices == []
+
+    # A deep link from the website links the chat to a website account.
+    code = desk.link_code("web-acct")
+    fake.tg_sent.clear()
+    front.on_message("tg:303", f"/start link-{code}")
+    assert desk.key_for("tg:303") == "web-acct"
+    assert len(fake.tg_sent) == 1
+
+
+def test_long_telegram_replies_are_split(tmp_path, fake):
+    desk = make_desk(tmp_path, fake)
+    front = frontdesk.TelegramFront(desk, "desk-token", base=fake.url)
+    front.send("tg:7", "x" * 9000)
+    assert [len(t) for _, t in fake.tg_sent] == [4000, 4000, 1000]
+
+
+def test_worker_guides_setup_claude_then_github(worker, monkeypatch):
+    signed = {"claude": False}
+    monkeypatch.setattr(logins, "claude_status",
+                        lambda: {"installed": True, "logged_in": signed["claude"], "plan": "max"})
+
+    class Login:
+        alive = True
+
+        def expired(self):
+            return False
+
+        def stop(self):
+            self.alive = False
+
+    started = []
+    monkeypatch.setattr(logins, "claude_begin", lambda: (started.append("claude") or Login(), "https://claude.ai/x"))
+
+    def finish(login, code):
+        signed["claude"] = True
+        return {"ok": True, "plan": "max"}
+    monkeypatch.setattr(logins, "claude_finish", finish)
+    monkeypatch.setattr(logins, "github_begin", lambda: (started.append("github") or Login(), "AB12-CD34",
+                                                          "https://github.com/login/device"))
+    monkeypatch.setattr(logins, "github_finish", lambda login: {"logged_in": False})
+    bot = chat.ChatBot(worker)
+
+    hello = bot.reply("hi")  # anything at all starts the Claude sign-in
+    assert "sign in to your Claude" in hello and "https://claude.ai/x" in hello
+    again = bot.reply("add dark mode")  # a goal while the sign-in is open: asks for the code
+    assert "Paste the code" in again and started == ["claude"]
+
+    done = bot.reply("the-code-1234")
+    assert "signed in (max plan)" in done
+    assert "Next, GitHub" in done and "AB12-CD34" in done and started == ["claude", "github"]
+
+    skipped = bot.reply("skip")
+    assert "no GitHub for now" in skipped and "repo owner/name" in skipped
