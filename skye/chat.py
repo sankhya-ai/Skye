@@ -21,6 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from . import logins
 from .telegram import Bot
 
 ROLE_ENV = "SKYE_ROLE"
@@ -49,6 +50,7 @@ def enabled() -> bool:
 
 class ChatBot(Bot):
     help_text = HELP
+    state_file = "chat.json"  # its own: the machine may run the owner's Telegram bot as well
 
     def __init__(self, state_dir: Path) -> None:
         super().__init__(state_dir, token="-")
@@ -68,6 +70,8 @@ class ChatBot(Bot):
     def reply(self, message: str) -> str:
         """Handle one message; return everything said within REPLY_WITHIN seconds. Whatever
         is said later (a slow sign-in, a task's news) goes to the desk on its own."""
+        if message.strip() == "/setup.json":  # the website's status check: answers only that
+            return json.dumps(self.setup_state())
         with self._turn_lock:
             earlier = self._take_outbox()
             with self._collect_lock:
@@ -88,6 +92,24 @@ class ChatBot(Bot):
             import traceback
             traceback.print_exc()
             self.say(f"Something went wrong: {error}")
+
+    def setup_state(self) -> dict[str, Any]:
+        """What the website's setup page shows: which sign-ins are done, which repository."""
+        from . import telegram
+        claude, github = logins.claude_status(), logins.github_status()
+        project = self._active_project()
+        try:  # the owner's own Telegram bot, when this machine runs one
+            tg = json.loads((self.state_dir / telegram.Bot.state_file).read_text("utf-8"))
+        except (OSError, ValueError):
+            tg = {}
+        return {"claude": {"signed_in": bool(claude.get("logged_in")), "plan": claude.get("plan") or "",
+                           "pending": bool(self.claude_login and self.claude_login.alive)},
+                "github": {"signed_in": bool(github.get("logged_in")), "login": github.get("login") or "",
+                           "pending": bool(self.github_login and self.github_login.alive)},
+                "repository": project["name"] if project else "",
+                "telegram": {"configured": bool(os.environ.get(telegram.TOKEN_ENV)),
+                             "paired": bool(tg.get("owner_user")),
+                             "pair_code": "" if tg.get("owner_user") else str(tg.get("pair_code") or "")}}
 
     # -- the transport ---------------------------------------------------------------------
     def say(self, text: str, buttons: list[list[tuple[str, str]]] | None = None,

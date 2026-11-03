@@ -62,11 +62,13 @@ def enabled() -> bool:
 class Bot:
     help_text = HELP
 
+    state_file = "telegram.json"
+
     def __init__(self, state_dir: Path, token: str | None = None) -> None:
         self.state_dir = Path(state_dir)
         self.token = token or os.environ.get(TOKEN_ENV, "").strip()
         self.api = os.environ.get(API_ENV, "").strip() or "https://api.telegram.org"
-        self.state_path = self.state_dir / "telegram.json"
+        self.state_path = self.state_dir / self.state_file
         self.state = self._load()
         self.stop_event = threading.Event()
         self._lock = threading.Lock()
@@ -252,6 +254,8 @@ class Bot:
     def _claude(self, arg: str) -> None:
         if arg.lower() == "status":
             return self.say(self._setup_line())
+        if arg.lower().startswith("code "):  # explicit: never mistaken for a goal
+            return self._claude_code(arg[5:].strip())
         status = logins.claude_status()
         if not status["installed"]:
             return self.say("Claude Code is not installed on this machine.")

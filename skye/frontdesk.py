@@ -172,6 +172,28 @@ class Maritime:
         return str((data or {}).get("response") or "").strip()
 
 
+LINK = re.compile(r"(?i)\s*link\s+([A-Z0-9]{6})\s*")
+LINK_TTL = 1800.0
+FIREBASE_KEY = "AIzaSyBmPJA94vIrRygxbvcmqxAghFkRQnQIrx0"  # Sankhya's public web key (not a secret)
+SITE_ORIGINS = ("https://skye.sankhyaailabs.com", "http://localhost:8000", "http://127.0.0.1:8000")
+
+
+def verify_firebase(id_token: str) -> dict | None:
+    """A Firebase ID token -> {uid, email}, checked by Google (accounts:lookup), or None."""
+    if not id_token or len(id_token) > 4096:
+        return None
+    key = _env("FIREBASE_API_KEY") or FIREBASE_KEY
+    try:
+        data = http("POST", f"https://identitytoolkit.googleapis.com/v1/accounts:lookup?key={key}",
+                    body={"idToken": id_token}, timeout=20)
+    except HttpError:
+        return None
+    users = (data or {}).get("users") or []
+    if not users or not users[0].get("localId"):
+        return None
+    return {"uid": users[0]["localId"], "email": users[0].get("email") or ""}
+
+
 # -- the desk ---------------------------------------------------------------------------------
 
 def external_id(conversation: str) -> str:
@@ -251,7 +273,10 @@ class Desk:
                     send(note)
                 text = "\n".join(str(m.get("text") or "").strip() for m in turn.get("messages") or []
                                  if isinstance(m, dict) and not m.get("silent")).strip()
-                if text:  # a notice-only turn (silent) carries just the notes above
+                linked = LINK.fullmatch(text)
+                if linked:
+                    send(self.link(conversation, linked.group(1)))
+                elif text:  # a notice-only turn (silent) carries just the notes above
                     reply = self._ask_worker(conversation, text, send)
                     if reply:
                         send(reply)
@@ -290,8 +315,14 @@ class Desk:
                 time.sleep(10)
 
     # -- workers ---------------------------------------------------------------------------
+    def key_for(self, conversation: str) -> str:
+        """A conversation linked to a website account uses that account's machine."""
+        return (self.state.get("links") or {}).get(conversation) or external_id(conversation)
+
     def worker_for(self, conversation: str, send: Callable[[str], None]) -> str:
-        key = external_id(conversation)
+        return self.worker_by_key(self.key_for(conversation), send, conversation=conversation)
+
+    def worker_by_key(self, key: str, send: Callable[[str], None], *, conversation: str = "") -> str:
         with self._creating.setdefault(key, threading.Lock()):
             known = (self.state.get("workers") or {}).get(key)
             agent = self.maritime.get(known) if known else None
@@ -307,8 +338,11 @@ class Desk:
                 send(WELCOME)
                 agent = self._create(key)
             agent_id = str(agent["id"])
-            self._update(lambda s: (s.setdefault("workers", {}).__setitem__(key, agent_id),
-                                    s.setdefault("conversations", {}).__setitem__(key, conversation)))
+            def remember(state: dict) -> None:
+                state.setdefault("workers", {})[key] = agent_id
+                if conversation:
+                    state.setdefault("conversations", {})[key] = conversation
+            self._update(remember)
             if agent.get("status") not in ("active", "sleeping"):
                 self._wait_ready(agent_id)
             return agent_id
@@ -347,6 +381,92 @@ class Desk:
             time.sleep(5)
         raise HttpError("your machine is taking too long to start")
 
+    # -- website accounts ------------------------------------------------------------------
+    @staticmethod
+    def web_key(uid: str) -> str:
+        return external_id("web:" + uid)
+
+    def machine(self, key: str) -> dict[str, Any]:
+        """Where this account's machine is: none, creating, ready (or failed, with why)."""
+        job = (self.state.get("jobs") or {}).get(key) or {}
+        agent_id = (self.state.get("workers") or {}).get(key)
+        if job.get("status") == "creating":
+            return {"status": "creating", "since": job.get("since")}
+        if agent_id:
+            agent = self.maritime.get(agent_id)
+            if agent is not None and agent.get("status") != "error":
+                return {"status": "ready", "agent": agent_id, "vm": agent.get("status")}
+        if job.get("status") == "failed":
+            return {"status": "failed", "error": job.get("error", "")}
+        return {"status": "none"}
+
+    def create_machine(self, key: str) -> dict[str, Any]:
+        current = self.machine(key)
+        if current["status"] in ("creating", "ready"):
+            return current
+        self._update(lambda s: s.setdefault("jobs", {}).__setitem__(
+            key, {"status": "creating", "since": time.time()}))
+
+        def build() -> None:
+            try:
+                self.worker_by_key(key, lambda text: None)
+                self._update(lambda s: s.setdefault("jobs", {}).pop(key, None))
+            except Exception as error:  # noqa: BLE001 - reported to the page
+                traceback.print_exc()
+                self._update(lambda s: s.setdefault("jobs", {}).__setitem__(
+                    key, {"status": "failed", "error": str(error)[:300]}))
+        threading.Thread(target=build, daemon=True, name=f"desk-build-{key[:12]}").start()
+        return {"status": "creating"}
+
+    def ask(self, key: str, message: str) -> str:
+        agent_id = (self.state.get("workers") or {}).get(key)
+        if not agent_id:
+            raise HttpError("no machine yet")
+        return self.maritime.chat(agent_id, message)
+
+    def set_telegram(self, key: str, bot_token: str) -> dict[str, Any]:
+        """The owner's own bot on their machine: check the token with Telegram, set it, restart."""
+        if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", bot_token.strip()):
+            raise HttpError("that doesn't look like a bot token from @BotFather")
+        api = _env("SKYE_TELEGRAM_API") or "https://api.telegram.org"
+        me = http("POST", f"{api}/bot{bot_token.strip()}/getMe", body={}, timeout=20)
+        username = str(((me or {}).get("result") or {}).get("username") or "")
+        if not username:
+            raise HttpError("Telegram didn't accept that token")
+        agent_id = (self.state.get("workers") or {}).get(key)
+        if not agent_id:
+            raise HttpError("no machine yet")
+        code = uuid.uuid4().hex[:6].upper()
+        for name, value in (("SKYE_TELEGRAM_TOKEN", bot_token.strip()), ("SKYE_TELEGRAM_PAIR_CODE", code)):
+            self.maritime.call("POST", f"/api/agents/{agent_id}/env",
+                               body={"key": name, "value": value, "isSecret": True})
+        self.maritime.call("POST", f"/api/agents/{agent_id}/restart", body={})
+        return {"bot": username, "pair_code": code, "link": f"https://t.me/{username}?start={code}"}
+
+    def link_code(self, key: str) -> str:
+        code = uuid.uuid4().hex[:6].upper()
+
+        def add(state: dict) -> None:
+            codes = state.setdefault("link_codes", {})
+            now = time.time()
+            for old in [c for c, v in codes.items() if v.get("until", 0) < now or v.get("key") == key]:
+                codes.pop(old)
+            codes[code] = {"key": key, "until": now + LINK_TTL}
+        self._update(add)
+        return code
+
+    def link(self, conversation: str, code: str) -> str:
+        entry = (self.state.get("link_codes") or {}).get(code.upper())
+        if not entry or entry.get("until", 0) < time.time():
+            return "That link code isn't valid any more. Get a new one at skye.sankhyaailabs.com."
+
+        def apply(state: dict) -> None:
+            state.setdefault("links", {})[conversation] = entry["key"]
+            state.setdefault("conversations", {})[entry["key"]] = conversation
+            state.setdefault("link_codes", {}).pop(code.upper(), None)
+        self._update(apply)
+        return "Linked. This chat now talks to the Skye you set up on the website. Send help to see what I can do."
+
     # -- news from workers -----------------------------------------------------------------
     def notify(self, key: str, token: str, text: str) -> bool:
         if not (re.fullmatch(r"skye-[0-9a-f]{32}", key) and hmac.compare_digest(token, self.token_for(key))):
@@ -367,23 +487,54 @@ class Desk:
         return self._update(lambda s: (s.setdefault("notes", {}).pop(conversation, None) or []))
 
 
+URL = re.compile(r"https://\S+")
+GH_CODE = re.compile(r"\b([A-Z0-9]{4}-[A-Z0-9]{4})\b")
+
+
 class DeskHandler(BaseHTTPRequestHandler):
+    """Health, workers' news (/notify), and the website's setup API (/api/*).
+
+    The website calls with ``Content-Type: text/plain`` and the Firebase ID token in the JSON
+    body - a "simple" cross-origin request (no preflight), and nothing rides in a header that a
+    proxy in front of the desk might drop."""
     server_version = "skye-desk"
 
     def log_message(self, fmt: str, *args) -> None:
         return
+
+    @property
+    def desk(self) -> "Desk":
+        return self.server.desk  # type: ignore[attr-defined]
 
     def _json(self, payload: Any, code: int = 200) -> None:
         body = json.dumps(payload).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        origin = self.headers.get("Origin") or ""
+        allowed = [o.strip() for o in (_env("SKYE_SITE_ORIGINS") or "").split(",") if o.strip()] or SITE_ORIGINS
+        if origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(body)
 
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        origin = self.headers.get("Origin") or ""
+        if origin in SITE_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def do_GET(self) -> None:
-        if self.path.split("?")[0] in ("/", "/health"):
+        path = self.path.split("?")[0]
+        if path in ("/", "/health"):
             return self._json({"ok": True, "service": "skye front desk"})
+        if path == "/api/config":
+            return self._json({"imessage": _env("SKYE_IMESSAGE"), "telegram": _env("SKYE_TELEGRAM_BOT")})
         self._json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:
@@ -392,16 +543,63 @@ class DeskHandler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             body = {}
+        body = body if isinstance(body, dict) else {}
         parts = self.path.split("?")[0].strip("/").split("/")
         if parts[0] == "chat":
             return self._json({"response": "This is Skye's front desk. Message Skye on iMessage or Telegram."})
         if len(parts) == 3 and parts[0] == "notify":
-            desk: Desk = self.server.desk  # type: ignore[attr-defined]
-            text = str((body or {}).get("text") or "") if isinstance(body, dict) else ""
-            if desk.notify(parts[1], parts[2], text):
+            if self.desk.notify(parts[1], parts[2], str(body.get("text") or "")):
                 return self._json({"ok": True})
             return self._json({"error": "unknown worker"}, 403)
+        if parts[0] == "api":
+            user = verify_firebase(str(body.get("idToken") or ""))
+            if user is None:
+                return self._json({"error": "Sign in again."}, 401)
+            try:
+                return self._json(self.api("/".join(parts[1:]), user, body))
+            except HttpError as error:
+                return self._json({"error": str(error)}, 400)
         self._json({"error": "not found"}, 404)
+
+    def api(self, route: str, user: dict, body: dict) -> dict[str, Any]:
+        desk, key = self.desk, Desk.web_key(user["uid"])
+        if route == "me":
+            machine = desk.machine(key)
+            out: dict[str, Any] = {"email": user["email"], "machine": machine,
+                                   "linked": key in (desk.state.get("conversations") or {})}
+            if machine["status"] == "ready":
+                try:
+                    out["setup"] = json.loads(desk.ask(key, "/setup.json"))
+                except (HttpError, ValueError):
+                    out["setup"] = None  # waking up: the page asks again
+            return out
+        if route == "machine":
+            return desk.create_machine(key)
+        if route == "claude":
+            reply = desk.ask(key, "/claude")
+            link = URL.search(reply)
+            return {"link": link.group(0) if link else "", "reply": reply}
+        if route == "claude/code":
+            code = str(body.get("code") or "").strip()
+            if not re.fullmatch(r"\S{8,}", code):
+                raise HttpError("paste the whole code the Claude page showed you")
+            return {"reply": desk.ask(key, f"/claude code {code}")}
+        if route == "github":
+            reply = desk.ask(key, "/github")
+            code = GH_CODE.search(reply)
+            return {"code": code.group(1) if code else "", "link": "https://github.com/login/device",
+                    "reply": reply}
+        if route == "repo":
+            repo = str(body.get("repo") or "").strip()
+            if not re.fullmatch(r"(?:https://github\.com/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?(?:\.git)?/?", repo):
+                raise HttpError("use owner/name, e.g. sankhya-ai/Skye")
+            return {"reply": desk.ask(key, f"/repo {repo}")}
+        if route == "telegram":
+            return desk.set_telegram(key, str(body.get("token") or ""))
+        if route == "link":
+            return {"code": desk.link_code(key), "imessage": _env("SKYE_IMESSAGE"),
+                    "telegram": _env("SKYE_TELEGRAM_BOT")}
+        raise HttpError("unknown request")
 
 
 def from_env() -> Desk:

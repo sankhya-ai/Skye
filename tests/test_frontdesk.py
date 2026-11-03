@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -86,6 +87,10 @@ class Fake:
                     return self._out({"ok": True})
                 if path.endswith("/restart"):
                     return self._out({"ok": True})
+                if path.startswith("/bot") and path.endswith("/getMe"):
+                    if "good" not in path:
+                        return self._out({"ok": False}, 401)
+                    return self._out({"ok": True, "result": {"username": "MySkyeBot"}})
                 if path.endswith("/chat"):
                     agent_id = path.split("/")[3]
                     fake.chats.append((agent_id, body["message"]))
@@ -327,3 +332,79 @@ def test_maritime_chat_route(worker, monkeypatch):
     finally:
         bot.stop_event.set()
         chat._bot = None
+
+
+# -- the website's setup API ------------------------------------------------------------------
+
+def call_api(base: str, route: str, body: dict | None = None, origin: str = "https://skye.sankhyaailabs.com"):
+    request = urllib.request.Request(f"{base}/api/{route}", data=json.dumps({"idToken": "tok", **(body or {})}).encode(),
+                                     headers={"Content-Type": "text/plain", "Origin": origin})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read()), response.headers
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read()), error.headers
+
+
+def test_website_sets_up_a_machine_and_signs_in(tmp_path, fake, monkeypatch):
+    monkeypatch.setattr(frontdesk.time, "sleep", lambda s: None)
+    monkeypatch.setattr(frontdesk, "verify_firebase",
+                        lambda token: {"uid": "u1", "email": "a@b.c"} if token == "tok" else None)
+    monkeypatch.setenv("SKYE_TELEGRAM_API", fake.url)
+    replies = {"/setup.json": json.dumps({"claude": {"signed_in": False}}),
+               "/claude": "To sign in:\nhttps://claude.com/cai/oauth/authorize?x=1\nsend it here",
+               "/github": "Open https://github.com/login/device\n2. Enter the code AB12-CD34"}
+    fake.answer = lambda agent_id, message: replies.get(message, f"echo: {message}")
+    desk = make_desk(tmp_path, fake)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), frontdesk.DeskHandler)
+    server.desk = desk  # type: ignore[attr-defined]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, data, headers = call_api(base, "me", {"idToken": "bad"})
+        assert status == 401
+        status, data, headers = call_api(base, "me")
+        assert data["machine"] == {"status": "none"} and data["email"] == "a@b.c"
+        assert headers["Access-Control-Allow-Origin"] == "https://skye.sankhyaailabs.com"
+        assert call_api(base, "machine")[1]["status"] in ("creating", "ready")
+        assert wait_until(lambda: call_api(base, "me")[1]["machine"]["status"] == "ready")
+        (agent_id, agent), = fake.agents.items()
+        assert agent["externalId"] == frontdesk.Desk.web_key("u1")
+        assert call_api(base, "me")[1]["setup"] == {"claude": {"signed_in": False}}
+        assert call_api(base, "claude")[1]["link"] == "https://claude.com/cai/oauth/authorize?x=1"
+        assert call_api(base, "claude/code", {"code": "abc"})[0] == 400
+        assert call_api(base, "claude/code", {"code": "good-code-123"})[1]["reply"] == "echo: /claude code good-code-123"
+        assert call_api(base, "github")[1]["code"] == "AB12-CD34"
+        assert call_api(base, "repo", {"repo": "a/b; rm -rf"})[0] == 400
+        assert call_api(base, "repo", {"repo": "sankhya-ai/Skye"})[1]["reply"] == "echo: /repo sankhya-ai/Skye"
+
+        assert call_api(base, "telegram", {"token": "nope"})[0] == 400
+        status, data, _ = call_api(base, "telegram", {"token": "12345:good" + "x" * 30})
+        assert data["bot"] == "MySkyeBot" and data["link"] == f"https://t.me/MySkyeBot?start={data['pair_code']}"
+        assert fake.env[agent_id]["SKYE_TELEGRAM_PAIR_CODE"] == data["pair_code"]
+
+        # Linking an iMessage conversation to this account: it then talks to the same machine.
+        code = call_api(base, "link")[1]["code"]
+        desk.answer(turn("t1", "+15550001", f"link {code.lower()}"))
+        assert fake.sent[-1][1].startswith("Linked.")
+        desk.answer(turn("t2", "+15550001", "status"))
+        assert fake.chats[-1] == (agent_id, "status") and len(fake.agents) == 1
+        assert call_api(base, "me")[1]["linked"] is True
+        desk.answer(turn("t3", "+15550002", f"link {code}"))  # used up
+        assert "isn't valid" in fake.sent[-1][1]
+    finally:
+        server.shutdown()
+
+
+def test_worker_setup_state_and_explicit_claude_code(worker, monkeypatch):
+    bot = chat.ChatBot(worker)
+    bot.say("queued news")  # no desk: waits in the outbox
+    state = json.loads(bot.reply("/setup.json"))
+    assert state["claude"] == {"signed_in": False, "plan": "", "pending": False}
+    assert state["telegram"]["configured"] is False
+    assert bot.reply("/claude code some-code-123").startswith("queued news")  # outbox kept for a person
+    assert "didn't work" in bot.reply("/claude code some-code-123")
+    started = []
+    monkeypatch.setattr(bot, "_task", lambda goal, solo: started.append(goal))
+    bot.reply("/claude code another-code")
+    assert started == []

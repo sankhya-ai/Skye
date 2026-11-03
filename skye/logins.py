@@ -170,20 +170,31 @@ def claude_begin() -> tuple[PtyLogin, str]:
     return login, url[:half] if half > 0 else url
 
 
-def claude_finish(login: PtyLogin, code: str, timeout: float = 60) -> dict[str, Any]:
-    """Type the code the sign-in page showed into the waiting CLI and report the result."""
+CLAUDE_FAILED = re.compile(r"(?i)\b(error|invalid|expired|failed|denied)\b")
+
+
+def claude_finish(login: PtyLogin, code: str, timeout: float = 18) -> dict[str, Any]:
+    """Type the code the sign-in page showed into the waiting CLI and report the result -
+    quickly: a chat is waiting, so stop as soon as the CLI exits, says it failed, or the
+    sign-in shows up as done."""
     code = code.strip()
     if not code or not login.alive:
         return {"ok": False, "detail": "that sign-in is no longer waiting - send /claude again"}
+    before = len(login.output)
     login.send(code)
-    login.wait(timeout)
+    deadline = time.monotonic() + timeout
+    while login.alive and time.monotonic() < deadline:
+        login.wait(2)
+        if not login.alive or CLAUDE_FAILED.search(login.output[before:]) or claude_status()["logged_in"]:
+            break
     status = claude_status()
     if status["logged_in"]:
         login.stop()
         return {"ok": True, **status}
-    tail = login.output.strip().splitlines()[-3:]
+    said = [line.strip() for line in login.output[before:].splitlines()
+            if line.strip() and "http" not in line and code not in line]
     login.stop()
-    return {"ok": False, "detail": " ".join(tail)[-300:] or "the code was not accepted"}
+    return {"ok": False, "detail": " ".join(said[-2:])[-200:] or "the code was not accepted"}
 
 
 # -- GitHub ---------------------------------------------------------------------------------
