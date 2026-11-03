@@ -38,7 +38,8 @@ export function ApprovalCard({
       <p className="mb-2 text-xs text-muted-foreground">
         {String(contract.adapter ?? "?")} · {String(contract.role ?? "?")}
         {contract.budget && typeof contract.budget === "object"
-          ? ` · up to ${String((contract.budget as Record<string, unknown>).max_steps ?? "?")} steps`
+            && (contract.budget as Record<string, unknown>).max_steps != null
+          ? ` · up to ${String((contract.budget as Record<string, unknown>).max_steps)} steps`
           : ""}
       </p>
       <details className="mb-2">

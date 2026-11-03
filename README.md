@@ -1,210 +1,163 @@
-# Skye
+<img width="1600" height="520" alt="skye" src="docs/banner.svg" />
 
-**An autonomous engineering team in a box.** Hand Skye a goal. A team of coding agents plans it,
-builds it, reviews it and checks it, and stops to ask you before anything that needs your say-so.
-
-Skye runs on your machine and drives the coding agents you already use. It does not ship a model,
-resell tokens or download an agent for you.
-
-[Quick start](#quick-start) | [How it works](#how-it-works) | [Workers](#workers) | [Screens](#screens) | [Honest status](#honest-status) | [License](#license)
+<h1 align="center">skye</h1>
 
 <p align="center">
-  <img src="docs/assets/readme/mission-done.webp" alt="A finished Skye mission for a demo shop: the workflow graph shows the plan and build steps done, and the changed-files list previews a cart poster SVG produced in the run" width="100%">
+  <strong>An engineering team of coding agents, on your machine.</strong><br />
+  Hand Skye a goal. A team of agents plans it, builds it, reviews it and checks it, and stops to ask you before anything that needs your say-so.
 </p>
 
 <p align="center">
-  <sub><em>A demo mission in the local UI - scripted, no model calls.</em></sub>
+  <a href="#get-started"><strong>Get started</strong></a> ·
+  <a href="#how-a-task-runs">How it works</a> ·
+  <a href="#workers">Workers</a> ·
+  <a href="#questions">Questions</a> ·
+  <a href="#honest-status">Status</a>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" /></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776ab?style=flat-square" alt="Python 3.10 or later" />
+  <img src="https://img.shields.io/badge/works%20with-Claude%20Code%20·%20Codex%20·%20Root-4e83b0?style=flat-square" alt="Works with Claude Code, Codex and Root" />
+  <img src="https://img.shields.io/badge/runs-locally-70852f?style=flat-square" alt="Runs locally" />
+</p>
+
+<p align="center">
+  Built at <a href="https://github.com/sankhya-ai">Sankhya AI Labs</a>. Free and open source.
 </p>
 
 ---
 
-## What Skye gives you
+<img alt="A finished Skye task: the Result panel shows a live preview of the coffee shop landing page the team built" src="docs/assets/readme/result-preview.webp" />
 
-- **A team, not a single agent.** Standard roles (developer, senior dev, backend, frontend,
-  reviewer, designer, artist, PM, tester, explorer, devops), each with its own instructions and an
-  explicit tool catalogue. You can add or refine roles, and workers can propose new specialists,
-  which stay inactive until you promote them.
-- **Saved teams with a lead.** Create a team once - a lead plus the members it may delegate to,
-  optionally tied to projects - then pick it when you start a Team task. The lead plans the work
-  and Skye enforces the roster: the lead can only delegate to its members, and every member
-  session still passes the usual policy check or your one-time approval before it runs.
-- **Workflows that grow as they run.** A mission is a persisted workflow of steps with handoffs and
-  conditions. A finished step can propose follow-up steps. Independent steps run in parallel, and
-  every transition is journaled so a crash resumes instead of restarting.
-- **You stay in charge.** An owner policy decides what runs unattended. Everything else waits for a
-  one-time approval tied to the exact contract. Ideas for new work land in a backlog and need your
-  approval before they start.
-- **Review before delivery.** A second worker reviews the first and must return an explicit pass.
-  A review can send work back with feedback for a bounded number of rounds.
-- **Live control of running work.** Watch output and progress, send follow-ups to a running agent
-  with honest delivery status, continue a recorded session or start a step fresh, and stop a run
-  with confirmed-stop and uncertain states kept separate.
-- **Tickets that remember.** Backlog items are tickets with labels and a permanent thread. A bug
-  found on delivered work reopens the same ticket with its evidence.
-- **A local UI.** `skye run` opens missions, run traces, the journal and approvals in your
-  browser (served on 127.0.0.1 only). It also shows your Claude Code plan and usage limits.
-- **A model per agent.** Pick Opus, Sonnet or Haiku for each role on the Agents screen. For
-  example: planner and reviewer on Opus, developers on Sonnet.
-- **No LLM in the coordination path.** Dispatch, policy, approvals and gates are plain code. Tokens
-  are spent only inside the workers, on your own subscriptions or keys.
+One coding agent is great at one task. Real goals need a few: someone to plan, someone to build the backend, someone for the screen, someone to check the work. Skye is that team. It runs on the coding agents you already use, keeps every step on the record, and never lets work outside your rules run without asking.
 
-## How it works
+Skye does not ship a model, resell tokens or download an agent for you. Tokens are spent only inside the workers, on your own subscription.
 
-```
-goal -> contract -> policy check -> worker -> gates -> delivery
+## What it does
 
-policy check: outside the policy? needs-owner, approve once
-worker:       Root, Claude Code or Codex
-gates:        output contract, tests, reviewer verdict, journey check
-```
+| | |
+|---|---|
+| **A team, not one agent** | Built-in roles (developer, frontend, backend, reviewer, designer, tester, devops, PM and more), each with its own instructions and tools. Add your own; workers can propose new specialists, which wait until you promote them. |
+| **Saved teams with a lead** | Save a lead and the members it may delegate to. The lead plans; Skye enforces the roster, so it can only hand work to its members. Off-roster work pauses the task for you. |
+| **Workflows that grow as they run** | Steps hand off to each other, run in parallel when they can, and may propose follow-up steps. Every transition is journaled, so a crash resumes instead of restarting. |
+| **You stay in charge** | A policy decides what runs unattended. Everything else waits for a one-time approval tied to the exact step. New ideas land in a backlog for you to approve. |
+| **Review before delivery** | Your test command, a reviewer that must say pass, and an optional journey check you own all gate the result. |
+| **See the result, then bring it in** | Every task works on its own git branch. Preview the site it built, read the answer, check the changed files, then **Bring into my project**. |
+| **Live control** | Watch each agent's conversation, send a follow-up mid-run, stop a run, or hand a failed step to the team lead. |
+| **A model per agent** | Opus for the planner and reviewer, Sonnet for developers, Haiku for exploring, or whatever you pick. |
 
-1. You write a **contract**: goal, repo, role, adapter, gates and a small brief.
-2. Skye checks it against your **policy**. Anything outside the policy comes back `needs-owner`.
-3. A **worker** does the job in your repo through its adapter.
-4. **Gates** decide whether the result counts: a contract check on the output, your test command,
-   and a reviewer who must say pass. Delivery can also require replaying a journey check you own.
-5. Lifecycle events go to a local `events.jsonl`, or to a Chamber line if you configure one.
+<table>
+<tr>
+<td width="50%"><img alt="Home: describe a goal, pick a project and a saved team" src="docs/assets/readme/home.webp" /><p align="center"><sub>Describe the goal, pick a team</sub></p></td>
+<td width="50%"><img alt="An agent's conversation inside a task, with the team graph on the left" src="docs/assets/readme/agent-conversation.webp" /><p align="center"><sub>Open any agent's conversation</sub></p></td>
+</tr>
+<tr>
+<td width="50%"><img alt="A step outside the policy waiting for a one-time approval" src="docs/assets/readme/approval.webp" /><p align="center"><sub>Nothing outside your policy runs without you</sub></p></td>
+<td width="50%"><img alt="The Teams screen: a saved team with a lead and its members" src="docs/assets/readme/teams.webp" /><p align="center"><sub>Saved teams with a lead</sub></p></td>
+</tr>
+</table>
 
-## Solo, ad-hoc team or saved team
+<p align="center"><sub>Screens from a scripted demo task: no model calls.</sub></p>
 
-Every goal starts one of three ways from the Home composer:
+## Get started
 
-- **Solo** - one worker session does the goal directly, like driving the CLI yourself. Fewest
-  tokens, no planning session.
-- **Ad-hoc team** - a planning session reads the goal and proposes the smallest workflow, which
-  the engine validates and dispatches step by step.
-- **A saved team** - you pick a team you created on the Teams screen. Its lead runs the planning
-  session and may only delegate to the members you saved into the roster: a proposed step for any
-  other role is rejected and journaled, and if nothing in the roster ran, the task pauses for you
-  instead of pretending it is done. Saving a team runs nothing and grants nothing - membership
-  constrains the lead, it never widens what may run. Handoffs between members are settled
-  outcomes plus the async team line; nobody pushes into a member's running session.
-
-Teams live in `skye.teams.json` (owner-managed, like the policy and roles files). A team's
-missions snapshot their roster at creation, so editing the team later never retargets work
-already defined. The review gate's reviewer, like the lead, is a policy role that judges work
-and never authors it, so it runs outside the roster by design; the roster constrains who may
-be delegated work.
-
-## When a step fails
-
-A failed step stays on the record - the mission keeps the attempt, its timing and its error, and
-the mission itself stops instead of pretending the work landed. From there you have two ways
-back:
-
-- **Recover it in place.** Open the failed member and follow up, or reset the step and run it
-  again.
-- **Hand it to the lead.** One click in the UI (or `skye mission handoff <mission.json> --step
-  <id>`) journals a `recovery-handoff` event: the failure is recorded as handed over, the
-  mission no longer counts that step as its own failure, and the lead is queued to answer with
-  the failure in its brief. The lead answers through the ordinary validated path - roster,
-  policy and gates all still apply - so a handoff never widens what may run. The handed-off
-  member never runs again on its own for that step; the record keeps both the failure and who
-  took it over.
-
-Every dispatch of every member is kept as a run - start, end, state, duration and error - so the
-member's inspector and the mission console can show the full history of attempts, not just the
-latest state.
-
-## Workers
-
-| Worker | What it is |
-| --- | --- |
-| **Root** (vendored in `root/`) | An open coding agent with dynamic tools, scoped jobs and missions that park and resume. Best integrated: Skye uses its real owner HTTP API and reattaches to interrupted jobs. Optional. |
-| **Claude Code** | Your local install, driven through its CLI. Your login, your subscription. |
-| **Codex** | Your local install, driven through `codex app-server` (JSON-RPC over stdio), with a one-shot `codex exec` fallback when the app-server is unusable before a turn starts. Your login, your subscription. |
-
-**Chamber** (vendored in `chamber/`) is the built-in coordination layer. Skye uses its relay to
-carry sealed team messages when you configure a line, and it stays optional for the engine, the
-journal, approvals and the UI.
-
-## Screens
-
-The local UI (`skye run`), pictured on a scripted demo mission - no model calls, no cost.
-
-**Watch a mission run.** Steps report live, and you can follow up on the running step or stop it.
-
-<p align="center">
-  <img src="docs/assets/readme/mission-running.webp" alt="A live mission: the plan step is done, the build step is running, with links to follow up on the running step or stop the run" width="100%">
-</p>
-
-**Nothing outside your policy runs without you.** An out-of-policy step waits for a one-time approval tied to the exact contract.
-
-<p align="center">
-  <img src="docs/assets/readme/approval.webp" alt="A mission paused for approval: the plan step shows needs-you, and an approval card offers to approve this step once while the team discussion sits below" width="100%">
-</p>
-
-**Tickets remember.** Proposals, approvals, repairs and verified deliveries keep their thread and their evidence.
-
-<p align="center">
-  <img src="docs/assets/readme/backlog.webp" alt="The backlog: reopened and proposed tickets waiting on a decision, approved work ready to start, a verification failure with its replay evidence, and a delivered ticket resolved by a passing journey replay" width="100%">
-</p>
-
-**A team of roles that workers can extend.** Proposed specialists stay inactive until you promote them.
-
-<p align="center">
-  <img src="docs/assets/readme/agents.webp" alt="The agents screen: built-in roles with their tool lists, one worker-proposed security-auditor role marked needs-approval, and a form to add a new specialist" width="100%">
-</p>
-
-## Quick start
-
-You need Python 3.10+, git and [Claude Code](https://claude.com/claude-code), logged in (run
-`claude` once). You don't need Node: the UI ships prebuilt.
+You need Python 3.10+, git and [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex), logged in. You don't need Node: the UI ships prebuilt.
 
 ```sh
 git clone https://github.com/sankhya-ai/Skye.git && cd Skye
 ./install        # one time: sets up .venv/ and puts `skye` on your PATH
-skye run         # every time, from any folder: starts Skye and opens it in your browser
+skye run         # starts Skye and opens it in your browser
 skye stop        # when you're done
 ```
 
-In the browser:
+Then, in the browser:
 
-1. **Choose your project folder** (a native folder picker). If the folder isn't a git
-   repository yet, Skye offers to make it one.
-2. **Describe the goal** and pick how to staff it:
-   - **Team**: a one-turn planning session sizes the team. Usually that's a single developer.
-     Larger goals get a few parallel specialists.
-   - **Solo**: one developer session with no planning. This uses the fewest tokens.
-3. **Watch it run**, send follow-ups to a running step, then press **Bring into my project**.
+1. **Add your project folder.** If it isn't a git repository yet, Skye offers to make it one.
+2. **Describe the goal** and choose how to staff it: **Solo** (one session, fewest tokens), **Team** (a planner sizes the team), or one of your **saved teams**.
+3. **Watch it run**, preview the result, then press **Bring into my project**.
 
-**Your files stay safe.** Each mission works in its own git worktree on branch
-`skye/<mission-id>`. "Bring into my project" is a plain `git merge` into your current branch.
-Git won't overwrite your own uncommitted edits, a conflict is aborted and explained, and caches
-such as `__pycache__` and `node_modules` are never brought in.
+**Your files stay safe.** Each task works in its own git worktree on branch `skye/<task-id>`. Bringing it in is a plain `git merge` into your current branch: git won't overwrite your uncommitted edits, a conflict is aborted and explained, and caches like `node_modules` are never brought in.
 
-**Models per agent.** On the **Agents** screen every role has a model picker. The defaults are:
-- planner (`pm`) and reviewer: Opus
-- developers, tester, designer, devops: Sonnet
-- explorer: Haiku
+<details>
+<summary>What the first run sets up</summary>
 
-Each step on a mission page shows which model it ran on.
+In `.skye/policy.json`, editable in **Settings**:
 
-**Claude usage is in the sidebar.** The card shows your plan, the 5-hour and weekly limits (how
-much is left and when they reset) and what Skye itself used. The data comes from `claude auth
-status` and from the rate-limit reports Claude Code sends during runs, so checking it costs no
-tokens. The numbers are as of the last run.
+- Claude Code and Codex steps run without a per-step approval click. Starting a task is your go-ahead.
+- Tasks get worktrees, and up to 2 steps run in parallel.
+- No test command is set. Add one (e.g. `pytest -q`) and every step must pass it.
+- Workers get exactly their role's tools and no MCP tools. Your interactive Claude Code hooks and MCP servers don't run inside workers.
+- Model defaults: planner and reviewer on Opus; developers, tester, designer and devops on Sonnet; explorer on Haiku.
 
-**What the first run sets up** (in `.skye/policy.json`, editable in Settings):
-- Claude Code steps run without a per-step approval click. Starting a mission is your go-ahead.
-- Missions get worktrees, and up to 2 steps run in parallel.
-- No test command is set. Add one (e.g. `pytest -q`) and every step must pass it. Without one,
-  the default tests gate is recorded as *skipped*.
-- Workers get exactly their role's tools (`--allowedTools` plus `--permission-mode dontAsk`)
-  and no MCP tools. Your interactive Claude Code hooks and MCP servers don't run inside workers.
+The sidebar shows your Claude plan, your 5-hour and weekly limits and what Skye used, read from `claude auth status` and the rate-limit reports Claude Code sends during runs. Checking it costs no tokens.
 
-### Command line (advanced)
+</details>
+
+## How a task runs
+
+```
+goal -> plan -> policy check -> workers -> gates -> result -> bring into my project
+```
+
+1. **Plan.** Solo skips planning. Otherwise a planner (or your team's lead) proposes the smallest workflow, and Skye validates every step.
+2. **Policy check.** A step outside your policy waits for a one-time approval of exactly that step.
+3. **Workers.** Each step is a session of your own Claude Code, Codex or Root, in the task's worktree, with its role's tools.
+4. **Gates.** The output contract, your test command, and a reviewer that must say pass. Delivery can also require replaying a journey check you own.
+5. **Result.** Preview the site, read the answer, check the changes, and bring it in.
+
+**When a step fails**, the attempt stays on the record and the task stops instead of pretending. Follow up with that agent, reset the step, or **hand it to the lead**: the lead answers through the same validated path (roster, policy and gates still apply), once per handoff. Every attempt is kept as a run, so you see the whole history, not just the last state.
+
+No LLM sits in the coordination path. Dispatch, policy, approvals and gates are plain code.
+
+## Workers
+
+| Worker | How Skye drives it |
+| --- | --- |
+| **Claude Code** | Your local install, through its CLI with streaming JSON. Your login, your subscription. |
+| **Codex** | Your local install, through `codex app-server` (JSON-RPC over stdio), falling back to `codex exec` if the app-server can't start. Read-only roles run in Codex's `read-only` sandbox, writing roles in `workspace-write`, and Skye declines every escalation request. |
+| **Root** (vendored in `root/`) | An open coding agent with scoped jobs that park and resume. Skye uses its owner HTTP API and reattaches to interrupted jobs. Optional. |
+
+**Chamber** (vendored in `chamber/`) can carry sealed team messages between agents when you configure a line. It's optional.
+
+## Questions
+
+**Do I need an API key or a new subscription?** No. Skye drives the Claude Code or Codex you're already logged into.
+
+**Can I use Codex instead of Claude Code?** Yes. Pick Codex as the worker when you start a task, or per role. With both installed, Claude Code is the default.
+
+**Will it change my code without asking?** Agents work on their own branch in a separate worktree. Your project changes only when you press **Bring into my project**.
+
+**What can an agent do on my machine?** What its role's tool list allows. Those lists are guards your coding agent enforces, not an OS sandbox: a role with Bash can do what Bash can.
+
+**Does anything leave my machine?** The UI is served on `127.0.0.1` only and needs a local token. Your coding agent talks to its own provider, as it always does.
+
+## Honest status
+
+Skye is a working local core, not a finished product.
+
+- **Verified:** the test suite (402 passed at the last full run), real end-to-end jobs against the vendored Root with its scripted model, and browser checks of the UI.
+- **Verified with real Claude Code:** a Solo and a Team task on a small Python project: both edited files, passed the test gate and were brought back in. Each took 10-20 seconds and a few cents at API prices.
+- **Not yet verified:** real Codex runs (the adapter is tested against a protocol fake), large multi-step tasks with real models, and planning quality on real apps.
+- **Not built:** the hosted edition and multi-machine teams. See [docs/editions.md](docs/editions.md).
+
+Every enforced control and its known limits are in [docs/technical-status.md](docs/technical-status.md).
+
+<details>
+<summary>Command line</summary>
+
+The UI does everything, but there is a CLI for scripting:
 
 ```sh
 skye check examples/job.json            # validate a contract
 skye run examples/job.json              # one contract: policy check -> worker -> gates
 skye approve examples/job.json          # one-time approval of exactly that contract
-skye mission run examples/flow.json     # run or resume a workflow you wrote yourself
-skye mission status examples/flow.json  # show mission progress
+skye mission run examples/flow.json     # run or resume a workflow you wrote
+skye mission status examples/flow.json  # show its progress
+skye mission handoff <mission.json> --step <id>   # hand a failed step to the lead
 ```
 
-`examples/job.json` is a contract (set `repo` to a real path first). `examples/flow.json` is a
-two-step workflow you author yourself (PM scopes, developer builds). A contract looks like this:
+A contract looks like this:
 
 ```json
 {"goal": "add the health endpoint", "repo": "/path/to/repo", "role": "developer",
@@ -212,32 +165,14 @@ two-step workflow you author yourself (PM scopes, developer builds). A contract 
  "brief": "Small self-contained brief for the worker."}
 ```
 
-For the `root` adapter, start the vendored Root server locally. Skye finds it with `SKYE_ROOT_URL`
-(default `http://127.0.0.1:8788`) and authenticates with `SKYE_ROOT_TOKEN` or Root's local token
-file. To publish events to a Chamber line, set `SKYE_LINE_INVITE` and `SKYE_LINE_TO`.
+Saved teams live in `skye.teams.json` (or `SKYE_TEAMS`). A task snapshots its team's roster when it starts, so editing the team later never retargets work already running.
 
-## Honest status
+For the `root` adapter, start the vendored Root server; Skye finds it at `SKYE_ROOT_URL` (default `http://127.0.0.1:8788`). To publish events to a Chamber line, set `SKYE_LINE_INVITE` and `SKYE_LINE_TO`.
 
-Skye is a working local core, not a finished product.
-
-- **Verified:** the Skye test suite (363 passed, 1 skipped at the last full run), real end-to-end
-  jobs against the vendored Root using its scripted model, and browser checks of the UI.
-- **Verified with real Claude Code:** a Solo mission and a Team mission (planner, then one
-  developer) on a small Python project. Both edited files, passed the test gate and were merged
-  back with "Bring into my project". Each took 10-20 seconds and a few cents at API prices.
-- **Not yet verified:** real Codex runs, large multi-step missions with real models, and design
-  or planning quality on real apps.
-- **Not a sandbox:** tool catalogues and write claims are cooperative guards, not OS security
-  boundaries. A role whose catalogue includes Bash can do anything Bash can.
-- **Not built:** the hosted edition and multi-machine teams. See `docs/editions.md`.
-
-The detailed engineering notes, including every enforced control and its known limits, are in
-`docs/technical-status.md`.
+</details>
 
 ## License
 
-Skye is released under the **Apache License 2.0**. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).
 
-Vendored and adapted code keeps its own notices: `chamber/LICENSE` and `chamber/NOTICE`,
-`root/runtime/LICENSE` and `root/runtime/NOTICE`, and `skye/ui/NOTICE` for the UI components
-adapted from Apache-2.0 projects. See `VENDORING.md` for sources and versions.
+Vendored and adapted code keeps its own notices: `chamber/LICENSE` and `chamber/NOTICE`, `root/runtime/LICENSE` and `root/runtime/NOTICE`, and `skye/ui/NOTICE` for UI components adapted from Apache-2.0 projects. See `VENDORING.md` for sources and versions.

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" role="img" aria-label="skye: hand it a goal, a team of coding agents plans, builds and checks it">
+  <defs>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <rect width="22" height="22" fill="#f6f6f4"/>
+      <circle cx="11" cy="11" r="1.4" fill="#17181b" fill-opacity="0.12"/>
+    </pattern>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#17181b" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="520" fill="url(#dots)"/>
+  <text x="120" y="250" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="120" font-weight="700" letter-spacing="-4" fill="#17181b">skye</text>
+  <circle cx="381" cy="236" r="13" fill="#4e83b0"/>
+  <text x="124" y="318" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="34" fill="#6b6f76">Hand it a goal. A team of agents ships it.</text>
+  <g filter="url(#soft)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="21">
+    <path d="M1210 160 V 196 M1210 290 V 326" stroke="#9aa3ad" stroke-width="2" fill="none"/>
+    <rect x="930" y="96" width="560" height="64" rx="14" fill="#ffffff" stroke="#e4e4e1"/>
+    <circle cx="966" cy="128" r="13" fill="#e4dcf5"/><text x="960" y="135" font-weight="600" font-size="16" fill="#5b3fa8">P</text>
+    <text x="992" y="135" font-weight="600" fill="#17181b">Planner</text>
+    <text x="1090" y="135" fill="#6b6f76">split the goal into 2 steps</text>
+    <circle cx="1462" cy="128" r="9" fill="#70a35a"/>
+    <rect x="930" y="196" width="270" height="94" rx="14" fill="#ffffff" stroke="#e4e4e1"/>
+    <circle cx="966" cy="228" r="13" fill="#d6e3ef"/><text x="959" y="235" font-weight="600" font-size="16" fill="#2c4f6c">D</text>
+    <text x="992" y="235" font-weight="600" fill="#17181b">Developer</text>
+    <text x="952" y="270" fill="#6b6f76" font-size="18">menu.js · done</text>
+    <circle cx="1174" cy="228" r="9" fill="#70a35a"/>
+    <rect x="1220" y="196" width="270" height="94" rx="14" fill="#ffffff" stroke="#e4e4e1"/>
+    <circle cx="1256" cy="228" r="13" fill="#f3d9c8"/><text x="1250" y="235" font-weight="600" font-size="16" fill="#7a4a2a">F</text>
+    <text x="1282" y="235" font-weight="600" fill="#17181b">Frontend</text>
+    <text x="1242" y="270" fill="#6b6f76" font-size="18">index.html · done</text>
+    <circle cx="1464" cy="228" r="9" fill="#70a35a"/>
+    <rect x="930" y="326" width="560" height="96" rx="14" fill="#ffffff" stroke="#e4e4e1"/>
+    <circle cx="966" cy="362" r="13" fill="#dcebd3"/><text x="960" y="369" font-weight="600" font-size="16" fill="#3f6b2c">R</text>
+    <text x="992" y="369" font-weight="600" fill="#17181b">Result</text>
+    <text x="992" y="400" fill="#3d3f44">Tests pass, review pass. Bring into my project?</text>
+  </g>
+</svg>
