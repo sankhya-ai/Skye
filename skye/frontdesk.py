@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import threading
@@ -44,6 +45,12 @@ TURN_BUDGET = 540.0  # inside Keiki's ten-minute turn deadline
 LEASE_EVERY = 45.0
 BACKOFF = (1, 2, 5, 10, 30, 60)
 NOTE_LIMIT = 30
+
+TRIAL_DAYS = 7
+PAID_DAYS = 31
+DAY = 86400.0
+PAYWALL = ("Your 7-day Skye trial has ended. Your machine and your work are kept; subscribe to carry "
+           "on: {url}")
 
 WELCOME = ("Hi, I'm Skye: a team of coding agents on a cloud machine of your own, using your own "
            "Claude. Setting your machine up now. It takes a minute or two, only this once.")
@@ -276,6 +283,8 @@ class Desk:
                 linked = LINK.fullmatch(text)
                 if linked:
                     send(self.link(conversation, linked.group(1)))
+                elif text and self.plan(self.key_for(conversation))["status"] == "expired":
+                    send(PAYWALL.format(url=self.pay_url()))
                 elif text:  # a notice-only turn (silent) carries just the notes above
                     reply = self._ask_worker(conversation, text, send)
                     if reply:
@@ -337,6 +346,7 @@ class Desk:
             if agent is None:
                 send(WELCOME)
                 agent = self._create(key)
+                self.start_trial(key)
             agent_id = str(agent["id"])
             def remember(state: dict) -> None:
                 state.setdefault("workers", {})[key] = agent_id
@@ -418,7 +428,9 @@ class Desk:
         threading.Thread(target=build, daemon=True, name=f"desk-build-{key[:12]}").start()
         return {"status": "creating"}
 
-    def ask(self, key: str, message: str) -> str:
+    def ask(self, key: str, message: str, *, gated: bool = True) -> str:
+        if gated and self.plan(key)["status"] == "expired":
+            raise HttpError(PAYWALL.format(url=self.pay_url()))
         agent_id = (self.state.get("workers") or {}).get(key)
         if not agent_id:
             raise HttpError("no machine yet")
@@ -466,6 +478,56 @@ class Desk:
             state.setdefault("link_codes", {}).pop(code.upper(), None)
         self._update(apply)
         return "Linked. This chat now talks to the Skye you set up on the website. Send help to see what I can do."
+
+    # -- the plan: a 7-day trial from the machine's first day, then paid ------------------
+    def plan(self, key: str) -> dict[str, Any]:
+        account = (self.state.get("accounts") or {}).get(key)
+        if account is None and key in (self.state.get("workers") or {}):
+            account = self._update(lambda s: s.setdefault("accounts", {}).setdefault(
+                key, {"trial_started": time.time()}))
+        if account is None or (not account.get("trial_started") and not account.get("paid_until")):
+            return {"status": "new", "trial_days": TRIAL_DAYS}
+        now = time.time()
+        paid_until = float(account.get("paid_until") or 0)
+        if paid_until > now:
+            return {"status": "active", "ends_at": paid_until, "days_left": math.ceil((paid_until - now) / DAY)}
+        trial_end = float(account.get("trial_started") or now) + TRIAL_DAYS * DAY
+        if trial_end > now:
+            return {"status": "trial", "ends_at": trial_end, "days_left": math.ceil((trial_end - now) / DAY)}
+        return {"status": "expired", "ended_at": max(trial_end, paid_until)}
+
+    def remember_account(self, key: str, email: str = "", uid: str = "") -> None:
+        def note(state: dict) -> None:
+            account = state.setdefault("accounts", {}).setdefault(key, {})
+            if email:
+                account["email"] = email.lower()
+            if uid:
+                account["uid"] = uid
+        self._update(note)
+
+    def start_trial(self, key: str) -> None:
+        self._update(lambda s: s.setdefault("accounts", {}).setdefault(key, {}).setdefault(
+            "trial_started", time.time()))
+
+    def extend(self, email: str, days: float = PAID_DAYS, until: float | None = None) -> list[str]:
+        """Mark the account(s) with this email paid: until a date, or for ``days`` from now (or
+        from the end of what's already paid, so an early renewal loses nothing)."""
+        email = email.strip().lower()
+        changed: list[str] = []
+
+        def apply(state: dict) -> None:
+            for key, account in (state.get("accounts") or {}).items():
+                if email and account.get("email") == email:
+                    start = max(time.time(), float(account.get("paid_until") or 0))
+                    account["paid_until"] = until if until else start + days * DAY
+                    changed.append(key)
+        self._update(apply)
+        return changed
+
+    @staticmethod
+    def pay_url(email: str = "") -> str:
+        base = _env("SKYE_PAY_URL") or "https://skye.sankhyaailabs.com/start.html#plan"
+        return base
 
     # -- news from workers -----------------------------------------------------------------
     def notify(self, key: str, token: str, text: str) -> bool:
@@ -539,12 +601,21 @@ class DeskHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         length = min(int(self.headers.get("Content-Length") or 0), 200_000)
+        raw = self.rfile.read(length)
         try:
-            body = json.loads(self.rfile.read(length) or b"{}")
+            body = json.loads(raw or b"{}")
         except ValueError:
             body = {}
         body = body if isinstance(body, dict) else {}
         parts = self.path.split("?")[0].strip("/").split("/")
+        if parts == ["billing", "razorpay"]:
+            return self._razorpay(raw)
+        if parts == ["admin", "activate"]:
+            secret = _env("SKYE_ADMIN_KEY")
+            if not secret or not hmac.compare_digest(str(body.get("key") or ""), secret):
+                return self._json({"error": "forbidden"}, 403)
+            changed = self.desk.extend(str(body.get("email") or ""), float(body.get("days") or PAID_DAYS))
+            return self._json({"ok": bool(changed), "accounts": len(changed)})
         if parts[0] == "chat":
             return self._json({"response": "This is Skye's front desk. Message Skye on iMessage or Telegram."})
         if len(parts) == 3 and parts[0] == "notify":
@@ -561,19 +632,49 @@ class DeskHandler(BaseHTTPRequestHandler):
                 return self._json({"error": str(error)}, 400)
         self._json({"error": "not found"}, 404)
 
+    def _razorpay(self, raw: bytes) -> None:
+        """Razorpay's webhook (payment captured, payment link paid, subscription charged):
+        signed with the webhook secret; the payer's email finds the account."""
+        secret = _env("RAZORPAY_WEBHOOK_SECRET")
+        given = self.headers.get("X-Razorpay-Signature") or ""
+        expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest() if secret else ""
+        if not secret or not hmac.compare_digest(given, expected):
+            return self._json({"error": "bad signature"}, 400)
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            return self._json({"error": "bad body"}, 400)
+        payload = event.get("payload") or {}
+        payment = (payload.get("payment") or {}).get("entity") or {}
+        subscription = (payload.get("subscription") or {}).get("entity") or {}
+        notes = {**(subscription.get("notes") or {}), **(payment.get("notes") or {})}
+        email = str(notes.get("email") or payment.get("email") or "")
+        if event.get("event") not in ("payment.captured", "payment_link.paid", "subscription.charged",
+                                      "subscription.activated") or not email:
+            return self._json({"ok": True, "ignored": True})
+        until = float(subscription.get("current_end") or 0) or None
+        changed = self.desk.extend(email, until=until + DAY if until else None)
+        print(f"desk: payment for {len(changed)} account(s)", flush=True)
+        return self._json({"ok": True})
+
     def api(self, route: str, user: dict, body: dict) -> dict[str, Any]:
         desk, key = self.desk, Desk.web_key(user["uid"])
+        desk.remember_account(key, user["email"], user["uid"])
         if route == "me":
             machine = desk.machine(key)
             out: dict[str, Any] = {"email": user["email"], "machine": machine,
+                                   "plan": desk.plan(key), "pay_url": desk.pay_url(),
+                                   "price": _env("SKYE_PRICE") or "$12 / month",
                                    "linked": key in (desk.state.get("conversations") or {})}
             if machine["status"] == "ready":
                 try:
-                    out["setup"] = json.loads(desk.ask(key, "/setup.json"))
+                    out["setup"] = json.loads(desk.ask(key, "/setup.json", gated=False))
                 except (HttpError, ValueError):
                     out["setup"] = None  # waking up: the page asks again
             return out
         if route == "machine":
+            if desk.plan(key)["status"] == "expired":
+                raise HttpError(PAYWALL.format(url=desk.pay_url()))
             return desk.create_machine(key)
         if route == "claude":
             reply = desk.ask(key, "/claude")

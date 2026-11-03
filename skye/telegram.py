@@ -275,7 +275,8 @@ class Bot:
             plan = f" ({result['plan']} plan)" if result.get("plan") else ""
             self.say(f"Claude Code is signed in{plan}.\n\n{self._setup_line()}")
         else:
-            self.say(f"That didn't work: {result.get('detail') or 'unknown error'}. Send /claude to try again.")
+            detail = str(result.get('detail') or 'unknown error').rstrip('. ')
+            self.say(f"That didn't work: {detail}. Send /claude to try again.")
 
     def _github(self, arg: str) -> None:
         if arg.lower() == "status":

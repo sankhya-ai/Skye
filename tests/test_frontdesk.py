@@ -408,3 +408,74 @@ def test_worker_setup_state_and_explicit_claude_code(worker, monkeypatch):
     monkeypatch.setattr(bot, "_task", lambda goal, solo: started.append(goal))
     bot.reply("/claude code another-code")
     assert started == []
+
+
+# -- the trial and payment ----------------------------------------------------------------------
+
+def test_trial_then_paywall_then_paid(tmp_path, fake, monkeypatch):
+    import hashlib
+    import hmac as hmac_
+    monkeypatch.setattr(frontdesk.time, "sleep", lambda s: None)
+    desk = make_desk(tmp_path, fake)
+    desk.answer(turn("t1", "+15550001", "hi"))
+    key = frontdesk.external_id("+15550001")
+    plan = desk.plan(key)
+    assert plan["status"] == "trial" and plan["days_left"] == 7
+
+    # Eight days later: the trial is over; messages get the paywall, the machine is untouched.
+    later = time.time() + 8 * frontdesk.DAY
+    monkeypatch.setattr(frontdesk.time, "time", lambda: later)
+    assert desk.plan(key)["status"] == "expired"
+    chats = len(fake.chats)
+    desk.answer(turn("t2", "+15550001", "fix the bug"))
+    assert "trial has ended" in fake.sent[-1][1] and len(fake.chats) == chats
+    with pytest.raises(frontdesk.HttpError):
+        desk.ask(key, "/status")
+
+    # Paid (Razorpay webhook, signed): back to work for a month.
+    desk.remember_account(key, email="Pay@Example.com")
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "whsec")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), frontdesk.DeskHandler)
+    server.desk = desk  # type: ignore[attr-defined]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = json.dumps({"event": "payment.captured",
+                           "payload": {"payment": {"entity": {"email": "pay@example.com"}}}}).encode()
+        url = f"http://127.0.0.1:{server.server_address[1]}/billing/razorpay"
+        bad = urllib.request.Request(url, data=body, headers={"X-Razorpay-Signature": "nope"})
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(bad, timeout=5)
+        assert desk.plan(key)["status"] == "expired"
+        sig = hmac_.new(b"whsec", body, hashlib.sha256).hexdigest()
+        good = urllib.request.Request(url, data=body, headers={"X-Razorpay-Signature": sig})
+        with urllib.request.urlopen(good, timeout=5) as response:
+            assert json.loads(response.read())["ok"]
+    finally:
+        server.shutdown()
+    plan = desk.plan(key)
+    assert plan["status"] == "active" and plan["days_left"] >= 30
+    desk.answer(turn("t3", "+15550001", "fix the bug"))
+    assert fake.sent[-1][1] == "echo: fix the bug"
+
+
+def test_admin_activate_needs_the_key(tmp_path, fake, monkeypatch):
+    monkeypatch.setattr(frontdesk.time, "sleep", lambda s: None)
+    desk = make_desk(tmp_path, fake)
+    desk.remember_account("skye-" + "a" * 32, email="vip@example.com")
+    monkeypatch.setenv("SKYE_ADMIN_KEY", "adm")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), frontdesk.DeskHandler)
+    server.desk = desk  # type: ignore[attr-defined]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/admin/activate"
+    try:
+        for key, code in (("wrong", 403), ("adm", 200)):
+            request = urllib.request.Request(url, data=json.dumps({"key": key, "email": "vip@example.com",
+                                                                  "days": 31}).encode())
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    assert response.status == code
+            except urllib.error.HTTPError as error:
+                assert error.code == code
+    finally:
+        server.shutdown()
+    assert desk.plan("skye-" + "a" * 32)["status"] == "active"
