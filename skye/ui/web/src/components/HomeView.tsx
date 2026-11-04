@@ -364,7 +364,7 @@ export function HomeView({
                     title={m === "team"
                       ? "A quick planning session decides the smallest team (often one developer)"
                       : "One developer session does it directly - fewest tokens"}
-                    className={`h-full rounded-full px-2.5 transition-colors ${mode === m ? "bg-brand-soft text-foreground shadow-[inset_0_0_0_1px_var(--brand-edge)]" : "text-muted-foreground hover:text-foreground"}`}
+                    className={`h-full rounded-full px-2.5 transition-colors ${mode === m ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   >
                     {m === "team" ? "Team" : "Solo"}
                   </button>
