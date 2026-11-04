@@ -56,7 +56,7 @@ export function Select({
     if (!r) return;
     const estimate = Math.min(320, options.length * 34 + 12);
     const up = window.innerHeight - r.bottom < estimate + 12 && r.top > window.innerHeight - r.bottom;
-    const width = Math.max(r.width, menuMinWidth);
+    const width = Math.min(Math.max(r.width, menuMinWidth), Math.max(0, window.innerWidth - 16));
     const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
     setPos({ left, top: up ? r.top - 6 : r.bottom + 6, width, up });
   }, [options.length, menuMinWidth]);
