@@ -122,6 +122,21 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
     if (!step) continue;
     const ts = e.ts;
     const last = step.items[step.items.length - 1];
+    // Dispatch is recorded before policy checks. Only worker activity, reattachment,
+    // or successful settlement proves a later attempt actually got past the pause.
+    const continued = e.event === "reattached" || e.event === "worker-session"
+      || (e.event === "worker-progress" && ["message", "tool"].includes(String(e.kind)))
+      || (e.event === "settled" && e.status === "done");
+    if (continued) {
+      for (const idx of needsOwnerItems?.get(step.id) ?? []) {
+        const item = step.items[idx];
+        if (item?.type === "status") {
+          item.tone = "info";
+          item.text = "Earlier, this step paused for owner review. A later attempt continued.";
+        }
+      }
+      needsOwnerItems?.delete(step.id);
+    }
     switch (e.event) {
       case "dispatched":
       case "redispatch":
@@ -132,17 +147,6 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         step.reason = undefined;
         step.items.push({ type: "run", ts, label: RUN_LABEL[e.event] });
         step.runs.push({ startedAt: ts, label: RUN_LABEL[e.event], state: "running" });
-        // An approval pause is history once the step actually runs: keep the record,
-        // quiet and past-tense, like a resolved recovery handoff - a still-current
-        // amber warning after the approved run would misread as still blocked.
-        for (const idx of needsOwnerItems?.get(step.id) ?? []) {
-          const item = step.items[idx];
-          if (item?.type === "status") {
-            item.tone = "info";
-            item.text = "This run waited for your approval before it started - approved, it continued below.";
-          }
-        }
-        needsOwnerItems?.delete(step.id);
         break;
       case "follow-up":
       case "follow-up-submitted": {
