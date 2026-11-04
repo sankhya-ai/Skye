@@ -312,13 +312,13 @@ export function HomeView({
             autoFocus
             className="w-full resize-none bg-transparent px-1 text-[15px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
           />
-          <div className="flex items-center justify-between pt-2">
-            <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 max-sm:basis-full">
               {projects.length > 0 ? (
                 <Select
                   value={project}
                   ariaLabel="Project"
-                  className="max-w-[12rem]"
+                  className="max-w-[12rem] max-sm:max-w-full"
                   menuMinWidth={260}
                   onChange={(v) => (v === "__add" ? void addProjectFolder() : setProject(v))}
                   options={[
@@ -339,7 +339,7 @@ export function HomeView({
                 <Select
                   value={team}
                   ariaLabel="Which team staffs this goal"
-                  className="max-w-[11rem]"
+                  className="max-w-[11rem] max-sm:max-w-full"
                   menuMinWidth={280}
                   onChange={(v) => (v === "__new" ? (window.location.hash = "/teams") : setTeam(v))}
                   options={[
@@ -377,7 +377,7 @@ export function HomeView({
               onClick={() => void submit()}
               disabled={!goal.trim() || busy}
               aria-busy={busy || undefined}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-primary px-4 text-sm text-primary-foreground transition disabled:opacity-30"
+              className="ml-auto inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-primary px-4 text-sm text-primary-foreground transition disabled:opacity-30"
               aria-label="Start task"
             >
               {busy ? <Spinner className="size-4" /> : <ArrowUp className="size-4" />}
