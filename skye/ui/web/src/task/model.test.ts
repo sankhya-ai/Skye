@@ -30,7 +30,7 @@ test("an approval pause goes quiet past-tense once the approved run dispatches",
   ]);
   assert.equal(items.length, 1);
   assert.equal(items[0].type === "status" && items[0].tone, "info");
-  assert.ok(items[0].type === "status" && items[0].text.includes("waited for your approval"),
+  assert.ok(items[0].type === "status" && items[0].text.includes("paused for owner review"),
             `past-tense text, got: ${items[0].type === "status" ? items[0].text : ""}`);
 });
 
@@ -49,9 +49,39 @@ test("a second pause after a resumed run warns again on its own", () => {
     { event: "dispatched", step: "plan", ts: 1 },
     { event: "needs-owner", step: "plan", ts: 2, reason: WARN },
     { event: "dispatched", step: "plan", ts: 3 },
+    { event: "worker-progress", step: "plan", ts: 3.5, kind: "message", text: "Working" },
     { event: "needs-owner", step: "plan", ts: 4, reason: WARN },
   ]);
   assert.equal(items.length, 2);
   assert.equal(items[0].type === "status" && items[0].tone, "info");
   assert.equal(items[1].type === "status" && items[1].tone, "warn");
+});
+
+
+test("dispatch alone does not claim approval or quiet a still-blocked warning", () => {
+  const items = statuses([
+    { event: "needs-owner", step: "plan", ts: 1, reason: WARN },
+    { event: "dispatched", step: "plan", ts: 2 },
+  ]);
+  assert.equal(items[0].tone, "warn");
+  assert.equal(items[0].text, WARN);
+});
+
+test("repeated blocked dispatch preserves both unresolved warnings", () => {
+  const items = statuses([
+    { event: "needs-owner", step: "plan", ts: 1, reason: WARN },
+    { event: "dispatched", step: "plan", ts: 2 },
+    { event: "needs-owner", step: "plan", ts: 3, reason: WARN },
+  ]);
+  assert.deepEqual(items.map(i => i.tone), ["warn", "warn"]);
+});
+
+test("worker progress quiets history without inventing the authorization route", () => {
+  const items = statuses([
+    { event: "needs-owner", step: "plan", ts: 1, reason: WARN },
+    { event: "dispatched", step: "plan", ts: 2 },
+    { event: "worker-progress", step: "plan", ts: 3, kind: "tool", text: "Read" },
+  ]);
+  assert.equal(items[0].tone, "info");
+  assert.doesNotMatch(items[0].text, /approved/);
 });
