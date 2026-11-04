@@ -157,7 +157,7 @@ export function Sidebar({
   return (
     <aside className="fixed top-2 bottom-2 left-2 z-10 flex w-60 flex-col overflow-hidden rounded-md border border-border/60 glass-panel pt-[3px] max-sm:static max-sm:m-2 max-sm:w-auto">
       <div className="flex items-center justify-between pr-1.5">
-        <p className="px-3 pt-2 pb-1 text-sm font-semibold tracking-tight">Skye</p>
+        <p className="flex items-center gap-2 px-3 pt-2 pb-1 text-sm font-semibold tracking-tight">Skye<span aria-hidden="true" className="size-2 rounded-full bg-brand" /></p>
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
