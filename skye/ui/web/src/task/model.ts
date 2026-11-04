@@ -116,6 +116,7 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
   }
 
   let unaddressedItems: Map<string, number[]> | undefined;
+  let needsOwnerItems: Map<string, number[]> | undefined;
   for (const e of detail.journal as JournalEntry[]) {
     const step = e.step ? steps.get(e.step) : undefined;
     if (!step) continue;
@@ -131,6 +132,17 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         step.reason = undefined;
         step.items.push({ type: "run", ts, label: RUN_LABEL[e.event] });
         step.runs.push({ startedAt: ts, label: RUN_LABEL[e.event], state: "running" });
+        // An approval pause is history once the step actually runs: keep the record,
+        // quiet and past-tense, like a resolved recovery handoff - a still-current
+        // amber warning after the approved run would misread as still blocked.
+        for (const idx of needsOwnerItems?.get(step.id) ?? []) {
+          const item = step.items[idx];
+          if (item?.type === "status") {
+            item.tone = "info";
+            item.text = "This run waited for your approval before it started - approved, it continued below.";
+          }
+        }
+        needsOwnerItems?.delete(step.id);
         break;
       case "follow-up":
       case "follow-up-submitted": {
@@ -200,6 +212,8 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         closeRun(step, ts, "needs-owner", e.reason || undefined);
         step.items.push({ type: "status", ts, tone: "warn",
                           text: (e.reason ?? "Waiting for you").split(" Contract fingerprint")[0] });
+        (needsOwnerItems ??= new Map()).set(step.id,
+          [...(needsOwnerItems.get(step.id) ?? []), step.items.length - 1]);
         break;
       case "interrupted":
       case "cancelled":
