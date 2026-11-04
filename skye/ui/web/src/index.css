@@ -46,9 +46,7 @@
   --brand: #e6ff00;
   --brand-foreground: #242424;
   --brand-hover: #d6ed00;
-  --brand-soft: #f5facf;
-  --brand-edge: #7c8900;
-  --ring: var(--brand-edge);
+  --ring: #737373;
   --primary: #1a1a1a;
   --primary-foreground: #ffffff;
   --destructive: #b91c1c;
@@ -60,7 +58,7 @@
   --surface-chat-composer-hover: color-mix(in srgb, var(--muted) 80%, transparent);
   /* Sidebar rows */
   --sidebar-row-hover: color-mix(in srgb, var(--foreground) 2%, transparent);
-  --sidebar-row-active: var(--brand-soft);
+  --sidebar-row-active: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
 
 @theme inline {
@@ -80,8 +78,6 @@
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
   --color-brand-hover: var(--brand-hover);
-  --color-brand-soft: var(--brand-soft);
-  --color-brand-edge: var(--brand-edge);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-destructive: var(--destructive);
@@ -200,15 +196,14 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-/* Neon stays an accent: white surfaces, dark text and a darker edge for focus
-   contrast. Never use the bright yellow itself as a text colour on white. */
+/* Keep focus neutral. Brand yellow belongs to small actions, never field borders. */
 .brand-composer:focus-within {
-  border-color: var(--brand-edge);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 30%, transparent),
+  border-color: #737373;
+  box-shadow: 0 0 0 3px rgba(0,0,0,0.06),
               0 6px 24px -8px rgba(0,0,0,0.14);
 }
 a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
-  outline: 2px solid var(--brand-edge);
+  outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 /* Composer owns its focus treatment; avoid a second square ring on its textarea. */
