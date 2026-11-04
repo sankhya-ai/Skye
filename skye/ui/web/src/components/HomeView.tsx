@@ -293,7 +293,7 @@ export function HomeView({
         {/* The composer is the page's one input: a solid white card that reads as a text
             field against the gray canvas, with a clear focus ring while typing. */}
         <div
-          className="cursor-text rounded-composer border border-[#dcdcdc] bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_6px_24px_-8px_rgba(0,0,0,0.12)] transition-[border-color,box-shadow] hover:border-[#c8c8c8] focus-within:border-foreground/40 focus-within:shadow-[0_0_0_4px_rgba(0,0,0,0.06),0_6px_24px_-8px_rgba(0,0,0,0.14)]"
+          className="brand-composer cursor-text rounded-composer border border-[#dcdcdc] bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_6px_24px_-8px_rgba(0,0,0,0.12)] transition-[border-color,box-shadow] hover:border-[#c8c8c8] "
           onClick={(e) => {
             if (e.target === e.currentTarget) e.currentTarget.querySelector("textarea")?.focus();
           }}
@@ -364,7 +364,7 @@ export function HomeView({
                     title={m === "team"
                       ? "A quick planning session decides the smallest team (often one developer)"
                       : "One developer session does it directly - fewest tokens"}
-                    className={`h-full rounded-full px-2.5 transition-colors ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    className={`h-full rounded-full px-2.5 transition-colors ${mode === m ? "bg-brand-soft text-foreground shadow-[inset_0_0_0_1px_var(--brand-edge)]" : "text-muted-foreground hover:text-foreground"}`}
                   >
                     {m === "team" ? "Team" : "Solo"}
                   </button>
@@ -377,7 +377,7 @@ export function HomeView({
               onClick={() => void submit()}
               disabled={!goal.trim() || busy}
               aria-busy={busy || undefined}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-primary px-4 text-sm text-primary-foreground transition disabled:opacity-30"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground hover:bg-brand-hover transition disabled:bg-muted disabled:text-muted-foreground disabled:opacity-60"
               aria-label="Start task"
             >
               {busy ? <Spinner className="size-4" /> : <ArrowUp className="size-4" />}
