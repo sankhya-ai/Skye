@@ -116,11 +116,27 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
   }
 
   let unaddressedItems: Map<string, number[]> | undefined;
+  let needsOwnerItems: Map<string, number[]> | undefined;
   for (const e of detail.journal as JournalEntry[]) {
     const step = e.step ? steps.get(e.step) : undefined;
     if (!step) continue;
     const ts = e.ts;
     const last = step.items[step.items.length - 1];
+    // Dispatch is recorded before policy checks. Only worker activity, reattachment,
+    // or successful settlement proves a later attempt actually got past the pause.
+    const continued = e.event === "reattached" || e.event === "worker-session"
+      || (e.event === "worker-progress" && ["message", "tool"].includes(String(e.kind)))
+      || (e.event === "settled" && e.status === "done");
+    if (continued) {
+      for (const idx of needsOwnerItems?.get(step.id) ?? []) {
+        const item = step.items[idx];
+        if (item?.type === "status") {
+          item.tone = "info";
+          item.text = "Earlier, this step paused for owner review. A later attempt continued.";
+        }
+      }
+      needsOwnerItems?.delete(step.id);
+    }
     switch (e.event) {
       case "dispatched":
       case "redispatch":
@@ -200,6 +216,8 @@ export function buildSteps(detail: MissionDetail, graph: MissionGraph | null,
         closeRun(step, ts, "needs-owner", e.reason || undefined);
         step.items.push({ type: "status", ts, tone: "warn",
                           text: (e.reason ?? "Waiting for you").split(" Contract fingerprint")[0] });
+        (needsOwnerItems ??= new Map()).set(step.id,
+          [...(needsOwnerItems.get(step.id) ?? []), step.items.length - 1]);
         break;
       case "interrupted":
       case "cancelled":
