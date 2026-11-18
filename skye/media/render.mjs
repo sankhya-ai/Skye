@@ -11,21 +11,23 @@ try {
   const context = await browser.newContext({viewport: {width: spec.width, height: spec.height},
     deviceScaleFactor: 1, serviceWorkers: 'block', acceptDownloads: false, offline: true});
   await context.route('**/*', route => route.abort());
-  const page = await context.newPage();
-  context.on('page', popup => { if (popup !== page) void popup.close(); });
-  page.setDefaultTimeout(10000);
-  await page.evaluate(() => {
+  // Installed before the page exists: setContent reuses the blank document, so a later script would not run.
+  await context.addInitScript(() => {
     window.__skyeTime = 0;
     const NativeDate = Date;
     window.Date = class extends NativeDate {
       constructor(...args) { super(...(args.length ? args : [window.__skyeTime * 1000])); }
       static now() { return window.__skyeTime * 1000; }
     };
+    performance.now = () => window.__skyeTime * 1000;
     Math.random = () => 0.5;
     window.requestAnimationFrame = () => 0;
     window.setInterval = () => 0;
     window.setTimeout = () => 0;
   });
+  const page = await context.newPage();
+  context.on('page', popup => { if (popup !== page) void popup.close(); });
+  page.setDefaultTimeout(10000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   // No source media path, API token or persistent profile is supplied to this page.
