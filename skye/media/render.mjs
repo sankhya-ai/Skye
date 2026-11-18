@@ -34,12 +34,15 @@ try {
   // Canvas is inserted after shot HTML, so shot scripts cannot intercept raw host data.
   await page.setContent(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
 <style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{animation:none!important;transition:none!important}</style>${spec.html}`, {waitUntil:'load'});
-  await page.evaluate(({width, height, designWidth, designHeight}) => {
+  const composite = spec.mode === 'composite';
+  await page.evaluate(({width, height, designWidth, designHeight, composite}) => {
     document.body.style.cssText = `width:${designWidth}px;height:${designHeight}px;transform-origin:0 0;transform:scale(${width/designWidth})`;
+    if (composite) {
     const source = document.createElement('canvas');
     source.id = 'source'; source.width = width; source.height = height;
     source.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:-1';
     document.body.prepend(source);
+    }
     const caption = document.createElement('div'); caption.id = 'skye-caption';
     caption.style.cssText = 'position:absolute;left:8%;right:8%;bottom:8%;text-align:center;color:white;font:600 28px system-ui;white-space:pre-wrap;text-shadow:0 2px 5px black;background:#0008;border-radius:8px;padding:8px;z-index:2147483647';
     document.body.append(caption);
@@ -49,30 +52,41 @@ try {
     window.requestAnimationFrame = () => 0;
     window.setInterval = () => 0;
     window.setTimeout = () => 0;
-  }, spec);
-  const size = spec.width * spec.height * 4;
-  let pending = Buffer.alloc(0), index = 0;
-  for await (const data of process.stdin) {
-    pending = Buffer.concat([pending, data]);
-    while (pending.length >= size) {
-      const rgba = pending.subarray(0, size).toString('base64');
-      pending = pending.subarray(size);
-      const caption = spec.captions.filter(c => c.start <= index && index < c.end).map(c => c.text).join('\n');
-      await page.evaluate(async ({rgba, caption, t, width, height}) => {
-        window.__skyeTime = t;
-        const bytes = Uint8ClampedArray.from(atob(rgba), c => c.charCodeAt(0));
-        document.getElementById('source').getContext('2d').putImageData(new ImageData(bytes, width, height), 0, 0);
-        await window.frame(t);
-        const node = document.getElementById('skye-caption');
-        node.textContent = caption; node.style.display = caption ? '' : 'none';
-      }, {rgba, caption, t:index/30, width:spec.width, height:spec.height});
-      if (errors.length) throw new Error(errors[0]);
-      const png = await page.screenshot({type:'png', timeout:10000});
-      if (!process.stdout.write(png)) await once(process.stdout, 'drain');
-      index++;
+  }, {...spec, composite});
+  const showCaption = async (index) => {
+    const caption = spec.captions.filter(c => c.start <= index && index < c.end).map(c => c.text).join('\n');
+    await page.evaluate(async ({caption, t}) => {
+      window.__skyeTime = t;
+      await window.frame(t);
+      const node = document.getElementById('skye-caption');
+      node.textContent = caption; node.style.display = caption ? '' : 'none';
+    }, {caption, t: index / 30});
+    if (errors.length) throw new Error(errors[0]);
+  };
+  const emit = async () => {
+    const png = await page.screenshot({type:'png', timeout:10000, omitBackground: !composite});
+    if (!process.stdout.write(png)) await once(process.stdout, 'drain');
+  };
+  if (!composite) {
+    // Overlay mode: only the transparent graphics layer is drawn here. FFmpeg joins it to the footage.
+    for (let index = 0; index < spec.frames; index++) { await showCaption(index); await emit(); }
+  } else {
+    const size = spec.width * spec.height * 4;
+    let pending = Buffer.alloc(0), index = 0;
+    for await (const data of process.stdin) {
+      pending = Buffer.concat([pending, data]);
+      while (pending.length >= size) {
+        const rgba = pending.subarray(0, size).toString('base64');
+        pending = pending.subarray(size);
+        await page.evaluate(({rgba, width, height}) => {
+          const bytes = Uint8ClampedArray.from(atob(rgba), c => c.charCodeAt(0));
+          document.getElementById('source').getContext('2d').putImageData(new ImageData(bytes, width, height), 0, 0);
+        }, {rgba, width: spec.width, height: spec.height});
+        await showCaption(index); await emit(); index++;
+      }
     }
+    if (index !== spec.frames || pending.length) throw new Error(`Decoded ${index} frames, expected ${spec.frames}`);
   }
-  if (index !== spec.frames || pending.length) throw new Error(`Decoded ${index} frames, expected ${spec.frames}`);
 } finally {
   await browser.close();
 }

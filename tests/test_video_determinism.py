@@ -33,3 +33,25 @@ def test_clock_and_random_are_fixed(tmp_path):
     ffmpeg("-ss", "0.5", "-i", str(out), "-frames:v", "1", "-vf", "scale=4:4", "-pix_fmt", "rgb24", "-f", "rawvideo", str(frame))
     r, g, b = frame.read_bytes()[:3]
     assert g > 200 and r < 60 and b < 60, (r, g, b)
+
+
+def pixel(video, second="0.5"):
+    out = video.with_suffix(".rgb")
+    ffmpeg("-ss", second, "-i", str(video), "-frames:v", "1", "-vf", "scale=4:4", "-pix_fmt", "rgb24", "-f", "rawvideo", str(out))
+    return list(out.read_bytes()[:3])
+
+
+def test_overlay_and_composite_modes_agree_on_what_the_viewer_sees(tmp_path):
+    """Code that never touches the footage canvas is joined by FFmpeg; code that does runs in the page."""
+    root = make(tmp_path)
+    base = files_for(root, "shot-0001")
+    plain = pixel(root / "exports" / render(root)["file"])
+    base["visual.html"] = ('<div style="position:absolute;inset:0;background:rgb(255,0,0);opacity:.5"></div>'
+                           '<script>window.frame=()=>{}</script>')
+    update(root, "shot-0001", revision(root), base)
+    overlay = pixel(root / "exports" / render(root)["file"])
+    assert overlay[0] > plain[0] + 60 and overlay[0] > overlay[2], (plain, overlay)  # blended toward red
+    base["visual.html"] = ('<script>window.frame=()=>{document.getElementById("source").style.filter="grayscale(1)"}</script>')
+    update(root, "shot-0001", revision(root), base)
+    gray = pixel(root / "exports" / render(root)["file"])
+    assert max(gray) - min(gray) < 12, gray

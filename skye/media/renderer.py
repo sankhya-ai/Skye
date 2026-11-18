@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -20,6 +21,12 @@ def cache_key(project: dict, unit: dict, files: dict, profile: str, kind: str) -
                               project["width"], project["height"], project.get("renderer_hash", VERSION)], sort_keys=True).encode())
 
 
+def uses_source(html: str) -> bool:
+    """Only code that touches the source canvas needs footage pixels inside the page."""
+    code = re.sub(r"<!--.*?-->|/\*.*?\*/|(?<![:\"'])//[^\n]*", "", html, flags=re.S)
+    return "source" in code
+
+
 def render_picture(root: Path, p: dict, u: dict, files: dict, profile: str, output: Path):
     scale = min(1, (640 if profile == "preview" else 1920) / max(p["width"], p["height"]))
     width, height = [max(2, int(n * scale) // 2 * 2) for n in (p["width"], p["height"])]
@@ -27,25 +34,33 @@ def render_picture(root: Path, p: dict, u: dict, files: dict, profile: str, outp
         spec = Path(tmp) / "render.json"
         write_json(spec, {"width": width, "height": height, "frames": u["end"] - u["start"],
                           "html": files["visual.html"], "designWidth": p["width"], "designHeight": p["height"],
+                          "mode": "composite" if uses_source(files["visual.html"]) else "overlay",
                           "captions": json.loads(files["captions.json"])})
         base = [binary("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "2", "-filter_threads", "1"]
-        decode_args = [*base, "-ss", str(u["start"] / 30), "-i", str(safe_file(root, "source.webm")),
-                       "-an", "-vf", f"scale={width}:{height}", "-frames:v", str(u["end"] - u["start"]),
-                       "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"]
+        frames = str(u["end"] - u["start"])
+        crf = "30" if profile == "preview" else "22"
+        vp9 = ["-an", "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "6", "-crf", crf, "-b:v", "0", "-pix_fmt", "yuv420p"]
         code_args = [binary("node"), str(Path(__file__).with_name("render.mjs")), str(spec)]
-        encode_args = [*base, "-y", "-f", "image2pipe", "-framerate", "30", "-i", "pipe:0",
-                       "-an", "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "6",
-                       "-crf", "30" if profile == "preview" else "22", "-b:v", "0", "-pix_fmt", "yuv420p", str(output)]
+        seek = ["-ss", str(u["start"] / 30), "-i", str(safe_file(root, "source.webm"))]
+        if uses_source(files["visual.html"]):
+            decode_args = [*base, *seek, "-an", "-vf", f"scale={width}:{height}", "-frames:v", frames,
+                           "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"]
+            encode_args = [*base, "-y", "-f", "image2pipe", "-framerate", "30", "-i", "pipe:0", *vp9, str(output)]
+        else:
+            decode_args = None
+            encode_args = [*base, "-y", *seek, "-f", "image2pipe", "-framerate", "30", "-i", "pipe:0",
+                           "-filter_complex", f"[0:v]scale={width}:{height}[b];[b][1:v]overlay=format=auto,format=yuv420p",
+                           "-frames:v", frames, *vp9, str(output)]
         processes = []
         # Stderr goes to files, never pipe buffers that can deadlock the pipeline.
         with tempfile.TemporaryFile() as decerr, tempfile.TemporaryFile() as jserr, tempfile.TemporaryFile() as encerr:
             try:
-                decode = subprocess.Popen(decode_args, stdout=subprocess.PIPE, stderr=decerr)
-                processes.append(decode)
-                code = subprocess.Popen(code_args, stdin=decode.stdout, stdout=subprocess.PIPE, stderr=jserr,
-                                        start_new_session=True)
-                processes.append(code)
-                decode.stdout.close()
+                decode = subprocess.Popen(decode_args, stdout=subprocess.PIPE, stderr=decerr) if decode_args else None
+                code = subprocess.Popen(code_args, stdin=decode.stdout if decode else subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=jserr, start_new_session=True)
+                processes[:] = [decode, code] if decode else [code, code]
+                if decode:
+                    decode.stdout.close()
                 encode = subprocess.Popen(encode_args, stdin=code.stdout, stdout=subprocess.DEVNULL, stderr=encerr)
                 processes.append(encode)
                 code.stdout.close()
