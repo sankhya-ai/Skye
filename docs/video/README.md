@@ -1,3 +1,5 @@
+> The default Video workspace now opens the provisional OpenFilm-based Studio. See [STUDIO.md](STUDIO.md) for setup, measurements and remaining gates. The instructions below describe the unchanged Legacy projects workspace.
+
 # Code-backed shots
 
 Open **Video** in Skye's browser UI. There is no desktop app. Skye's local backend handles import and export; this is not a browser-only WASM editor.

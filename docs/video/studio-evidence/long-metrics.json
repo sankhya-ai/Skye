@@ -1,0 +1,72 @@
+{
+  "restartExact": true,
+  "probe": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_type": "video",
+        "r_frame_rate": "24/1",
+        "avg_frame_rate": "24/1"
+      },
+      {
+        "codec_type": "audio",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0"
+      }
+    ],
+    "format": {
+      "duration": "1200.069000",
+      "size": "14508350"
+    }
+  },
+  "seeks": [
+    {
+      "t": 10,
+      "actual": 10,
+      "ms": 36.199999999953434
+    },
+    {
+      "t": 399.7,
+      "actual": 399.7,
+      "ms": 64.30000000004657
+    },
+    {
+      "t": 400.3,
+      "actual": 400.3,
+      "ms": 14.300000000046566
+    },
+    {
+      "t": 799.7,
+      "actual": 799.7,
+      "ms": 79.19999999995343
+    },
+    {
+      "t": 800.3,
+      "actual": 800.3,
+      "ms": 2.699999999953434
+    },
+    {
+      "t": 1198,
+      "actual": 1198,
+      "ms": 22.399999999906868
+    },
+    {
+      "t": 1,
+      "actual": 1,
+      "ms": 4.5
+    }
+  ],
+  "rangeRequests": [
+    "bytes=0-",
+    "bytes=14483456-",
+    "bytes=4521984-",
+    "bytes=9535488-",
+    "no-range",
+    "bytes=9666560-",
+    "bytes=14417920-",
+    "bytes=9666560-"
+  ],
+  "jsHeapBytes": 10990996,
+  "allHeadlessChromeRssKiB": 580088,
+  "caveat": "Synthetic 160x90 low-bitrate 20-minute input. Raw video element over the actual Studio range server, not timeline scrubbing. RSS sums all matching headless processes, not an isolated task memory limit. Does not prove 4K or M1 performance."
+}

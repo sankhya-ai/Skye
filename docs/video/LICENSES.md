@@ -1,3 +1,5 @@
+> Studio adoption update: the branch now contains copied MIT OpenFilm code and CC0/MIT library content, with source hashes and notices under `skye/studio/`. The earlier reference-only statements below apply to the legacy shot editor, not the new Studio. See [STUDIO.md](STUDIO.md) and `skye/studio/THIRD_PARTY_NOTICES.md`.
+
 # Media dependency and codec audit
 
 Checked 18 November 2026. This is an engineering record, not legal advice.
@@ -15,9 +17,11 @@ Skye's new media code is original Apache-2.0 code. No third-party editor code, a
 | libopus | Requested external FFmpeg encoder | BSD-style license; does not require FFmpeg's GPL switch. |
 | OpenFilm | Architectural reference only | Repo is MIT. No copied source or assets in this change. |
 
-The render commands do not request libx264, libx265, GPL filters or a nonfree encoder. They use VP9/Opus, native PCM audio slices and ordinary scale/fps/audio filters. This is why this draft exports WebM instead of quietly adding a GPL H.264 encoder.
+The legacy renderer commands do not request libx264, libx265, GPL filters or a nonfree encoder. They use VP9/Opus, native PCM audio slices and ordinary scale/fps/audio filters. This is why this draft exports WebM instead of quietly adding a GPL H.264 encoder.
 
 **Do not claim the installed runtime is non-GPL just because these commands avoid GPL codecs.** The Linux test machine's system FFmpeg was a GPL-enabled distribution build. It is not redistributed by this PR. `skye video doctor` reports the installed build's license family for review. For a shipped LGPL runtime, build without `--enable-gpl` and `--enable-nonfree`, audit enabled external libraries, and fulfill source, build-configuration, attribution and other obligations. Installing a separate executable is not a way to erase its own license obligations. Codec and patent issues need their own review for a commercial distribution.
+
+Studio uses the upstream encoder selection, including libx264 when a software MP4 export is selected. The synthetic Studio exports used the installed GPL-enabled FFmpeg with libx264. No FFmpeg or codec binary is redistributed. Apache applies to Skye code, not every external runtime or dependency. Audit the actual shipped installation before distributing a commercial installer.
 
 Source records:
 

@@ -10,7 +10,7 @@ import { MissionDetailView } from "./components/MissionDetailView";
 import { MissionsOverview } from "./components/MissionsOverview";
 import { SettingsView } from "./components/SettingsView";
 import { TeamsView } from "./components/TeamsView";
-import { VideoView } from "./components/VideoView";
+import { StudioView } from "./components/StudioView";
 import { Sidebar } from "./components/Sidebar";
 
 function MissionsView({ missions, projects, loading, unavailable }: { missions: MissionRow[]; projects: Project[]; loading?: boolean; unavailable?: boolean }) {
@@ -136,7 +136,7 @@ export default function App() {
             <TeamsView />
           </div>
         ) : path === "/video" ? (
-          <VideoView />
+          <StudioView />
         ) : path === "/settings" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
             <SettingsView />

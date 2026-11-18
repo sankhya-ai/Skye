@@ -1169,6 +1169,10 @@ class UiHandler(BaseHTTPRequestHandler):
             origin_host = urlparse(origin).netloc.split("@")[-1]
             if origin_host not in (self.headers.get("Host"),):
                 return self._json({"error": "cross-origin POST rejected"}, 403)
+        if url.path.startswith("/api/studio/"):
+            from ..studio import api as studio_api
+            if studio_api.post(self, url.path):
+                return
         if url.path.startswith("/api/media"):
             from ..media import api as media_api
             if media_api.post(self, url.path):
@@ -2022,4 +2026,6 @@ def serve(state_dir: Path | None = None, port: int = 8787) -> None:
         server._picker_stop = True  # type: ignore[attr-defined]
         from .. import preview
         preview.stop_all()  # a preview never outlives the Skye that started it
+        from .. import studio
+        studio.stop_all()
         token_file.unlink(missing_ok=True)
