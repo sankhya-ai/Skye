@@ -111,7 +111,7 @@ def render(root: Path, profile="preview", progress=None, only: str | None = None
         p = load(root)
         from .process import run
         p["renderer_hash"] = digest(
-            Path(__file__).with_name("render.mjs").read_bytes()
+            Path(__file__).with_name("render.mjs").read_bytes() + Path(__file__).with_name("harness.js").read_bytes()
             + Path(__file__).with_name("package-lock.json").read_bytes()
             + run([binary("ffmpeg"), "-version"], 10))
         rev = revision(root)

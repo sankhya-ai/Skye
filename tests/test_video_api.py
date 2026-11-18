@@ -58,3 +58,12 @@ def test_prepare_does_not_run_a_model(server,monkeypatch):
     status,proposal=request(s,"POST",f"/api/media/{root.name}/prepare",{"shot":"shot-0001","goal":"A shorter title"})
     assert status==200
     assert proposal["shot"]=="shot-0001"
+
+
+def test_harness_and_agent_routes_are_served_behind_the_same_guard(server):
+    s,root=server
+    status,_=request(s,"GET","/api/media/agents")
+    assert status==200
+    assert request(s,"GET",f"/api/media/{root.name}/history")[0]==200
+    assert request(s,"POST",f"/api/media/{root.name}/ask",{"shot":"shot-0001","goal":"x","adapter":"nope","revision":"r"})[0]==400
+    assert request(s,"POST",f"/api/media/{root.name}/ask",{"shot":"shot-0001","goal":"x","adapter":"codex","revision":"stale"})[0]==400

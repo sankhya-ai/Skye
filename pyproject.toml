@@ -23,7 +23,7 @@ packages = ["skye", "skye.adapters", "skye.ui", "skye.media"]
 # The built web bundle the UI server serves (skye/ui/dist) and its attribution NOTICE are
 # data, not code: without this a wheel install has a server with no screens.
 [tool.setuptools.package-data]
-"skye.media" = ["render.mjs", "package.json", "package-lock.json"]
+"skye.media" = ["render.mjs", "harness.js", "package.json", "package-lock.json"]
 "skye.ui" = ["dist/**/*", "NOTICE"]
 
 # `pytest` from the repo root runs Skye's suite. The vendored Root tree carries its own test

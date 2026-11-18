@@ -94,6 +94,8 @@ def get(handler, path: str) -> bool:
                         p = load(project_dir(state, folder.name))
                         items.append({k: p[k] for k in ("id", "name", "frames", "width", "height")})
             handler._json({"projects": items})
+        elif parts == ["harness.js"]:
+            blob(handler, Path(__file__).with_name("harness.js"), "text/javascript; charset=utf-8")
         elif parts == ["agents"]:
             from skye.ui.server import adapter_availability
             handler._json({"agents": [d for d in adapter_availability() if d["name"] in ("claude-code", "codex")]})
