@@ -94,3 +94,37 @@ def test_browser_worker_approval_and_trusted_render(tmp_path):
     result=run_edit(tmp_path,root,proposal["proposal"],lambda data:None,runner=fake)
     assert result["rendered"]==["shot-0001"]
     assert "Hello" in files_for(root,"shot-0001")["visual.html"]
+
+
+def test_ask_is_one_step_previews_only_that_shot_and_can_be_undone(tmp_path):
+    from skye.media.worker import ask
+    from skye.adapters.base import Result
+    source=tmp_path/"source.webm"
+    ffmpeg("-f","lavfi","-i","color=c=navy:s=180x320:r=30:d=2","-an","-c:v","libvpx-vp9","-deadline","realtime",str(source))
+    p=import_video(tmp_path,source,scene_detection=False);root=tmp_path/"media"/p["id"]
+    split(root,revision(root),"shot-0001",30)
+    seen={}
+    def fake(spec):
+        seen["brief"]=spec["goal"]; seen["tools"]=spec["tools"]
+        folder=Path(spec["repo"])
+        assert (folder/"reference.jpg").exists()
+        f=folder/"captions.json"; f.write_text('[{"start":0,"end":20,"text":"Hello"}]')
+        return Result(ok=True,output="Added a caption",returncode=0)
+    stages=[]
+    result=ask(tmp_path,root,"shot-0002","Add a hello caption","claude-code",lambda d:stages.append(d.get("stage")),runner=fake)
+    assert result["shot"]=="shot-0002" and result["rendered"]==["shot-0002"] and result["reused"]==[]
+    assert result["file"].endswith("-shot-0002-preview.webm") and (root/"exports"/result["file"]).exists()
+    assert not (root/"latest.json").exists()  # a one-shot preview is not the full render
+    assert json.loads(files_for(root,"shot-0002")["captions.json"])[0]["text"]=="Hello"
+    assert files_for(root,"shot-0001")["captions.json"].strip()=="[]"
+    assert "Bash" not in seen["tools"] and "Write" in seen["tools"]
+    assert summary(root)["undo"]=="Agent: Add a hello caption"
+    assert json.loads((root/"agent-log.json").read_text())[-1]["status"]=="done"
+    step(root,revision(root),-1)
+    assert files_for(root,"shot-0002")["captions.json"].strip()=="[]"
+    def sloppy(spec):
+        (Path(spec["repo"])/"extra.txt").write_text("x"); return Result(ok=True,output="ok",returncode=0)
+    with pytest.raises(MediaError,match="outside"):
+        ask(tmp_path,root,"shot-0002","Add something","codex",lambda d:None,runner=sloppy)
+    assert json.loads((root/"agent-log.json").read_text())[-1]["status"]=="failed"
+    assert files_for(root,"shot-0002")["captions.json"].strip()=="[]"

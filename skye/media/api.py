@@ -94,6 +94,9 @@ def get(handler, path: str) -> bool:
                         p = load(project_dir(state, folder.name))
                         items.append({k: p[k] for k in ("id", "name", "frames", "width", "height")})
             handler._json({"projects": items})
+        elif parts == ["agents"]:
+            from skye.ui.server import adapter_availability
+            handler._json({"agents": [d for d in adapter_availability() if d["name"] in ("claude-code", "codex")]})
         elif parts[0] == "jobs" and len(parts) == 2:
             if not re.fullmatch(r"[a-f0-9]{16}", parts[1]):
                 raise MediaError("Unknown video job")
@@ -107,6 +110,9 @@ def get(handler, path: str) -> bool:
                 handler._json(snapshot(root))
             elif len(parts) == 3 and parts[1] == "units":
                 handler._json({"files": files_for(root, parts[2]), "revision": revision(root)})
+            elif len(parts) == 2 and parts[1] == "agent-log":
+                path_log = root / "agent-log.json"
+                handler._json({"entries": read_json(path_log) if path_log.exists() else []})
             elif len(parts) == 2 and parts[1] == "history":
                 from .history import summary
                 handler._json(summary(root))
@@ -116,7 +122,7 @@ def get(handler, path: str) -> bool:
                 blob(handler, safe_file(root, f"units/{parts[2]}/thumb.jpg"), "image/jpeg")
             elif len(parts) == 2 and parts[1] == "source":
                 blob(handler, safe_file(root, "source.webm"), "video/webm")
-            elif len(parts) == 3 and parts[1] == "exports" and re.fullmatch(r"[a-f0-9]{64}-(preview|final)\.webm", parts[2]):
+            elif len(parts) == 3 and parts[1] == "exports" and re.fullmatch(r"[a-f0-9]{64}(-shot-[0-9]{4})?-(preview|final)\.webm", parts[2]):
                 blob(handler, safe_file(root, "exports/" + parts[2]), "video/webm")
             else:
                 handler._json({"error": "Unknown media route"}, 404)
@@ -173,7 +179,16 @@ def post(handler, path: str) -> bool:
                 handler._json({"revision": rev})
             elif action == "render":
                 profile = body.get("profile", "preview")
-                handler._json(job_start(state, "render", lambda progress: render(root, profile, progress)), 202)
+                only = body.get("shot")
+                handler._json(job_start(state, "render", lambda progress: render(root, profile, progress, only)), 202)
+            elif action == "ask":
+                from .worker import ask
+                shot, goal, adapter = body["shot"], str(body["goal"]), body.get("adapter", "claude-code")
+                if adapter not in ("claude-code", "codex"):
+                    raise MediaError("Choose Claude Code or Codex")
+                if revision(root) != body["revision"]:
+                    raise MediaError("Project changed. Reload first")
+                handler._json(job_start(state, "edit", lambda progress: ask(state, root, shot, goal, adapter, progress)), 202)
             elif action == "run-edit":
                 from .worker import run_edit
                 proposal_id = body["proposal"]

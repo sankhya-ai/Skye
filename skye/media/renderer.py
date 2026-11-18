@@ -104,7 +104,7 @@ def render_audio(root: Path, p: dict, u: dict, files: dict, output: Path):
     ffmpeg(*inputs, "-vn", "-af", af, "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", str(output))
 
 
-def render(root: Path, profile="preview", progress=None) -> dict:
+def render(root: Path, profile="preview", progress=None, only: str | None = None) -> dict:
     if profile not in ("preview", "final"):
         raise MediaError("Unknown render profile")
     with lock(root):
@@ -120,10 +120,13 @@ def render(root: Path, profile="preview", progress=None) -> dict:
         cache = safe_file(root, "cache")
         cache.mkdir(exist_ok=True)
         reused, changed, audio_changed, pictures, sounds = [], [], [], [], []
-        for i, u in enumerate(p["units"]):
+        units = [u for u in p["units"] if only in (None, u["id"])]
+        if not units:
+            raise MediaError("Shot not found")
+        for i, u in enumerate(units):
             files = files_for(root, u["id"])
             if progress:
-                progress({"shot": u["id"], "current": i + 1, "total": len(p["units"])})
+                progress({"shot": u["id"], "current": i + 1, "total": len(units)})
             for kind, suffix, dest in (("picture", ".webm", pictures), ("audio", ".wav", sounds)):
                 key = cache_key(p, u, files, profile if kind == "picture" else "audio", kind)
                 output = cache / (key + suffix)
@@ -145,7 +148,7 @@ def render(root: Path, profile="preview", progress=None) -> dict:
                 dest.append(output)
         exports = safe_file(root, "exports")
         exports.mkdir(exist_ok=True)
-        output = exports / f"{rev}-{profile}.webm"
+        output = exports / (f"{rev}-{profile}.webm" if only is None else f"{rev}-{only}-{profile}.webm")
         with tempfile.TemporaryDirectory(prefix="mux-", dir=root) as tmp:
             paths = []
             for kind, items in (("picture", pictures), ("audio", sounds)):
@@ -163,6 +166,7 @@ def render(root: Path, profile="preview", progress=None) -> dict:
             finally:
                 temp.unlink(missing_ok=True)
         result = {"revision": rev, "profile": profile, "file": output.name, "rendered": changed,
-                  "reused": reused, "audio_rendered": audio_changed}
-        write_json(root / "latest.json", result)
+                  "reused": reused, "audio_rendered": audio_changed, "shot": only}
+        if only is None:  # a one-shot preview never replaces the full render
+            write_json(root / "latest.json", result)
         return result

@@ -30,11 +30,17 @@ def _prepare(root: Path, shot_id: str, goal: str, adapter: str) -> dict:
         "fps": 30})
     write_json(folder.parent / (folder.name + ".binding.json"), read_json(folder / "proposal.json"))
     goal = goal.strip() or "Revise this shot without changing its duration or neighbouring shots."
-    brief = (goal + "\n\nEdit visual.html, captions.json and audio.json only. visual.html defines window.frame(t), "
-             "where t is local seconds. The source is a canvas named source. Audio is configured in "
-             "audio.json, not in HTML. Captions use local integer frames at 30fps. No external assets, "
-             "network, npm imports, Date, timers or wall-clock animation. Do not edit proposal.json. "
-             "The trusted importer rejects extra files and stale revisions. No need to render or run shell commands.")
+    p = load(root)
+    brief = (goal + "\n\nYou are editing one shot of a video. Edit visual.html, captions.json and audio.json only; "
+             "reference.jpg is a frame from this shot, so look at it first. "
+             f"The shot is {frames_of(root, shot_id)} frames at 30 fps, on a {p['width']}x{p['height']} canvas. "
+             "visual.html defines window.frame(t), where t is local seconds, and must set a complete state from t. "
+             "The footage is a canvas named source under your graphics. Prefer overlays: code that reads or styles "
+             "source renders slower, so touch it only when the request needs it (crop, grade, blur). "
+             "captions.json is a list of {start, end, text} in local integer frames, end exclusive, inside the shot. "
+             "audio.json is {gain 0-4, mute, fade_frames}. No external assets, network, npm imports, Date, timers or "
+             "wall-clock animation: use inline SVG, CSS and canvas. Do not edit proposal.json. Do not render or run "
+             "shell commands. Finish with one plain sentence saying what you changed.")
     job = {"goal": goal, "brief": brief, "repo": str(folder), "role": "artist", "adapter": adapter,
            "claims": list(UNIT_FILES), "gates": [], "budget": {"timeout_seconds": 300, "max_steps": 20}}
     # Job lives outside the worker proposal, so only the expected four files are imported.
@@ -44,7 +50,11 @@ def _prepare(root: Path, shot_id: str, goal: str, adapter: str) -> dict:
             "shot": shot_id}
 
 
-def apply(root: Path, proposal_id: str):
+def frames_of(root: Path, shot_id: str) -> int:
+    return next(u["end"] - u["start"] for u in load(root)["units"] if u["id"] == shot_id)
+
+
+def apply(root: Path, proposal_id: str, label: str | None = None):
     import re
     if not re.fullmatch(r"[a-f0-9]{16}", proposal_id):
         raise MediaError("Invalid proposal")
@@ -62,4 +72,4 @@ def apply(root: Path, proposal_id: str):
     if binding != meta:
         raise MediaError("Proposal metadata changed")
     files = {name: (folder / name).read_text("utf-8") for name in UNIT_FILES}
-    return update(root, meta["shot"], meta["revision"], files)
+    return update(root, meta["shot"], meta["revision"], files, label)
