@@ -994,6 +994,10 @@ class UiHandler(BaseHTTPRequestHandler):
             if not self._authorized(query, allow_query_token=False):
                 return self._deny()
             try:
+                if url.path.startswith("/api/media"):
+                    from ..media import api as media_api
+                    if media_api.get(self, url.path):
+                        return
                 if url.path == "/api/missions":
                     return self._json({"missions": missions_overview(self.state_dir),
                                        "live": {k: v for k, v in _live_missions.items()}})
@@ -1165,6 +1169,10 @@ class UiHandler(BaseHTTPRequestHandler):
             origin_host = urlparse(origin).netloc.split("@")[-1]
             if origin_host not in (self.headers.get("Host"),):
                 return self._json({"error": "cross-origin POST rejected"}, 403)
+        if url.path.startswith("/api/media"):
+            from ..media import api as media_api
+            if media_api.post(self, url.path):
+                return
         length = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
