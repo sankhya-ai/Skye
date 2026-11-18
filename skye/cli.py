@@ -12,6 +12,7 @@
   skye mission status <file>     per-step state from the mission journal
   skye mission check <file>      validate a mission file
   skye mission reset <file>      archive the journal so the mission starts clean
+  skye video                     local browser shot editor import/prepare/apply/render CLI
   skye ui [--port 8787]          local screens for missions, journals and approvals
   skye say <mission-id> --as <role> [--kind K] [--ack-needed R,...] <message>
                                  post to the mission's team line (workers coordinate here)
@@ -416,6 +417,9 @@ def main(argv: list[str] | None = None) -> int:
             state_dir = rest[i + 1]
         serve(state_dir=state_dir, port=port)
         return 0
+    if command == "video":
+        from .media.cli import main as video_main
+        return video_main(rest)
     if command == "mission":
         return _cmd_mission(rest)
     if command == "say":
