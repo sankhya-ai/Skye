@@ -1,0 +1,115 @@
+{
+  "name": "skye-studio-vendor",
+  "version": "0.4.0",
+  "description": "The open source AI video agent: films as web pages, the skills that teach your coding agent to make them, the `openfilm` command, and Studio, the editor to change anything in them.",
+  "license": "MIT",
+  "homepage": "https://openfilm.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openfilm/openfilm.git",
+    "directory": "packages/openfilm"
+  },
+  "bugs": {
+    "url": "https://github.com/openfilm/openfilm/issues"
+  },
+  "keywords": [
+    "video",
+    "motion-graphics",
+    "agents",
+    "claude-code",
+    "codex",
+    "animation",
+    "render"
+  ],
+  "type": "module",
+  "bin": {
+    "openfilm": "bin/openfilm.mjs"
+  },
+  "exports": {
+    "./film-doc": "./src/film-doc.mjs",
+    "./host": "./src/host.mjs",
+    "./shared": "./src/shared.mjs",
+    "./look": "./src/look.mjs",
+    "./render": "./src/render.mjs",
+    "./problems": "./src/problems.mjs",
+    "./plugins": "./src/plugins.mjs",
+    "./skills": "./src/skills.mjs",
+    "./skills-cli": "./src/skills-cli.mjs",
+    "./system-prompt": "./src/system-prompt.mjs",
+    "./studio": "./studio/server/server.mjs",
+    "./desktop-account": "./studio/server/account.mjs",
+    "./studio-ui/*": "./studio/ui/src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "SPEC.md",
+    "TRADEMARK.md",
+    "bin",
+    "manual",
+    "plugins",
+    "!plugins/**/*.test.mjs",
+    "!plugins/*/test",
+    "library",
+    "!library/voices",
+    "!library/audio",
+    "!library/stickers/emoji",
+    "!library/models",
+    "!library/examples",
+    "!library/vectors.i8",
+    "!library/vectors.json",
+    "examples-index",
+    "skill-catalog-seed.json",
+    "models/vision",
+    "src",
+    "!src/**/*.test.mjs",
+    "!src/color/fixtures",
+    "SYSTEM_PROMPT.md",
+    "studio/server/**/*.mjs",
+    "studio/server/**/*.js",
+    "!studio/server/**/*.test.mjs",
+    "studio/client.mjs",
+    "studio/ui/dist",
+    "THIRD_PARTY_NOTICES.md",
+    "product.json"
+  ],
+  "engines": {
+    "node": ">=22.2"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.2",
+    "onnxruntime-web": "1.31.1",
+    "playwright-core": "1.61.1"
+  },
+  "scripts": {
+    "build:ui": "vite build --config studio/ui/vite.config.ts"
+  },
+  "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-heading": "3.32.0",
+    "@tiptap/extension-list": "3.32.0",
+    "@tiptap/extension-paragraph": "3.32.0",
+    "@tiptap/extension-table": "3.32.0",
+    "@tiptap/extension-text-align": "3.32.0",
+    "@tiptap/extension-underline": "3.32.0",
+    "@tiptap/extensions": "3.32.0",
+    "@tiptap/markdown": "3.32.0",
+    "@tiptap/pm": "3.32.0",
+    "@tiptap/react": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@xyflow/react": "^12.12.0",
+    "lucide-react": "^0.469.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6"
+  },
+  "private": true
+}

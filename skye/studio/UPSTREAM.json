@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/openfilm/openfilm",
+  "commit": "715c3a6e46b11a0b3ee038e8f7b3e3b4e19c5c36",
+  "license": "MIT; library CC0 with MIT Fluent Emoji exception",
+  "source_root": "packages/openfilm",
+  "retained_files": 2749,
+  "modified": [
+    "package-lock.json",
+    "package.json",
+    "plugins/color/openfilm.json",
+    "studio/server/film.mjs",
+    "studio/server/server.mjs",
+    "studio/ui/index.html",
+    "studio/ui/src/components/BrandLogo.tsx",
+    "studio/ui/src/components/canvas/nodes.tsx",
+    "studio/ui/src/components/settings/theme.ts",
+    "studio/ui/src/editor/use-film.ts",
+    "studio/ui/src/i18n/en.ts",
+    "studio/ui/src/main.tsx",
+    "studio/ui/src/skye-host.ts"
+  ],
+  "excluded": [
+    "node_modules",
+    "build output (rebuilt locally)",
+    "optional model weights",
+    "standalone upstream tests directory",
+    "library/audio and library/music remote assets",
+    "optional remote vectors/catalog assets not needed by local core"
+  ],
+  "manifest": "SOURCE_MANIFEST.json",
+  "notes": "Some colocated test files remain with source. Large upstream files are kept intact. Skye bridges are outside vendor/."
+}

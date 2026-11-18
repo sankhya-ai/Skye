@@ -8,6 +8,9 @@ cd "$(dirname "$0")/.."
 echo "== building the web bundle (skye/ui/web -> skye/ui/dist)"
 (cd skye/ui/web && npm ci --no-audit --no-fund && npm run build)
 test -f skye/ui/dist/index.html || { echo "web build produced no dist/index.html" >&2; exit 1; }
+echo "== building the local Studio bundle"
+(cd skye/studio/vendor/openfilm && npm ci --ignore-scripts --no-audit --no-fund && npm run build:ui)
+test -f skye/studio/vendor/openfilm/studio/ui/dist/index.html
 echo "== building the wheel"
 python3 -m pip wheel --no-deps -w dist-wheel .
 echo "== done: wheel(s) in dist-wheel/"

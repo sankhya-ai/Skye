@@ -14,3 +14,7 @@ skye.roles.json
 skye.teams.json
 
 skye/media/node_modules/
+
+# Pinned editor sources are vendored; install/build output is reproducible.
+skye/studio/vendor/openfilm/node_modules/
+skye/studio/vendor/openfilm/studio/ui/dist/
