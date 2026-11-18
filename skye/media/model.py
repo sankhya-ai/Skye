@@ -161,7 +161,7 @@ def position(root: Path, shot_id: str) -> int:
     return next(i for i, u in enumerate(load(root)["units"], 1) if u["id"] == shot_id)
 
 
-def update(root: Path, shot_id: str, expected: str, files: dict, label: str | None = None) -> str:
+def update(root: Path, shot_id: str, expected: str, files: dict, label: str | None = None, coalesce: bool = False) -> str:
     """Only supplied files enter the trusted tree. Workers never write there directly."""
     from . import history
     with lock(root):
@@ -171,5 +171,6 @@ def update(root: Path, shot_id: str, expected: str, files: dict, label: str | No
         validate_edits(files, u["end"] - u["start"])
         before = history.capture(root, [shot_id])
         after = {"units": before["units"], "files": {shot_id: files}}
-        history.record(root, label or f"Edit shot {position(root, shot_id)}", before, after)
+        history.record(root, label or f"Edit shot {position(root, shot_id)}", before, after,
+                       f"edit:{shot_id}" if coalesce else None)
         return revision(root)

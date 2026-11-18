@@ -92,7 +92,8 @@ def get(handler, path: str) -> bool:
                 for folder in sorted(base.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
                     if re.fullmatch(r"[a-f0-9]{16}", folder.name):
                         p = load(project_dir(state, folder.name))
-                        items.append({k: p[k] for k in ("id", "name", "frames", "width", "height")})
+                        items.append({**{k: p[k] for k in ("id", "name", "frames", "width", "height")},
+                                      "first": p["units"][0]["id"], "shots": len(p["units"])})
             handler._json({"projects": items})
         elif parts == ["harness.js"]:
             blob(handler, Path(__file__).with_name("harness.js"), "text/javascript; charset=utf-8")
@@ -177,7 +178,7 @@ def post(handler, path: str) -> bool:
             root = project_dir(state, parts[0])
             action = parts[1] if len(parts) == 2 else ""
             if action == "save":
-                rev = update(root, body["shot"], body["revision"], body["files"])
+                rev = update(root, body["shot"], body["revision"], body["files"], coalesce=bool(body.get("coalesce")))
                 handler._json({"revision": rev})
             elif action == "render":
                 profile = body.get("profile", "preview")

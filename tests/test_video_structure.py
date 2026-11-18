@@ -98,3 +98,17 @@ def test_new_change_after_undo_drops_redo_and_stale_ui_is_refused(root):
         split(root, revision(root), "shot-0001", 0)
     with pytest.raises(MediaError, match="next shot"):
         merge(root, revision(root), "shot-0001")
+
+
+def test_autosave_bursts_fold_into_one_undo_step(root):
+    base = revision(root)
+    for text in ("a", "ab", "abc"):
+        f = files_for(root, "shot-0001")
+        f["captions.json"] = json.dumps([{"start": 0, "end": 5, "text": text}])
+        update(root, "shot-0001", revision(root), f, coalesce=True)
+    split(root, revision(root), "shot-0001", 30)
+    step(root, revision(root), -1)
+    step(root, revision(root), -1)
+    assert revision(root) == base and summary(root)["redo"] == "Edit shot 1"
+    step(root, revision(root), 1)
+    assert json.loads(files_for(root, "shot-0001")["captions.json"])[0]["text"] == "abc"

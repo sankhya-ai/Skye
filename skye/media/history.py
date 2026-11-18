@@ -5,6 +5,7 @@ Shot folders are never deleted. A merged-away or undone shot stays on disk, so r
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from .model import MediaError, UNIT_FILES, atomic, files_for, load, lock, read_json, revision, safe_file, validate_edits, write_json
@@ -54,12 +55,20 @@ def _index(root: Path) -> dict:
     return read_json(path) if path.exists() else {"entries": [], "cursor": 0}
 
 
-def record(root: Path, label: str, before: dict, after: dict):
-    """Applies `after` and files it. A new change discards the redo branch."""
+def record(root: Path, label: str, before: dict, after: dict, key: str | None = None):
+    """Applies `after` and files it. A new change discards the redo branch.
+
+    Typing autosaves under one key. Saves of that key within a minute fold into one entry,
+    so one Undo reverts a whole editing burst."""
     (root / "history").mkdir(exist_ok=True)
     apply_state(root, after)
     index = _index(root)
-    entries = index["entries"][:index["cursor"]] + [{"label": label, "before": before, "after": after}]
+    entries = index["entries"][:index["cursor"]]
+    last = entries[-1] if entries else None
+    if key and last and last.get("key") == key and time.time() - last["at"] < 60:
+        last["after"], last["at"] = after, time.time()
+    else:
+        entries.append({"label": label, "before": before, "after": after, "key": key, "at": time.time()})
     entries = entries[-MAX_ENTRIES:]
     write_json(root / "history" / "index.json", {"entries": entries, "cursor": len(entries)})
 
