@@ -86,6 +86,7 @@ export function VideoView() {
     return () => { live = false; if (object) URL.revokeObjectURL(object); };
   }, [project?.id, project?.latest?.file]);
 
+  useEffect(() => { if (project?.stale) setMode("live"); }, [project?.stale]);
   const flush = useCallback(async () => {
     if (!project || !draft || JSON.stringify(draft) === saved) return;
     window.clearTimeout(timer.current);
@@ -174,7 +175,7 @@ export function VideoView() {
         {project && <><button className="icon" aria-label="Undo" title={hist.undo ? `Undo ${hist.undo}` : "Nothing to undo"} disabled={!hist.undo || running} onClick={() => void step("undo")}><Undo2 size={15} /></button>
           <button className="icon" aria-label="Redo" title={hist.redo ? `Redo ${hist.redo}` : "Nothing to redo"} disabled={!hist.redo || running} onClick={() => void step("redo")}><Redo2 size={15} /></button>
           <select aria-label="Quality" value={profile} onChange={e => setProfile(e.target.value)}><option value="preview">Preview</option><option value="final">Full quality</option></select>
-          {render && project.latest && <a className="btn" href={render} download={`${project.name}.webm`}><Download size={14} /> Download</a>}
+          {render && project.latest && <a className="btn" href={render} download={`${project.name}.webm`}><Download size={14} /> <span className="lbl">Download</span></a>}
           <button className="video-primary" disabled={running} onClick={() => void act(async () => setJob(await post<Job>(`${base}/${project!.id}/render`, { profile })))}><Play size={13} /> Render</button></>}
         {!project && <button disabled={running || sending !== null} onClick={() => input.current?.click()}><Plus size={15} /> Import</button>}
       </div>

@@ -57,13 +57,29 @@ try {
   await (async()=>{for(let i=0;i<50;i++){const f=overlay();if(f&&await f.evaluate(()=>document.getElementById('t')?.textContent).catch(()=>'')==='One changed shot')return;await new Promise(r=>setTimeout(r,100));}throw new Error('live code never appeared');})();
   await page.getByText('Saved',{exact:true}).waitFor();
   await page.screenshot({path:process.env.SHOT_DESKTOP??'/tmp/video-desktop.png',clip:{x:224,y:0,width:1276,height:720}});
+  // Live vs Render parity: the Live frame and the exported frame at the same moment must look alike.
+  await page.waitForFunction(()=>{const v=document.querySelector('video');return v&&v.paused&&!v.seeking;});
+  const liveAt=await page.evaluate(()=>document.querySelector('video').currentTime);
+  await page.waitForTimeout(400);
+  await page.locator('.video-frame').screenshot({path:path.join(state,'live.png')});
   // Render, then undo the burst of edits in one step.
   await page.getByRole('button',{name:'Render',exact:true}).click();
   await page.getByRole('link',{name:'Download'}).waitFor({timeout:90000});
-  await page.getByText(/2 rendered|1 rendered, 1 reused|rendered/).first().waitFor();
+  await page.getByText(/rendered/).first().waitFor();
+  const projectDir=path.join(state,'media',(await fs.readdir(path.join(state,'media'))).find(n=>/^[a-f0-9]{16}$/.test(n)));
+  const latest=JSON.parse(await fs.readFile(path.join(projectDir,'latest.json'),'utf8'));
+  const grab=spawnSync('ffmpeg',['-hide_banner','-loglevel','error','-y','-ss',String(liveAt),'-i',path.join(projectDir,'exports',latest.file),'-frames:v','1',path.join(state,'render.png')]);
+  assert.equal(grab.status,0,grab.stderr.toString());
+  const cmp=spawnSync('ffmpeg',['-hide_banner','-i',path.join(state,'live.png'),'-i',path.join(state,'render.png'),'-lavfi','[0]scale=480:270,gblur=sigma=4[a];[1]scale=480:270,gblur=sigma=4[b];[a][b]ssim','-f','null','-']);
+  const ssim=Number(/All:([0-9.]+)/.exec(cmp.stderr.toString())?.[1]);
+  console.log('Live vs Render SSIM at',liveAt.toFixed(2)+'s:',ssim);
+  assert.ok(ssim>0.9,`Live and Render differ too much (SSIM ${ssim})`);
+  const playheadBefore=await page.getByLabel('Playhead').inputValue();
   await page.getByRole('button',{name:'Undo'}).click();
   await page.getByText('render out of date').waitFor();
   assert.equal(await page.getByRole('listbox',{name:'Shots'}).getByRole('option').count(),2);
+  assert.equal(await page.getByLabel('Playhead').inputValue(),playheadBefore,'playhead kept after undo');
+  await page.getByRole('tab',{name:'Live'}).getByText('Live').waitFor();
   // No agent is installed in the test machine: the panel says so instead of failing on send.
   await page.getByRole('tab',{name:'Ask',exact:true}).click();
   await page.getByText('Install Claude Code or Codex').waitFor();

@@ -38,3 +38,4 @@
 @media(max-width:640px){.video-workspace{padding:72px 14px 20px}.video-header{flex-direction:column;align-items:start;gap:12px}.video-heading h1{max-width:260px}.video-import{padding:26px 16px}}
 .video-add-row{display:flex;gap:8px;flex-wrap:wrap}
 .video-workspace .video-compose-row select{font-size:11px;padding:5px 8px}
+@media(max-width:640px){.video-actions{width:100%}.video-workspace .video-actions>button.video-primary{margin-left:auto}.video-actions .lbl{display:none}.video-workspace .video-actions select{max-width:132px}.video-workspace .video-actions>.btn{padding:7px 9px}}

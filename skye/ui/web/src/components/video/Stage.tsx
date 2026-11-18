@@ -15,7 +15,7 @@ export function Stage({ project, source, render, mode, setMode, harness, active,
     const v = player.current; if (!v) return;
     onVideo(v);
     let stop = false;
-    const tick = () => { if (stop) return; onFrame(Math.round(v.currentTime * FPS)); v.requestVideoFrameCallback ? v.requestVideoFrameCallback(tick) : requestAnimationFrame(tick); };
+    const tick = () => { if (stop) return; if (v.readyState >= 1) onFrame(Math.round(v.currentTime * FPS)); v.requestVideoFrameCallback ? v.requestVideoFrameCallback(tick) : requestAnimationFrame(tick); };
     tick();
     return () => { stop = true; onVideo(null); };
   }, [url]);
