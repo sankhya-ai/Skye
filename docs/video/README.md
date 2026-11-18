@@ -121,3 +121,18 @@ The scenario uploads synthetic footage, scrubs and splits with `S`, adds a capti
 ![Running editor](screenshots/editor.png)
 
 The screenshots show a synthetic test pattern. The mobile layout is in [this screenshot](screenshots/mobile.png).
+
+## What we learned from other editors
+
+Read on Nov 18, 2026. Each point shows what we changed.
+
+- Descript's Underlord makes a checkpoint before each AI edit and lets you revert one reply, press Undo, or restore a version (https://help.descript.com/ai-assistant/revert). Skye records every agent edit as one history step you can undo, and labels the button "Revert" after an agent edit.
+- Cardboard advises changing one thing per message so you can tell which fix worked (https://www.cardboard.ai/learn/how-to-refine-your-edit). The Ask tab says "One change at a time" and offers short look names such as "Cinematic look".
+- CapCut and VEED import SRT as editable caption blocks on the timeline (https://www.capcut.com/help/how-to-import-subtitles, https://www.veed.io/tools/subtitle-editor). Skye imports SRT and WebVTT into editable captions.
+- Runway Edit Studio lets you pick a keyframe and preview the edit before it is applied to the whole clip (https://help.runwayml.com/hc/en-us/articles/51683104370451-Creating-with-Edit-Studio). Skye's Live view shows overlay changes without a render, and an agent edit renders only the selected shot.
+
+Not yet matched: auto-transcription, a zoomable all-shots timeline, and keyframe-style approval before an agent edit lands.
+
+## Live vs Render parity
+
+`scripts/test_video_browser.mjs` grabs the Live frame and the exported frame at the same moment and compares them with SSIM after a light blur. It measured 0.927 on the test pattern, with a pass line of 0.9. The gap is mostly seek timing on moving footage. A missing caption or title would fail it.
