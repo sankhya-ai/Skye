@@ -182,3 +182,5 @@ Vendored and adapted code keeps its own notices: `chamber/LICENSE` and `chamber/
 Open **Video** in the browser to import footage and edit one shot at a time. Each shot owns its visual code, captions and audio settings. Render locally, reuse unchanged shots, and download the result. Your original footage stays unchanged. No separate desktop app.
 
 Video is an optional capability with a local media runtime. See [setup, workflow and current limits](docs/video/README.md) and the [dependency audit](docs/video/LICENSES.md).
+
+![Skye browser shot editor](docs/video/screenshots/editor.png)

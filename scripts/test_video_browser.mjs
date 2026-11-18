@@ -55,8 +55,10 @@ try {
   await page.getByRole('button',{name:'Prepare edit'}).click();
   await page.getByRole('button',{name:'Approve and run'}).waitFor(); // Do not start a model.
   assert.equal(errors.length,0,errors.join('\n'));
+  await page.waitForFunction(()=>[...document.querySelectorAll(".shot-image img")].length===2&&[...document.querySelectorAll(".shot-image img")].every(i=>i.complete&&i.naturalWidth>0));
   for (const width of [1500,768,390,320]) {
     await page.setViewportSize({width,height:1000});
+    assert.ok(await page.locator(".shot-image").evaluateAll(es=>es.every(e=>{const i=e.querySelector("img").getBoundingClientRect(),r=e.getBoundingClientRect();return Math.abs(i.width-r.width)<1&&Math.abs(i.height-r.height)<1})),`thumbnail bounds at ${width}`);
     const ok=await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth);
     if(!ok){console.log(await page.evaluate(()=>[...document.querySelectorAll("body *")].filter(e=>e.getBoundingClientRect().right>innerWidth+1).map(e=>({tag:e.tagName,cls:e.className,right:e.getBoundingClientRect().right,text:e.textContent?.slice(0,40)})).slice(-20)));await page.screenshot({path:"/downloads/overflow-320.png",fullPage:true});}
     assert.ok(ok,`overflow at ${width}`);

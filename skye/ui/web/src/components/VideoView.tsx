@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Code2, Download, Film, Loader2, Play, Plus, Scissors, Upload, Volume2 } from "lucide-react";
+import { ArrowLeft, Check, Code2, Download, Film, Loader2, Pause, Play, Plus, Scissors, Upload, Volume2, VolumeX } from "lucide-react";
 import { api } from "../api";
 import "./video.css";
 
@@ -22,6 +22,7 @@ function Thumbnail({project, shot}: {project: string; shot: string}) {
   const [url, setUrl] = useState("");
   useEffect(() => {
     let active = true, object = "";
+    setUrl("");
     void mediaBlob(`${base}/${project}/thumb/${shot}`).then(value => {
       object = value; if (active) setUrl(value); else URL.revokeObjectURL(value);
     }).catch(() => undefined);
@@ -48,6 +49,8 @@ export function VideoView() {
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [goal, setGoal] = useState("");
   const [adapter, setAdapter] = useState("claude-code");
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
   const [playhead, setPlayhead] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const player = useRef<HTMLVideoElement>(null);
@@ -180,7 +183,12 @@ export function VideoView() {
             {output && <button className="video-text-button" onClick={()=>setShowSource(v=>!v)}>{showSource ? "Show render" : "Show source"}</button>}
             {project.stale && !showSource && output && <span className="video-stale">Changes not rendered</span>}
             <span>{project.width} × {project.height} · 30 fps</span></div></div>
-          <div className="video-stage"><video ref={player} key={(showSource || !output) ? source : output} src={(showSource || !output) ? source : output} controls playsInline onTimeUpdate={e=>setPlayhead(e.currentTarget.currentTime)}/></div>
+          <div className="video-stage"><video ref={player} key={(showSource || !output) ? source : output} src={(showSource || !output) ? source : output} playsInline disableRemotePlayback muted={muted} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} onTimeUpdate={e=>setPlayhead(e.currentTarget.currentTime)}/></div>
+          <div className="video-player-controls">
+            <button aria-label={playing ? "Pause video" : "Play video"} disabled={!source} onClick={()=>{const v=player.current;if(v){if(v.paused)void v.play().catch(e=>setError(e.message));else v.pause();}}}>{playing ? <Pause size={14}/> : <Play size={14}/>}</button>
+            <input aria-label="Video playhead" type="range" min="0" max={project.frames-1} step="1" value={Math.min(project.frames-1,Math.round(playhead*30))} onChange={e=>{if(player.current)player.current.currentTime=Number(e.target.value)/30;}}/>
+            <button aria-label={muted ? "Unmute video" : "Mute video"} onClick={()=>setMuted(v=>!v)}>{muted ? <VolumeX size={14}/> : <Volume2 size={14}/>}</button>
+          </div>
           <div className="video-preview-footer"><span className="video-mono">{playhead.toFixed(2)} / {(project.frames/30).toFixed(2)}s</span>
             {output && <a href={output} download={`${project.name}-${project.latest?.file.endsWith("final.webm") ? "final" : "preview"}.webm`}><Download size={14}/> Download render</a>}
           </div>

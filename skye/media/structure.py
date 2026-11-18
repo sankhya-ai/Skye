@@ -36,8 +36,8 @@ def recut(root: Path, expected: str, cuts: list[int]):
                 write_json(shot / "captions.json", [])
                 write_json(shot / "audio.json", {"gain": 1, "mute": False, "fade_frames": 0})
                 write_json(shot / "edit.json", {name: (shot / name).read_text("utf-8") for name in ("visual.html", "captions.json", "audio.json")})
-                ffmpeg("-ss", str(start/30), "-i", str(root / "source.webm"), "-frames:v", "1",
-                       "-vf", "scale=320:-2", str(shot / "thumb.jpg"))
+                ffmpeg("-ss", str((start+end-1)/60), "-i", str(root / "source.webm"), "-frames:v", "1",
+                       "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x17191c", str(shot / "thumb.jpg"))
             previous = Path(tmp) / "previous"
             (root / "units").rename(previous)
             try:

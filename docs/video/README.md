@@ -94,7 +94,7 @@ Gain is 0 to 4. A fade cannot exceed half the shot. At 30 fps and 48 kHz each fr
 
 ## Files and recovery
 
-Each project lives under the UI's state directory in `media/PROJECT_ID`. It contains an immutable original, source mezzanine, `project.json`, `units/shot-NNNN`, proposal folders, caches, history and exports. Large media lives in state, not a project Git worktree. The directory is not sent to a coding agent wholesale.
+Each project lives under the UI's state directory in `media/PROJECT_ID`. It contains an immutable original, source mezzanine, `project.json`, `units/shot-NNNN`, proposal folders, caches, history and exports. Large media lives in state, not a project Git worktree. Contact-sheet thumbnails come from the midpoint of each shot, with a fixed letterboxed canvas. The directory is not sent to a coding agent wholesale.
 
 Each shot has `unit.json`, readable `visual.html`, `captions.json` and `audio.json` mirrors, a thumbnail, and an authoritative atomic `edit.json` commit. Use the UI or proposal-import path to edit. Direct edits to the mirror files are not committed edits. The single canonical blob prevents a crash between separate code/caption/audio writes from exposing a partially accepted shot. Before images or sound change, the source hash is rechecked. Cache identities include source, shot bounds, relevant content, output profile, renderer code/package lock and installed FFmpeg version.
 
@@ -113,4 +113,13 @@ Run the tests:
 ```sh
 pytest
 SKYE_TEST_MEDIA=1 pytest tests/test_video_model.py tests/test_video_api.py tests/test_video_integration.py
+node scripts/test_video_browser.mjs
 ```
+
+## Browser checks
+
+The optional browser scenario covers raw upload, manual split, one-shot editing, stale preview display, cache reuse, an invalid caption, preparing a job without calling a model, and horizontal-overflow checks at 1500, 768, 390 and 320px. The full suite with the optional media stack enabled passed 460 tests on Linux. The wheel was built with the declared build-system requirements and checked for the media scripts/package lock/UI assets, without installed dependencies or binaries.
+
+![Running editor](screenshots/editor.png)
+
+The screenshots show a test recording of Skye itself. The mobile layout was checked separately in [this screenshot](screenshots/mobile.png).

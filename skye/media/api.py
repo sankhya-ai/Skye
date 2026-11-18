@@ -30,7 +30,12 @@ def job_start(state: Path, kind: str, task) -> dict:
         raise
     current = {"id": job_id, "kind": kind, "status": "running"}
     _JOBS[job_id] = current
-    write_json(jobs / (job_id + ".json"), current)
+    try:
+        write_json(jobs / (job_id + ".json"), current)
+    except OSError:
+        _JOBS.pop(job_id, None)
+        _GATE.release()
+        raise
     def progress(data):
         current.update(data)
         write_json(jobs / (job_id + ".json"), current)
@@ -41,9 +46,11 @@ def job_start(state: Path, kind: str, task) -> dict:
         except Exception as exc:
             current.update(status="failed", error=str(exc)[-4000:])
         finally:
-            write_json(jobs / (job_id + ".json"), current)
-            _JOBS.pop(job_id, None)
-            _GATE.release()
+            try:
+                write_json(jobs / (job_id + ".json"), current)
+            finally:
+                _JOBS.pop(job_id, None)
+                _GATE.release()
     initial = dict(current)
     threading.Thread(target=worker, daemon=True, name="skye-video-" + kind).start()
     return initial

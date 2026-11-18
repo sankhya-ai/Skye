@@ -31,7 +31,7 @@ def ffmpeg(*args: str, timeout=900) -> bytes:
 
 
 def probe(path: Path) -> dict:
-    data = json.loads(run([binary("ffprobe"), "-v", "error", "-show_streams", "-show_format",
+    data = json.loads(run([binary("ffprobe"), "-v", "error", "-show_entries", "format=duration,format_name:stream=codec_type,width,height,color_transfer,nb_frames",
                            "-of", "json", "-protocol_whitelist", "file,pipe", str(path)], 30))
     if not set(data["format"]["format_name"].split(",")) & {"mov", "mp4", "matroska", "webm", "avi", "mpegts", "mpeg", "ogg"}:
         raise MediaError("Use MP4, WebM, MOV, AVI or MPEG footage, not a playlist")
