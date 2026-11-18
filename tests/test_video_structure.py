@@ -112,3 +112,21 @@ def test_autosave_bursts_fold_into_one_undo_step(root):
     assert revision(root) == base and summary(root)["redo"] == "Edit shot 1"
     step(root, revision(root), 1)
     assert json.loads(files_for(root, "shot-0001")["captions.json"])[0]["text"] == "abc"
+
+
+def test_srt_and_vtt_import_follow_the_cuts_and_undo_as_one_step(root):
+    from skye.media.captions import import_captions, parse
+    split(root, revision(root), "shot-0001", 30)
+    srt = "1\n00:00:00,500 --> 00:00:01,500\nAcross the cut\n\n2\n00:00:01,600 --> 00:00:02,000\n<i>Second</i> shot\n"
+    result = import_captions(root, revision(root), srt)
+    assert result == {"revision": revision(root), "added": 3, "shots": 2}
+    assert json.loads(files_for(root, "shot-0001")["captions.json"]) == [{"start": 15, "end": 30, "text": "Across the cut"}]
+    assert json.loads(files_for(root, "shot-0002")["captions.json"]) == [
+        {"start": 0, "end": 15, "text": "Across the cut"}, {"start": 18, "end": 30, "text": "Second shot"}]
+    step(root, revision(root), -1)
+    assert files_for(root, "shot-0001")["captions.json"].strip() == "[]"
+    assert parse("WEBVTT\n\n00:01.000 --> 00:02.000\nHi")[0] == (30, 60, "Hi")
+    with pytest.raises(MediaError, match="No captions"):
+        parse("hello")
+    with pytest.raises(MediaError, match="outside"):
+        import_captions(root, revision(root), "1\n00:10:00,000 --> 00:10:01,000\nLate\n")

@@ -104,7 +104,7 @@ Verified on Linux with real FFmpeg, headless Chromium and PySceneDetect: import 
 
 Not yet verified: real Claude Code/Codex generation quality, M1 memory and speed, long-file endurance, color-managed HDR, phone rotation and variable-frame-rate cases, hostile-code resource exhaustion, and pixel agreement between the Live preview and the render (they share one harness file, but fonts and video decoding differ, so treat Live as a close guide).
 
-Not in this draft: automatic transcription, caption import, audio replacement or music, cross-shot transitions, shot reordering, MP4, project delete or rename, live collaboration, recovered burned-in text, drag-to-edit page elements. The source video is loaded into the browser as one file, so very large imports use browser memory. No code from the excluded storyboard application is used.
+Not in this draft: automatic transcription (import an SRT or WebVTT file in Captions instead), audio replacement or music, cross-shot transitions, shot reordering, MP4, project delete or rename, live collaboration, recovered burned-in text, drag-to-edit page elements. The source video is loaded into the browser as one file, so very large imports use browser memory. No code from the excluded storyboard application is used.
 
 Run the tests:
 

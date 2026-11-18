@@ -202,6 +202,9 @@ def post(handler, path: str) -> bool:
             elif action == "merge":
                 from .structure import merge
                 handler._json(merge(root, body["revision"], body["shot"]))
+            elif action == "captions":
+                from .captions import import_captions
+                handler._json(import_captions(root, body["revision"], str(body["text"])))
             elif action in ("undo", "redo"):
                 from .history import step
                 handler._json(step(root, body["revision"], -1 if action == "undo" else 1))

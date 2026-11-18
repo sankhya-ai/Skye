@@ -206,7 +206,8 @@ export function VideoView() {
         {!draft || !selected ? <div className="video-empty"><Loader2 size={14} className="animate-spin" /></div> : <>
           {tab === "ask" && <AskTab agents={agents} log={log} shot={shot} shotNumber={number} running={Boolean(running)} stage={job?.stage} canUndo={hist.undo} undo={() => void step("undo")}
             send={(goal, adapter) => void act(async () => setJob(await post<Job>(`${base}/${project.id}/ask`, { shot, goal, adapter, revision: project.revision })))} />}
-          {tab === "captions" && <CaptionsTab captions={captions} frames={selected.end - selected.start} local={frame - selected.start} set={c => setFile("captions.json", JSON.stringify(c, null, 2))} />}
+          {tab === "captions" && <CaptionsTab captions={captions} frames={selected.end - selected.start} local={frame - selected.start} set={c => setFile("captions.json", JSON.stringify(c, null, 2))}
+            importFile={f => void act(async () => { if (f.size > 900_000) throw new Error("Caption file is too large"); await post(`${base}/${project.id}/captions`, { revision: project.revision, text: await f.text() }); await open(project.id); })} />}
           {tab === "audio" && <AudioTab audio={audio} frames={selected.end - selected.start} hasAudio set={a => setFile("audio.json", JSON.stringify(a))} />}
           {tab === "code" && <CodeTab html={draft["visual.html"]} set={v => setFile("visual.html", v)} error={previewError} disabled={Boolean(running)} />}
           <div className="video-status">{dirty ? "Saving" : "Saved"}{project.stale && project.latest ? " · render out of date" : ""}

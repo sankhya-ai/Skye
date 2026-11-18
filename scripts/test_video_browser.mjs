@@ -43,6 +43,11 @@ try {
   await page.waitForFunction(()=>true);
   await (async()=>{for(let i=0;i<50;i++){const f=overlay();if(f&&await f.evaluate(()=>document.getElementById('skye-caption')?.textContent).catch(()=>'')==='Live caption')return;await new Promise(r=>setTimeout(r,100));}throw new Error('live caption never appeared');})();
   await page.getByText('Saved',{exact:false}).first().waitFor();
+  // Import an SRT: cues land in the shots they overlap.
+  const srt=path.join(state,'cues.srt');
+  await fs.writeFile(srt,'1\n00:00:01,200 --> 00:00:01,800\nFrom a file\n');
+  await page.locator('input[accept=".srt,.vtt,text/vtt"]').setInputFiles(srt);
+  await page.waitForFunction(()=>[...document.querySelectorAll('textarea[aria-label="Caption text"]')].some(t=>t.value==='From a file'));
   // Code tab: the preview shows runtime errors as you type.
   await page.getByRole('tab',{name:'Code',exact:true}).click();
   const code=page.getByLabel('Shot code');
@@ -62,6 +67,7 @@ try {
   // No agent is installed in the test machine: the panel says so instead of failing on send.
   await page.getByRole('tab',{name:'Ask',exact:true}).click();
   await page.getByText('Install Claude Code or Codex').waitFor();
+  await page.screenshot({path:process.env.SHOT_ASK??'/tmp/video-ask.png',clip:{x:224,y:0,width:1276,height:720}});
   assert.equal(errors.length,0,errors.join('\n'));
   await page.waitForFunction(()=>[...document.querySelectorAll('.video-strip img')].length===2&&[...document.querySelectorAll('.video-strip img')].every(i=>i.complete&&i.naturalWidth>0));
   for (const width of [1500,768,390,320]) {

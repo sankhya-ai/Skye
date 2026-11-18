@@ -1,11 +1,13 @@
-import { Plus, X } from "lucide-react";
+import { useRef } from "react";
+import { FileText, Plus, X } from "lucide-react";
 import { FPS, type Caption } from "./types";
 
-type Props = { captions: Caption[]; frames: number; local: number; set: (c: Caption[]) => void };
+type Props = { captions: Caption[]; frames: number; local: number; set: (c: Caption[]) => void; importFile: (file: File) => void };
 const sec = (f: number) => (f / FPS).toFixed(1);
 const clamp = (f: number, frames: number) => Math.min(frames, Math.max(0, Math.round(f)));
 
-export function CaptionsTab({ captions, frames, local, set }: Props) {
+export function CaptionsTab({ captions, frames, local, set, importFile }: Props) {
+  const pick = useRef<HTMLInputElement>(null);
   const edit = (i: number, patch: Partial<Caption>) => set(captions.map((c, n) => n === i ? { ...c, ...patch } : c));
   const add = () => {
     const start = clamp(local, frames - 1);
@@ -20,6 +22,8 @@ export function CaptionsTab({ captions, frames, local, set }: Props) {
       <textarea aria-label="Caption text" rows={2} maxLength={500} placeholder="Text" value={c.text} onChange={e => edit(i, { text: e.target.value })} />
       {c.end <= c.start && <small className="bad">Out must be after In</small>}
     </div>)}
-    <button className="video-add" onClick={add}><Plus size={13} /> Caption</button>
+    <div className="video-add-row"><button className="video-add" onClick={add}><Plus size={13} /> Caption</button>
+      <button className="video-add" title="Adds to every shot it overlaps" onClick={() => pick.current?.click()}><FileText size={13} /> Import SRT</button></div>
+    <input ref={pick} type="file" accept=".srt,.vtt,text/vtt" hidden onChange={e => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = ""; }} />
   </div>;
 }
