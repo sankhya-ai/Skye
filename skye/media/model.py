@@ -157,28 +157,19 @@ def revision(root: Path) -> str:
     return h.hexdigest()
 
 
-def update(root: Path, shot_id: str, expected: str, files: dict) -> str:
+def position(root: Path, shot_id: str) -> int:
+    return next(i for i, u in enumerate(load(root)["units"], 1) if u["id"] == shot_id)
+
+
+def update(root: Path, shot_id: str, expected: str, files: dict, label: str | None = None) -> str:
     """Only supplied files enter the trusted tree. Workers never write there directly."""
+    from . import history
     with lock(root):
         if revision(root) != expected:
             raise MediaError("Project changed. Reload before saving")
         u = unit(root, shot_id)
         validate_edits(files, u["end"] - u["start"])
-        before = files_for(root, shot_id)
-        history = safe_file(root, "history")
-        history.mkdir(exist_ok=True)
-        # A transaction is one immutable JSON blob; the per-file tree is a workspace.
-        write_json(history / f"{expected}.json", {"shot": shot_id, "files": before})
-        committed = safe_file(root, f"units/{shot_id}/edit.json")
-        # One canonical blob is the commit point. Flat code files are readable mirrors.
-        if not committed.exists():
-            write_json(committed, before)
-        try:
-            for name, body in files.items():
-                atomic(safe_file(root, f"units/{shot_id}/{name}"), body.encode())
-            write_json(committed, files)
-        except OSError:
-            for name, body in before.items():
-                atomic(safe_file(root, f"units/{shot_id}/{name}"), body.encode())
-            raise
+        before = history.capture(root, [shot_id])
+        after = {"units": before["units"], "files": {shot_id: files}}
+        history.record(root, label or f"Edit shot {position(root, shot_id)}", before, after)
         return revision(root)

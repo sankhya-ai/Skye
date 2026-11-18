@@ -64,3 +64,9 @@ def diagnostics() -> dict:
         license_text = run([binary("ffmpeg"), "-L"], 10).decode(errors="replace")
         report["ffmpeg_license"] = "GPL" if "GNU General Public" in license_text else "check installed build"
     return report
+
+
+def thumbnail(source: Path, start: int, end: int, dest: Path):
+    """One letterboxed 320x180 frame from the middle of a shot."""
+    ffmpeg("-ss", str((start + end - 1) / 60), "-i", str(source), "-frames:v", "1",
+           "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x17191c", str(dest))

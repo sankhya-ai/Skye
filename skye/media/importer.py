@@ -6,7 +6,7 @@ import shutil
 import uuid
 from pathlib import Path
 from .model import MediaError, write_json, file_hash
-from .process import ffmpeg, probe
+from .process import ffmpeg, probe, thumbnail
 
 TEMPLATE = '''<!doctype html>
 <style>
@@ -84,8 +84,7 @@ def import_video(state: Path, source: Path, *, scene_detection=True, cuts=None, 
             write_json(folder / "captions.json", [])
             write_json(folder / "audio.json", {"gain": 1, "mute": False, "fade_frames": 0})
             write_json(folder / "edit.json", {name: (folder / name).read_text("utf-8") for name in ("visual.html", "captions.json", "audio.json")})
-            ffmpeg("-ss", str((start + end - 1) / 60), "-i", str(stage / "source.webm"), "-frames:v", "1",
-                   "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x17191c", str(folder / "thumb.jpg"))
+            thumbnail(stage / "source.webm", start, end, folder / "thumb.jpg")
         project = {"version": 1, "id": project_id, "name": (name or source.stem)[:120],
                    "fps": 30, "frames": frames, "width": normalized["width"], "height": normalized["height"],
                    "source_hash": file_hash(stage / "source.webm"),

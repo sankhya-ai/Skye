@@ -107,6 +107,9 @@ def get(handler, path: str) -> bool:
                 handler._json(snapshot(root))
             elif len(parts) == 3 and parts[1] == "units":
                 handler._json({"files": files_for(root, parts[2]), "revision": revision(root)})
+            elif len(parts) == 2 and parts[1] == "history":
+                from .history import summary
+                handler._json(summary(root))
             elif len(parts) == 3 and parts[1] == "thumb":
                 from .model import unit
                 unit(root, parts[2])
@@ -175,9 +178,15 @@ def post(handler, path: str) -> bool:
                 from .worker import run_edit
                 proposal_id = body["proposal"]
                 handler._json(job_start(state, "edit", lambda progress: run_edit(state, root, proposal_id, progress)), 202)
-            elif action == "recut":
-                from .structure import recut
-                handler._json({"revision": recut(root, body["revision"], body["cuts"])})
+            elif action == "split":
+                from .structure import split
+                handler._json(split(root, body["revision"], body["shot"], body["frame"]))
+            elif action == "merge":
+                from .structure import merge
+                handler._json(merge(root, body["revision"], body["shot"]))
+            elif action in ("undo", "redo"):
+                from .history import step
+                handler._json(step(root, body["revision"], -1 if action == "undo" else 1))
             elif action == "prepare":
                 handler._json(handoff.prepare(root, body["shot"], body.get("goal", ""), body.get("adapter", "claude-code")))
             elif action == "apply":

@@ -7,7 +7,8 @@ from skye.media.importer import import_video
 from skye.media.model import MediaError, files_for, revision, update, file_hash
 from skye.media.renderer import render
 from skye.media.process import ffmpeg, probe, run, binary
-from skye.media.structure import recut
+from skye.media.structure import split, merge
+from skye.media.history import step, summary
 
 pytestmark = pytest.mark.skipif(os.environ.get("SKYE_TEST_MEDIA") != "1", reason="optional FFmpeg / Chromium / scene-detection stack")
 
@@ -68,12 +69,13 @@ def test_portrait_silent_and_manual_cuts(tmp_path):
     p=import_video(tmp_path,source,scene_detection=False)
     root=tmp_path/"media"/p["id"]
     assert not p["has_audio"] and p["width"]==180 and p["height"]==320
-    recut(root,revision(root),[0,15,30])
+    split(root,revision(root),"shot-0001",15)
     result=render(root)
     assert probe(root/"exports"/result["file"])["audio"]  # explicit silent track
     f=files_for(root,"shot-0001");f["visual.html"]+='<!-- edited -->'
     update(root,"shot-0001",revision(root),f)
-    with pytest.raises(MediaError,match="before editing"): recut(root,revision(root),[0,30])
+    merge(root,revision(root),"shot-0001")  # editing no longer blocks recutting
+    assert len(json.loads((root/"project.json").read_text())["units"])==1
 
 
 def test_browser_worker_approval_and_trusted_render(tmp_path):
