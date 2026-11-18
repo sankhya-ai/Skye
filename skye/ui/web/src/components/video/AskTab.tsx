@@ -32,9 +32,9 @@ export function AskTab({ agents, log, shot, shotNumber, running, stage, canUndo,
       <textarea aria-label="Ask your coding agent" rows={2} placeholder="What should change in this shot?" value={goal} disabled={!any}
         onChange={e => setGoal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) { e.preventDefault(); go(); } }} />
       <div className="video-compose-row">
-        <select aria-label="Agent" value={adapter} onChange={e => setAdapter(e.target.value)}>
+        {any && <select aria-label="Agent" value={adapter} onChange={e => setAdapter(e.target.value)}>
           {agents.map(a => <option key={a.name} value={a.name}>{a.name === "codex" ? "Codex" : "Claude Code"}{a.available ? "" : " (not found)"}</option>)}
-        </select>
+        </select>}
         {any ? <button className="video-send" aria-label="Send" disabled={!goal.trim() || !ready || running} onClick={go}><ArrowUp size={14} /></button>
           : <span className="video-hint">Install Claude Code or Codex</span>}
       </div>
