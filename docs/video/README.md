@@ -2,7 +2,7 @@
 
 Open **Video** in Skye's browser UI. There is no desktop app. Skye's local backend handles import and export; this is not a browser-only WASM editor.
 
-Import a video, review the contact sheet, adjust cuts, select a shot, and edit its code, captions or audio. Save, then render. The original remains unchanged. Footage remains pixels, not recovered objects, layers or camera geometry.
+Import a video, pick a shot, and change it by asking your coding agent or editing captions, audio or code. See changes live, then render. The original remains unchanged. Footage remains pixels, not recovered objects, layers or camera geometry.
 
 ## Install the optional runtime
 
@@ -26,36 +26,34 @@ The backend must run on the machine holding the media and coding-agent logins. T
 
 ## Workflow
 
-1. Import MP4, MOV, WebM, AVI or MPEG footage, up to 10 minutes and 512 MB. HDR imports fail explicitly rather than silently rendering the wrong colors.
-2. Skye keeps the original and makes an SDR, square-pixel, 30 fps VP9/Opus mezzanine, up to 1920 × 1080. Variable-frame-rate footage is normalized once. Project frames refer to this mezzanine, not to original-file frame numbers.
-3. **Detect cuts** uses local PySceneDetect AdaptiveDetector. It finds visual changes, not semantic scenes or speech boundaries. A talking head or a screen recording may remain one shot. Disable detection for a single-shot import.
-4. Before editing, move the playhead inside a shot and choose **Split at playhead**, or **Merge next**. Cuts land on exact project frames, not codec keyframes. Boundary changes are explicit project edits. After any code/caption/audio edit, recutting is refused rather than discarding or retiming those edits. Reimport to make a different cut.
-5. Select a shot. **Code** is HTML/CSS/JavaScript with `window.frame(t)`, where `t` is local seconds. **Captions** and **Audio** are JSON. Save uses an expected revision; stale saves fail.
-6. **Render** builds a 640px preview or a source-sized final, then joins cached pictures and performs one continuous audio encode. Exports are WebM (VP9/Opus), not MP4. A caption/code change invalidates that shot's picture. Audio-only changes do not invalidate picture caches. Changing render quality has its own picture cache.
-7. Download the render. Previous exports remain available on disk if a later render fails. The UI marks an older render when changes have not been rendered.
+1. **Drop a video.** MP4, MOV, WebM, AVI or MPEG, up to 10 minutes and 512 MB. Upload shows progress. HDR imports fail explicitly rather than silently rendering the wrong colors.
+2. Skye keeps the original and makes an SDR, square-pixel, 30 fps VP9/Opus mezzanine, up to 1920 x 1080. **Find cuts** uses local PySceneDetect AdaptiveDetector. It finds visual changes, not speech or meaning, so a talking head may remain one shot.
+3. **Shots** sit in a filmstrip under the player. Click one to jump to it. **Split** (or `S`) cuts at the playhead. Click the seam between two shots to join them. Splitting and joining keep code, captions and audio; a join says what it dropped. Everything can be undone.
+4. **Live** preview shows your graphics and captions over the footage as you type, and shows runtime errors in the Code tab. It is a sandboxed iframe with no network and uses the same harness file as the renderer. **Render** shows the exported video.
+5. The inspector has **Ask**, **Captions**, **Audio** and **Code**. Captions and audio are forms. Edits autosave. A burst of typing is one Undo step.
+6. **Render** (top right) builds a 640px preview or a full-quality, source-sized export, then joins cached pictures and does one continuous audio encode. Exports are WebM (VP9/Opus), not MP4. Changing one shot re-renders only that shot's picture. Audio-only changes do not touch picture caches.
 
-Only one heavy video job runs at a time. Output chunks are encoded serially, with two FFmpeg threads and streamed frame buffers rather than every frame in memory. Disk usage includes the original, mezzanine, picture/audio caches and exports. Old cache/export cleanup is manual in this draft. A restarted server marks interrupted jobs failed; restarting a render reuses completed chunks, but an interrupted import must be uploaded again.
+Keys: `Space` play, `Left`/`Right` step a frame (`Shift` for ten), `S` split, `[` `]` previous and next shot, `Cmd/Ctrl+Z` undo, `Shift+Cmd/Ctrl+Z` redo.
 
-## Edit with Claude Code or Codex
+Only one heavy video job runs at a time. Output chunks are encoded serially with two FFmpeg threads. Graphics that do not read the footage canvas are drawn as a transparent layer and composited by FFmpeg, which is much faster than drawing every footage frame in the page. Code that reads or styles `#source` takes the slower path.
 
-Select the agent, enter a request and choose **Prepare edit**. This writes a disposable proposal and a normal Skye `artist` job. Preparing never starts a model.
+Measured on a 2-vCPU Linux box (not an M1): 640px preview about 22 fps, 720p final about 15 fps, 1080p final about 13 fps for overlay-only shots. Shots that read the footage canvas are several times slower. Do not take these as M1 numbers.
 
-**Approve and run** approves exactly that job through Skye's existing approval store and dispatcher, runs your own installed/logged-in coding agent, validates the result and renders a local preview. The built-in `artist` role can read and write files, but has no Bash. MCP remains blocked for Claude Code. Owner role/tool overrides and the existing concurrency policy still apply. Your provider allowance is used when you explicitly run an agent.
+## Ask your coding agent
 
-The expandable manual route is:
+Open **Ask**, pick Claude Code or Codex, type what should change and press Enter. One step: Skye prepares a disposable proposal for the selected shot, records your Send as the approval for exactly that job, runs your own installed and logged-in agent through the existing dispatcher, imports only the three shot files, then renders just that shot. The result appears live and as an entry you can undo. If the agent is not installed, the panel says so. The built-in `artist` role can read and write files, but has no Bash. MCP remains blocked for Claude Code. Owner role/tool overrides and the concurrency policy still apply. Your provider allowance is used when you press Send.
+
+The agent is told the shot's frame count and canvas size, gets a reference frame, and is asked to prefer overlays over touching the footage canvas. The manual route stays available:
 
 ```sh
 skye video --state-dir /path/to/.skye prepare PROJECT_ID shot-0002 --adapter claude-code --goal 'Make the title shorter'
-# Output includes a normal job path and proposal ID.
 skye approve /path/to/PROPOSAL_ID.job.json
 skye run /path/to/PROPOSAL_ID.job.json
 skye video --state-dir /path/to/.skye apply PROJECT_ID PROPOSAL_ID
 skye video --state-dir /path/to/.skye render PROJECT_ID
 ```
 
-The proposal contains only that shot's code, caption/audio data, frame-count context and a reference thumbnail. The import gate refuses extra files, symlinks, changed metadata, stale revisions, captions crossing a cut and audio settings outside the shot. Only the three editable files are imported. No worker-authored shell or FFmpeg command is executed by the media engine.
-
-This is an application-level import boundary, not an OS filesystem jail for Claude/Codex. Worker tool configuration is not an OS security boundary. Run untrusted workers in an appropriate system sandbox if you need that guarantee. The isolated media renderer's Chromium sandbox is a separate boundary.
+The import gate refuses extra files, symlinks, changed metadata, stale revisions, captions crossing a cut and audio settings outside the shot. This is an application-level boundary, not an OS filesystem jail for Claude/Codex. Run untrusted workers in an appropriate system sandbox if you need that guarantee.
 
 ## Shot code
 
@@ -98,28 +96,28 @@ Each project lives under the UI's state directory in `media/PROJECT_ID`. It cont
 
 Each shot has `unit.json`, readable `visual.html`, `captions.json` and `audio.json` mirrors, a thumbnail, and an authoritative atomic `edit.json` commit. Use the UI or proposal-import path to edit. Direct edits to the mirror files are not committed edits. The single canonical blob prevents a crash between separate code/caption/audio writes from exposing a partially accepted shot. Before images or sound change, the source hash is rechecked. Cache identities include source, shot bounds, relevant content, output profile, renderer code/package lock and installed FFmpeg version.
 
-History holds previous shot payloads. This draft does not yet have a history/undo UI or an automatic cleanup policy. A crash during the explicit pre-edit recut operation is not yet journal-recoverable; keep the original for reimport.
+History keeps up to 100 undo steps, with the files of only the shots each step touched. Shot folders are never deleted, so an undone split or join can be redone exactly. There is no automatic cleanup of caches or exports yet.
 
 ## Verified and not yet verified
 
-Verified on Linux with real FFmpeg, headless Chromium and PySceneDetect: two-shot import/detection, portrait and silent sources, Unicode filenames, fixed frame counts, caption validation, audio-only cache reuse, single-shot picture invalidation, stale saves, failed-render preservation, and the existing dispatcher with a fake worker that writes a real proposal and then runs the real renderer. No hosted generation or model calls are used by tests.
+Verified on Linux with real FFmpeg, headless Chromium and PySceneDetect: import and detection, portrait and silent sources, Unicode filenames, fixed frame counts, frozen clock and random values (pixel test), overlay and footage-canvas render paths, split/join/undo/redo keeping edits, autosave folding, caption validation, audio-only cache reuse, stale saves, failed-render preservation, and the existing dispatcher with a fake worker that writes a real proposal and then runs the real renderer. No hosted generation or model calls are used by tests.
 
-Not yet verified: real Claude Code/Codex generation quality, M1 memory/performance, long-file endurance, color-managed HDR, complex phone rotation/VFR cases, or hostile-code resource exhaustion. Browser rendering has a job timeout and sandbox, but no per-process OS memory quota. Do not describe the M1 experience as benchmarked.
+Not yet verified: real Claude Code/Codex generation quality, M1 memory and speed, long-file endurance, color-managed HDR, phone rotation and variable-frame-rate cases, hostile-code resource exhaustion, and pixel agreement between the Live preview and the render (they share one harness file, but fonts and video decoding differ, so treat Live as a close guide).
 
-Not in this draft: automatic transcription, audio-source replacement, music tracks, cross-shot transitions, timing ripple/reorder, MP4, live collaborative editing, recovered burned-in text, drag-to-edit page elements or direct compatibility with another editor's project format. No code from the excluded storyboard application is used.
+Not in this draft: automatic transcription, caption import, audio replacement or music, cross-shot transitions, shot reordering, MP4, project delete or rename, live collaboration, recovered burned-in text, drag-to-edit page elements. The source video is loaded into the browser as one file, so very large imports use browser memory. No code from the excluded storyboard application is used.
 
 Run the tests:
 
 ```sh
 pytest
-SKYE_TEST_MEDIA=1 pytest tests/test_video_model.py tests/test_video_api.py tests/test_video_integration.py
+SKYE_TEST_MEDIA=1 pytest tests/test_video_model.py tests/test_video_api.py tests/test_video_integration.py tests/test_video_structure.py tests/test_video_determinism.py
 node scripts/test_video_browser.mjs
 ```
 
 ## Browser checks
 
-The optional browser scenario covers raw upload, manual split, one-shot editing, stale preview display, cache reuse, an invalid caption, preparing a job without calling a model, and horizontal-overflow checks at 1500, 768, 390 and 320px. The full suite with the optional media stack enabled passed 460 tests on Linux. The wheel was built with the declared build-system requirements and checked for the media scripts/package lock/UI assets, without installed dependencies or binaries.
+The scenario uploads synthetic footage, scrubs and splits with `S`, adds a caption and edits code and sees both live in the sandboxed overlay, sees a runtime error appear, checks autosave, renders, undoes, checks the agent panel without an installed agent, and checks horizontal overflow at 1500, 768, 390 and 320px. The full suite with the optional media stack passed 470 tests on Linux.
 
 ![Running editor](screenshots/editor.png)
 
-The screenshots show a test recording of Skye itself. The mobile layout was checked separately in [this screenshot](screenshots/mobile.png).
+The screenshots show a synthetic test pattern. The mobile layout is in [this screenshot](screenshots/mobile.png).
