@@ -1,6 +1,7 @@
 """Disposable worker proposals. Never give a worker write access to trusted media state."""
 from __future__ import annotations
 import uuid
+import json
 from pathlib import Path
 import shutil
 from .process import run, binary
