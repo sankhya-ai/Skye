@@ -4,10 +4,15 @@ import uuid
 from pathlib import Path
 import shutil
 from .process import run, binary
-from .model import MediaError, UNIT_FILES, files_for, load, revision, safe_file, update, write_json, read_json
+from .model import lock, digest, MediaError, UNIT_FILES, files_for, load, revision, safe_file, update, write_json, read_json
 
 
 def prepare(root: Path, shot_id: str, goal: str = "", adapter="claude-code") -> dict:
+    with lock(root):
+        return _prepare(root, shot_id, goal, adapter)
+
+
+def _prepare(root: Path, shot_id: str, goal: str, adapter: str) -> dict:
     if adapter not in ("claude-code", "codex"):
         raise MediaError("Choose Claude Code or Codex")
     files = files_for(root, shot_id)
@@ -33,6 +38,7 @@ def prepare(root: Path, shot_id: str, goal: str = "", adapter="claude-code") -> 
            "claims": list(UNIT_FILES), "gates": [], "budget": {"timeout_seconds": 300, "max_steps": 20}}
     # Job lives outside the worker proposal, so only the expected four files are imported.
     write_json(folder.parent / (folder.name + ".job.json"), job)
+    write_json(folder.parent / (folder.name + ".job-hash.json"), {"sha256": digest(json.dumps(job, sort_keys=True).encode())})
     return {"proposal": folder.name, "path": str(folder), "job": str(folder.parent / (folder.name + ".job.json")),
             "shot": shot_id}
 

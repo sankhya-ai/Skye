@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from . import handoff
-from .model import MediaError, load, read_json, safe_file
+from .model import MediaError, digest, load, read_json, revision, safe_file
 
 
 def run_edit(state: Path, root: Path, proposal_id: str, progress, *, runner=None):
@@ -13,12 +13,19 @@ def run_edit(state: Path, root: Path, proposal_id: str, progress, *, runner=None
     binding = read_json(safe_file(root, f"proposals/{proposal_id}.binding.json"))
     if binding["project"] != load(root)["id"]:
         raise MediaError("Proposal belongs to another project")
+    if binding["revision"] != revision(root):
+        raise MediaError("Project changed. Prepare a fresh edit before running the agent")
     from skye import approvals
     from skye.contract import validate
     from skye.dispatcher import dispatch
     from skye.policy import Policy
     from .renderer import render
-    contract = validate(read_json(safe_file(root, f"proposals/{proposal_id}.job.json")))
+    import json
+    raw = read_json(safe_file(root, f"proposals/{proposal_id}.job.json"))
+    expected_hash = read_json(safe_file(root, f"proposals/{proposal_id}.job-hash.json"))["sha256"]
+    if digest(json.dumps(raw, sort_keys=True).encode()) != expected_hash:
+        raise MediaError("Edit contract changed. Prepare a fresh edit")
+    contract = validate(raw)
     expected_repo = safe_file(root, f"proposals/{proposal_id}")
     if Path(contract["repo"]).resolve() != expected_repo.resolve() or contract["role"] != "artist":
         raise MediaError("Edit contract changed")

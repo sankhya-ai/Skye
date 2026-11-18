@@ -48,9 +48,9 @@ def import_video(state: Path, source: Path, *, scene_detection=True, cuts=None, 
         raise MediaError("HDR needs a color-managed conversion to SDR before import")
     project_id = uuid.uuid4().hex[:16]
     media = state / "media"
-    media.mkdir(parents=True, exist_ok=True)
+    media.mkdir(mode=0o700, parents=True, exist_ok=True)
     stage = media / (".import-" + project_id)
-    stage.mkdir()
+    stage.mkdir(mode=0o700)
     try:
         shutil.copyfile(source, stage / "original.bin")
         # A single CFR mezzanine avoids guessing VFR source PTS during each shot render.
@@ -92,6 +92,8 @@ def import_video(state: Path, source: Path, *, scene_detection=True, cuts=None, 
                    "original_hash": file_hash(stage / "original.bin"), "has_audio": normalized["audio"],
                    "segmentation": "detected" if scene_detection and cuts is None else "manual", "units": units}
         write_json(stage / "project.json", project)
+        (stage / "original.bin").chmod(0o400)
+        (stage / "source.webm").chmod(0o400)
         stage.rename(media / project_id)
         return project
     except BaseException:

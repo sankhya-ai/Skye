@@ -106,3 +106,13 @@ def test_canonical_commit_survives_incomplete_mirror_writes(project):
     update(project,"shot-0001",revision(project),before)
     (project/"units"/"shot-0001"/"visual.html").write_text("partial interrupted file")
     assert files_for(project,"shot-0001")==before
+
+
+def test_stale_prepared_job_fails_before_dispatch(project,monkeypatch):
+    from skye.media.worker import run_edit
+    p=handoff.prepare(project,"shot-0001","Change title")
+    f=files_for(project,"shot-0002");f["visual.html"]+='<!-- newer edit -->'
+    update(project,"shot-0002",revision(project),f)
+    def fail(*a,**kw): raise AssertionError("A stale job must not spend agent usage")
+    with pytest.raises(MediaError,match="fresh edit"):
+        run_edit(project.parent.parent,project,p["proposal"],lambda data:None,runner=fail)
