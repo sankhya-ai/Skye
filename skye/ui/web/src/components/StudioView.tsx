@@ -76,7 +76,7 @@ export function StudioView() {
       <button onClick={() => setLegacy(true)}>Legacy projects</button></header>
     {error && <div role="alert" className="studio-error">{error}<button onClick={() => setError('')}>Dismiss</button></div>}
     <div className="studio-body">
-      <main className="studio-editor">{session ? <iframe ref={frame} title="Skye video editor" src={session.url} allow="clipboard-read; clipboard-write; fullscreen" /> : <div className="studio-start"><p>{error ? 'Editor not ready' : 'Opening editor...'}</p><button onClick={() => void start()}>Retry</button><code>python -m skye.studio.setup</code></div>}</main>
+      <main className="studio-editor">{session ? <iframe ref={frame} title="Skye video editor" referrerPolicy="origin" src={session.url} allow="clipboard-read; clipboard-write; fullscreen" /> : <div className="studio-start"><p>{error ? 'Editor not ready' : 'Opening editor...'}</p><button onClick={() => void start()}>Retry</button><code>python -m skye.studio.setup</code></div>}</main>
       <aside className="studio-agent"><div><h2>Ask</h2><p>One edit at a time. Select clips in the timeline. Linked audio is included.</p></div>
         <div className="studio-selection"><span>Scope</span><strong>{selected.length ? `${selected.length} selected clip${selected.length === 1 ? '' : 's'} + links` : 'Select clips'}</strong><small>{selected.join(', ') || 'No project files or service keys are shared with the worker.'}</small></div>
         <label>Agent<select value={adapter} onChange={e => setAdapter(e.target.value)}><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></label>

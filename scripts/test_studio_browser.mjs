@@ -67,6 +67,9 @@ try {
   await page.waitForTimeout(400);
   const afterManual = await call(`/api/projects/${project.id}`);
   assert.notEqual(afterManual.rev,beforeManual.rev,'manual ripple did not save');
+  const stale=await fetch(session.origin+`/api/projects/${project.id}/edit`,{method:'POST',headers:{'x-studio-key':key,'Content-Type':'application/json'},body:JSON.stringify({...edits[0],base:beforeManual.rev})});
+  assert.equal(stale.status,409,'stale edit did not reject');
+  assert.equal(await editor.locator('body').evaluate(()=>new URL(document.referrer).search),'','parent token leaked in frame referrer');
   const get=(f,id)=>f.value.tracks.flatMap(t=>t.clips).find(c=>c.id===id);
   console.log('MANUAL_TIMING',JSON.stringify(afterManual.value));
   assert.deepEqual(get(afterManual,'opening').time,get(afterManual,'opening-audio').time,'linked trim differs');
