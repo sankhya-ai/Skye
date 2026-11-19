@@ -323,6 +323,24 @@ def apply_effect(project_root: str | Path, shot: int, effect: str, *,
             cursor += d
         body = _edit_shot_clip(body, s, lambda tag: '\n  '.join(tags))
         change['dur'] = cursor - s.at
+    elif effect == 'cutout':
+        body = _edit_shot_clip(body, s, lambda tag: _set_style(tag, f'{s.style};--of-cutout:1;--of-cutout-mode:0'))
+        change['backend'] = 'bundled person model, existing native preview/export path'
+    elif effect == 'text-behind-native':
+        if not text:
+            raise EditError('text-behind-native needs --text')
+        from .matte import prepare_matte
+        length = dur or min(2.0, s.at+s.dur-t0)
+        prepared = prepare_matte(root, s, t0, length)
+        page = effects.ktype(root, f'fx-behind-{shot}-{nonce}', _words(text), dur=length,
+                             fg=fg, accent=accent, overlay=True)
+        body, _ = overlay(page, p_dur=length)
+        source_start = prepared['source_start']
+        source_end = source_start + length
+        foreground = (f'<video id="fx-foreground-{nonce}" src="{s.src}#t={source_start:.6f},{source_end:.6f}" '
+                      f'at="{t0:.6f}" volume="0" matte="{prepared["matte"]}" style="object-fit:cover"></video>')
+        body = _insert_overlay(body, foreground, t0, length)
+        change.update(prepared)
     elif effect == 'text-behind':
         if not text:
             raise EditError('text-behind needs --text "LINE ONE|LINE TWO"')
@@ -430,7 +448,7 @@ def apply_recipe(project_root: str | Path, shot: int, recipe: list[dict], *, tra
     for i, step in enumerate(recipe):
         if not isinstance(step, dict) or 'effect' not in step or set(step) - allowed:
             raise EditError('recipe steps need effect and supported parameters only')
-        if step['effect'] in ('text-behind', 'ramp') and i != len(recipe)-1:
+        if step['effect'] in ('text-behind', 'text-behind-native', 'ramp') and i != len(recipe)-1:
             raise EditError('split/bake effect must be the last recipe step')
     root = Path(project_root)
     film = root/'film.html'
@@ -463,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument('--shot', type=int, default=None, help='shot number, from 1, on the footage track')
     p.add_argument('--effect', default=None,
                    help='caption-pop, ktype, caption, meme, hook, flash, film-burn, grain, sticker, '
-                        'freeze-pop, shake, punch, whip-in, whip-out, glitch, mirror, ramp, text-behind')
+                        'freeze-pop, shake, punch, whip-in, whip-out, glitch, mirror, ramp, text-behind, text-behind-native, cutout')
     p.add_argument('--recipe', help='JSON style recipe file; no reference analysis is performed')
     p.add_argument('--text', default='', help='words/lines separated by |')
     p.add_argument('--at', type=float, default=None, help='timeline second; default 0.2s into the shot')

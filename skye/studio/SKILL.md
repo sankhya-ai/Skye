@@ -28,8 +28,9 @@ command, or that a supported command has been visually proven on this clip.
 Text is overlay-first. Keep footage running under labels and captions. Use
 full-frame cards only for an intentional explanation/specification beat.
 
-Text-behind is a local baked 30 fps composite, not a native editable track
-matte. It has soft edges and simple temporal smoothing, not camera tracking.
+For editable text plus a prepared native matte, use text-behind-native.
+The older text-behind command is a local baked 30 fps composite. Both have
+soft edges and simple temporal smoothing, not camera tracking.
 Small crowded figures and fast motion need a quality check. One motion effect
 per shot is supported; multiple overlays can be combined. Duration-changing
 ramps and unsupported clip fields are refused. Never bypass a refusal by

@@ -51,6 +51,8 @@ Text lines/words use `|`; asterisks mark accent lines where supported.
 | mirror | | Mirrored halves, duplicate audio muted |
 | ramp | --speeds 0.75,1.5 | Equal source portions with balanced speeds |
 | text-behind | --text 'WALKING IN|TOKYO', --dur 2 | Local baked text occluded by foreground people |
+| text-behind-native | --text 'WALKING IN|TOKYO', --dur 2 | Prepared PNG matte, editable text layer, original footage retained |
+| cutout | | Existing bundled lightweight person cutout in preview/export |
 
 Text overlays leave footage running. Full-frame scene cards remain available
 through scenes.py with overlay=False for an intentional explanation moment.
@@ -72,9 +74,10 @@ Do not insert cards for routine labels/captions.
 - Exponential temporal smoothing and soft edges reduce shimmer but can
   leave trails on fast motion. There is no optical-flow stabilization,
   camera tracking, perspective reconstruction or automatic ground anchoring.
-- Text-behind bakes a new asset, then inserts the processed window and
-  retains the original source. It is not native live track-matte editing,
-  --of-cutout render wiring or an alpha-video declaration.
+- The baked text-behind command creates a new composite asset. The separate
+  text-behind-native command instead prepares alpha PNG masks, leaves title
+  text editable, and inserts a silent foreground copy with the native matte
+  property. Both retain the original source. See TRACK-MATTE.md.
 - Text-behind measured around 45 seconds for 60 frames in the earlier
   private crowd test; this varies with source size, masks and encoding.
 - Swipe, outline-glow, color-pop, picture-in-picture, match-cut zooms and
@@ -112,6 +115,11 @@ of visual similarity to a reference. Render and inspect before accepting.
   Skye, exported frame inspected.
 - One-line text-behind command: generated a two-second crowd composite,
   inserted it in film.html, exported through Skye, overlap inspected.
+- One-line text-behind-native command: prepared 60 crowd mask frames,
+  added editable text and a silent masked foreground copy, then exported
+  through Skye. Inspected title occlusion in the actual export.
+- Existing --of-cutout mode 0: short export completed with the bundled
+  lightweight person model. Edges were visibly soft/ragged.
 - Other command paths have unit/native-parser tests, not all end-to-end
   visual proofs. Effects demonstrated in earlier hand-authored reels are
   distinct from command-level verification.
