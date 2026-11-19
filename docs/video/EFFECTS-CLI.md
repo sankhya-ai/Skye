@@ -16,9 +16,11 @@ No model or paid service is called by these commands.
 A shot is a video clip, in document order, on the footage section. If more
 than one non-effect section contains video, select `--track N`, the section
 number counting from 1. Use `--list` again after adding tracks or splitting
-clips, since numbers can change. Footage clips currently need explicit `id`
-and `at` attributes, double-quoted HTML attributes, and a finite
-`#t=start,end` range. Unsupported/ambiguous cases fail rather than guessing.
+clips, since numbers can change. The native parser normalizes clip IDs,
+implicit at=0 and quoted attributes before applying an edit, while preserving
+the film head, comments and section flags. Footage clips currently need a
+finite #t=start,end range. Locked tracks are refused.
+Unsupported/ambiguous cases fail rather than guessing.
 
 The command validates the resulting film with Skye's native film parser
 before replacing film.html. A successful edit saves film.html.bak. It does

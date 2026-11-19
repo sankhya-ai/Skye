@@ -12,7 +12,7 @@ from pathlib import Path
 
 def prepare_matte(root: Path, shot, at: float, dur: float, *, fps: int = 30) -> dict:
     from .edit import EditError
-    if shot.speed != 1 or shot.style.strip().strip(';') not in ('', 'object-fit:cover'):
+    if shot.speed != 1 or re.sub(r'\s+', '', shot.style).strip(';') not in ('', 'object-fit:cover'):
         raise EditError('prepared matte requires an un-sped, plain object-fit:cover shot')
     if not math.isfinite(at) or not math.isfinite(dur) or dur <= 0 or at < shot.at or at+dur > shot.at+shot.dur+1e-6:
         raise EditError('matte window must fit inside the selected shot')

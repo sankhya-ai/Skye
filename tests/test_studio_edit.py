@@ -67,7 +67,7 @@ class TestShots(unittest.TestCase):
         edit.apply_effect(self.dir.name, 1, 'shake', dur=0.4)
         edit.apply_effect(self.dir.name, 2, 'shake', dur=0.4)
         text = (Path(self.dir.name) / 'film.html').read_text()
-        self.assertIn('animation:fx-shake-1 0.4s linear both', text)
+        self.assertRegex(text, r'animation: fx-shake-1-[a-f0-9]+ 0.4s linear both')
         self.assertIn('@keyframes fx-shake-1', text)
         self.assertEqual(text.count('@keyframes fx-shake-1'), 1)
         self.assertIn('animation-delay:0.2s', text)

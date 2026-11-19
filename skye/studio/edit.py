@@ -52,7 +52,22 @@ _TIME = re.compile(r'#t=([\d.]+)(?:,([\d.]+))?')
 
 
 def _attrs(el: str) -> dict[str, str]:
-    return dict(_ATTR.findall(el))
+    from html.parser import HTMLParser
+    class FirstTag(HTMLParser):
+        values = None
+        def handle_starttag(self, tag, attrs):
+            if self.values is None:
+                self.values = dict((k, '' if v is None else v) for k,v in attrs)
+    parser=FirstTag();parser.feed(el)
+    return parser.values or {}
+
+
+def _canonical_text(text: str) -> str:
+    result = subprocess.run(['node', str(Path(__file__).with_name('effect-check.mjs')), '--normalize'],
+                            input=text,text=True,capture_output=True,timeout=15)
+    if result.returncode:
+        raise EditError('invalid input film: '+result.stderr[-2000:])
+    return result.stdout
 
 
 def _clip_window(el: str) -> tuple[float, float] | None:
@@ -68,12 +83,12 @@ def _clip_window(el: str) -> tuple[float, float] | None:
     return at, (end - start) / speed
 
 
-def read_shots(project_root: str | Path, track: int | None = None) -> list[Shot]:
+def read_shots(project_root: str | Path, track: int | None = None, *, _text: str | None = None) -> list[Shot]:
     """Shots of the footage track: the last <section> that has <video> clips."""
     film = Path(project_root) / 'film.html'
     if not film.exists():
         raise EditError(f'{film}: no film.html here')
-    text = film.read_text(encoding='utf-8')
+    text = _text if _text is not None else _canonical_text(film.read_text(encoding='utf-8'))
     sections = [m.group(0) for m in re.finditer(r'<section\b[^>]*>.*?</section>', text, re.S)]
     candidates = [(i, sec) for i, sec in enumerate(sections, 1)
                   if '<video' in sec and 'data-skye-effect' not in sec]
@@ -84,6 +99,8 @@ def read_shots(project_root: str | Path, track: int | None = None) -> list[Shot]
     if len(candidates) != 1:
         raise EditError('multiple video tracks; select one with --track (section number from 1)')
     footage = candidates[0][1]
+    if 'locked' in _attrs(footage):
+        raise EditError('selected footage track is locked')
     shots = []
     for m_el in re.finditer(r'<video\b[^>]*?>', footage, re.S):
         el = m_el.group(0)
@@ -189,15 +206,14 @@ def apply_effect(project_root: str | Path, shot: int, effect: str, *,
     """Put one effect on one shot. Returns a record of what changed."""
     root = Path(project_root)
     film_path = root / 'film.html'
-    body = film_path.read_text(encoding='utf-8')
-    checked = subprocess.run(['node', str(Path(__file__).with_name('effect-check.mjs'))],
-                             input=body, text=True, capture_output=True, timeout=15)
-    if checked.returncode:
-        raise EditError('invalid input film: ' + checked.stderr[-2000:])
-    shots = read_shots(root, track)
+    body = _canonical_text(film_path.read_text(encoding='utf-8'))
+    shots = read_shots(root, track, _text=body)
     if not 1 <= shot <= len(shots):
         raise EditError(f'shot {shot}: the film has {len(shots)} shots')
     s = shots[shot - 1]
+    for color in (fg, accent):
+        if not re.fullmatch(r'#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|white|black|transparent', color):
+            raise EditError('effect colors must be hex colors, white, black or transparent')
     t0 = s.at + offset if at is None else at
     values = [t0, offset, zoom, amp, strength] + ([dur] if dur is not None else [])
     if not all(math.isfinite(v) for v in values) or (dur is not None and dur <= 0):
@@ -263,20 +279,20 @@ def apply_effect(project_root: str | Path, shot: int, effect: str, *,
         change['dur'] = used
 
     elif effect == 'shake':
-        name = f'fx-shake-{shot}'
+        name = f'fx-shake-{shot}-{nonce}'
         body = _inject_keyframes(body, effects.shake(amp=amp, dur=dur or 0.35, name=name))
         body = _edit_shot_clip(body, s, lambda tag: _set_style(
             tag, f'{s.style};animation:{name} {dur or 0.35}s linear both;animation-delay:{round(t0-s.at,3)}s'))
         change['dur'] = dur or 0.35
     elif effect == 'punch':
-        name = f'fx-punch-{shot}'
+        name = f'fx-punch-{shot}-{nonce}'
         body = _inject_keyframes(body, f'@keyframes {name} {{ 0% {{ scale: 1 }} 100% {{ scale: {zoom} }} }}')
         body = _edit_shot_clip(body, s, lambda tag: _set_style(
             tag, f'{s.style};animation:{name} {s.dur}s ease-out both'))
         change['dur'] = s.dur
     elif effect in ('whip-out', 'whip-in'):
         w_dur = dur or 0.4
-        name = f'fx-{effect}-{shot}'
+        name = f'fx-{effect}-{shot}-{nonce}'
         kf = effects.whip_out(w_dur, name) if effect == 'whip-out' else effects.whip_in(w_dur, name)
         body = _inject_keyframes(body, kf)
         delay = f'animation-delay:{round(s.dur - w_dur, 3)}s;' if effect == 'whip-out' else ''
@@ -298,8 +314,8 @@ def apply_effect(project_root: str | Path, shot: int, effect: str, *,
     elif effect == 'mirror':
         a, b = s.time
         right = (f'<video src="{s.src}#t={a},{b}" at="{s.at}" speed="{s.speed:g}" '
-                 f'volume="0" style="{s.style};clip-path:inset(0 0 0 50%);animation:fx-mirror-flip-{shot} {s.dur}s both"></video>')
-        body = _inject_keyframes(body, f'@keyframes fx-mirror-flip-{shot} {{ 0% {{ scale: -1 1 }} 100% {{ scale: -1 1 }} }}')
+                 f'volume="0" style="{s.style};clip-path:inset(0 0 0 50%);animation:fx-mirror-flip-{shot}-{nonce} {s.dur}s both"></video>')
+        body = _inject_keyframes(body, f'@keyframes fx-mirror-flip-{shot}-{nonce} {{ 0% {{ scale: -1 1 }} 100% {{ scale: -1 1 }} }}')
         body = _edit_shot_clip(body, s, lambda tag: _set_style(tag, f'{s.style};clip-path:inset(0 50% 0 0)'))
         body = _insert_overlay(body, right, s.at, s.dur)
         change['dur'] = s.dur
@@ -369,7 +385,7 @@ def text_behind(root: Path, shot: Shot, lines: list[str], at: float, dur: float)
     masks (temporally smoothed, feathered), text composited under the people,
     written to assets/text-behind-N.mp4, and the shot clip pointed at it.
     Runs fully local (rembg + ffmpeg); ~0.75s of compute per frame here."""
-    if shot.style.strip().strip(';') not in ('', 'object-fit:cover'):
+    if re.sub(r'\s+', '', shot.style).strip(';') not in ('', 'object-fit:cover'):
         raise EditError('text-behind currently requires a plain object-fit:cover shot')
     if shot.speed != 1:
         raise EditError('text-behind: bake it on an un-sped shot')
@@ -455,7 +471,7 @@ def apply_recipe(project_root: str | Path, shot: int, recipe: list[dict], *, tra
     before = film.read_bytes()
     backup = root/'film.html.bak'
     old_backup = backup.read_bytes() if backup.exists() else None
-    known = {p for folder in ('pages', 'assets') for p in (root/folder).glob('*') if p.is_file()}
+    known = {p for folder in ('pages', 'assets') for p in (root/folder).glob('*')}
     try:
         changes = [apply_effect(root, shot, track=track, **step) for step in recipe]
         backup.write_bytes(before)
@@ -468,8 +484,12 @@ def apply_recipe(project_root: str | Path, shot: int, recipe: list[dict], *, tra
             backup.write_bytes(old_backup)
         for folder in ('pages', 'assets'):
             for p in (root/folder).glob('*'):
-                if p.is_file() and p not in known:
-                    p.unlink()
+                if p not in known:
+                    if p.is_dir():
+                        import shutil
+                        shutil.rmtree(p)
+                    else:
+                        p.unlink()
         raise
 
 
