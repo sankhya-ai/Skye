@@ -104,7 +104,7 @@ def effect_proposal(state, studio, project, selected, plan):
                 raise MediaError(str(exc)) from exc
             result = subprocess.run(['node', str(Path(__file__).with_name('effect-diff.mjs'))], input=json.dumps({'before': film, 'text': (root/'film.html').read_text(), 'selected': clip['id']}), text=True, capture_output=True, timeout=20)
             if result.returncode:
-                raise MediaError(result.stderr[-2000:])
+                raise MediaError('The effect could not be applied safely. Your film is unchanged. Try Undo or refresh the shot, then retry. If this continues, use the manual effect controls.')
             ops = json.loads(result.stdout)
             if studio.request(f'/api/projects/{project}')['rev'] != snap['rev']:
                 raise MediaError('Project changed. Ask again')
