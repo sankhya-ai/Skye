@@ -169,7 +169,7 @@ export async function layersOf(film, root, entry, graded) {
       /* no fade, and no effect a host makes of its custom properties (a cutout, a retouch, a place in 3D), but a grade:
          its graded copy is the picture */
       const luts = lutsOf(clip);
-      if (clipFade(clip) || /--(of|fx)-/.test(`${clip.style ?? ''}`.replace(/--of-lut\s*:[^;]*;?/g, ''))) continue;
+      if (clip.matte || clipFade(clip) || /--(of|fx)-/.test(`${clip.style ?? ''}`.replace(/--of-lut\s*:[^;]*;?/g, ''))) continue;
       if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(clip.src) || !existsSync(layer.file)) continue;
       let copy = null;
       if (luts.length) {

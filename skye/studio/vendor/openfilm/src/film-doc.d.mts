@@ -49,6 +49,8 @@ export type FilmOverride = {
 export type FilmClip = {
   src: string;
   id: string;
+  /** Video-only prepared source-time alpha PNG sequence manifest, relative to film.html. */
+  matte?: string;
   at?: number;
   time?: FilmTimeSpan;
   /** Neither drawn nor heard; its timing and original level stay available in the editor. */

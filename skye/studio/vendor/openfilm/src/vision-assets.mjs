@@ -93,6 +93,7 @@ export async function visionModel(name) {
 }
 const scripts = new Set([
   'video-effects.mjs',
+  'track-matte.mjs',
   'vision-config.mjs',
   'vision-preview.mjs',
   'vision-cache.mjs',

@@ -1,3 +1,4 @@
+import { applyTrackMatte } from './track-matte.mjs';
 // The film: film.html, played. The host serves film.html with this module (and, before it, its own start, filmStart
 // in host.mjs); the file's own elements are the clips: an <iframe> a web page, a <video>, an <img> a still, an
 // <audio> a sound for the mix. Where each plays and sits is what film-doc.mjs reads in the file, the same reading
@@ -1511,6 +1512,7 @@ async function drawClip(c, t, live, play, turn, coming, going) {
     return;
   }
   if (c.kind === 'video') {
+    await applyTrackMatte(c, sourceAt(c.span, t - c.at, c.row));
     if (play) {
       /* where it should be this moment (not at the frame on its way): its own clock runs on to that frame */
       const playing = sourceAt(c.span, Math.min(Math.max(0, play.now - c.at), c.span.length), c.row);

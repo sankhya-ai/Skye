@@ -1,0 +1,38 @@
+"""Native matte declaration, source-time mapping and straight-path protection."""
+import json
+import subprocess
+from pathlib import Path
+
+ROOT=Path(__file__).resolve().parents[1]
+VENDOR=ROOT/'skye/studio/vendor/openfilm/src'
+
+def node(code):
+    r=subprocess.run(['node','--input-type=module','-e',code],capture_output=True,text=True,check=True)
+    return json.loads(r.stdout)
+
+def test_matte_native_roundtrip():
+    result=node(f'''import {{readFilmFile,filmHtml}} from {json.dumps((VENDOR/'film-doc.mjs').as_uri())};
+const text='<html><head><style></style></head><body><section><video src="a.mp4#t=2,4" matte="assets/masks/manifest.json"></video></section></body></html>';
+const r=readFilmFile(text); if(!r.doc) throw Error(r.problems.join(' '));
+const again=readFilmFile(filmHtml(r.doc));
+console.log(JSON.stringify(again.doc.tracks[0].clips[0]));''')
+    assert result['matte']=='assets/masks/manifest.json'
+
+def test_matte_unsafe_paths_rejected():
+    result=node(f'''import {{readFilm}} from {json.dumps((VENDOR/'film-doc.mjs').as_uri())};
+console.log(JSON.stringify(['https://bad/m.json','../x.json','/x.json'].map(matte=>readFilm({{stage:{{w:320,h:480}},tracks:[{{clips:[{{id:'a',src:'a.mp4',matte}}]}}]}}).doc===null)));''')
+    assert all(result)
+
+def test_source_time_frame_selection_and_missing_range():
+    result=node(f'''import {{matteFrame}} from {json.dumps((VENDOR/'track-matte.mjs').as_uri())};
+const m={{fps:30,start:2,frames:['a.png','b.png','c.png']}};
+let throws=false;try{{matteFrame(m,4)}}catch{{throws=true}}
+console.log(JSON.stringify([matteFrame(m,2),matteFrame(m,2+1/30),throws]));''')
+    assert result==['a.png','b.png',True]
+
+def test_matte_disables_unmasked_straight_export():
+    assert 'if (clip.matte || clipFade(clip)' in (VENDOR/'direct.mjs').read_text()
+
+def test_matte_module_is_served_to_browser():
+    assert "'track-matte.mjs'" in (VENDOR/'vision-assets.mjs').read_text()
+    assert 'await applyTrackMatte(c,' in (VENDOR/'timeline.mjs').read_text()
