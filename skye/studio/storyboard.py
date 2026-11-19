@@ -71,22 +71,17 @@ def describe(state,project,snapshot,*,thumbnails=False,studio=None):
             if c.get('style'):effects.append('clip style')
             if speed!=1:effects.append(f'{speed:g}x speed')
             item={'id':c['id'],'shot':len(shots)+1,'track':ti+1,'at':at,'duration':round(duration,3),'source':src,'sourceIn':start,'sourceOut':end,'text':texts,'effects':list(dict.fromkeys(effects)),'note':saved.get(c['id'],''),'code':c.get('attrs',{}).get('data-skye-shot')=='code','locked':bool(t.get('locked')),'placeholder':c.get('attrs',{}).get('data-skye-shot')=='placeholder','transition':json.loads(c.get('attrs',{}).get('data-skye-transition','{}')).get('effect','cut')}
-            if thumbnails:
-                source=(root/src.split('#')[0]).resolve()
-                if source.is_relative_to(root) and source.is_file():
-                    cache=Path(state)/'studio-storyboards'/'frames';cache.mkdir(parents=True,exist_ok=True)
-                    key=hashlib.sha256(f'{source}:{source.stat().st_mtime_ns}:{start}:{duration}:{speed}'.encode()).hexdigest()[:24];thumb=cache/(key+'.jpg')
-                    if not thumb.exists() and video.search(src):
-                        proc=subprocess.run(['ffmpeg','-v','error','-ss',str(start+min(duration*speed/2,.5)),'-i',str(source),'-frames:v','1','-vf','scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2','-q:v','4','-f','image2pipe','-vcodec','mjpeg','-'],capture_output=True,timeout=25)
-                        if proc.returncode==0 and proc.stdout:thumb.write_bytes(proc.stdout)
-                    if not thumb.exists() and not video.search(src) and studio:
-                        import urllib.request,urllib.parse
-                        route='/api/projects/'+project+'/media?'+urllib.parse.urlencode({'path':src,'what':'frame','ms':round((start+min(duration/2,.5))*1000),'w':480,'clip':c['id']})
-                        request=urllib.request.Request(studio.origin+route,headers={'x-studio-key':studio.session['key']})
-                        try:
-                            with urllib.request.urlopen(request,timeout=25) as response:thumb.write_bytes(response.read())
-                        except OSError:pass
-                    if thumb.exists():item['thumbnail']='data:image/jpeg;base64,'+base64.b64encode(thumb.read_bytes()).decode()
+            if thumbnails and studio:
+                # Draw the whole film at timeline time, not a source page at the
+                # thumbnail aspect. Native caching tracks page/asset dependencies.
+                import urllib.request, urllib.parse
+                route='/api/projects/'+project+'/media?'+urllib.parse.urlencode({'path':'film.html','what':'frame','ms':round((at+min(duration/2,.5))*1000),'w':320})
+                request=urllib.request.Request(studio.origin+route,headers={'x-studio-key':studio.session['key']})
+                try:
+                    with urllib.request.urlopen(request,timeout=30) as response:
+                        item['thumbnail']='data:image/jpeg;base64,'+base64.b64encode(response.read()).decode()
+                except OSError:
+                    pass  # Show an explicit missing preview, never a wrong source composition.
             shots.append(item)
     shots.sort(key=lambda s:(s['at'],s['track']))
     for i,shot in enumerate(shots,1):shot['shot']=i

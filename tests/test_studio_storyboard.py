@@ -103,3 +103,22 @@ def test_import_window_validated_against_real_duration(tmp_path):
     assert result['ops'][-1]['clip']['time']==[3,5]
     assert result['ops'][-1]['clip']['style']=='object-fit:cover'
     with pytest.raises(MediaError,match='longer'):plan_change(tmp_path,studio,'demo',{**args,'sourceIn':5})
+
+
+def test_composed_preview_uses_film_timeline_time(tmp_path,monkeypatch):
+    import urllib.parse
+    seen=[]
+    class Response:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self):return b'jpeg'
+    def open_request(request,timeout):
+        seen.append(urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query))
+        return Response()
+    monkeypatch.setattr('urllib.request.urlopen',open_request)
+    studio=Studio(tmp_path);studio.origin='http://localhost:1234';studio.session={'key':'test'}
+    result=describe(tmp_path,'demo',studio.request(''),thumbnails=True,studio=studio)
+    assert len(result['shots'])==2
+    assert [q['path'] for q in seen]==[['film.html'],['film.html']]
+    assert [q['ms'] for q in seen]==[['500'],['3500']]
+    assert all(s['thumbnail'].startswith('data:image/jpeg;base64,') for s in result['shots'])
