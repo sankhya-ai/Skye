@@ -11,6 +11,7 @@ license = {text = "Apache-2.0"}
 
 [project.optional-dependencies]
 media = ["scenedetect[opencv]>=0.6.7,<0.7"]
+video-analysis = ["opencv-python-headless>=4.8,<5", "numpy>=1.24,<3"]
 
 [project.scripts]
 skye = "skye.cli:main"
