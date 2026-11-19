@@ -237,10 +237,25 @@ def flash(project_root: str | Path, page_name: str, color: str = "#ffffff", dur:
     return _write(project_root, page_name, body, "", dur)
 
 
-def sticker(project_root: str | Path, page_name: str, emoji: str, dur: float = 1.2,
-            size: int = 260, rotate: float = -8.0) -> dict[str, Any]:
-    """A big emoji/sticker popping in with a bounce and a tilt."""
-    body = f'<div style="font-size:{size}px;animation:st {dur}s cubic-bezier(.2,.9,.3,1.6) both;transform:rotate({rotate}deg)">{html.escape(emoji)}</div>'
+SHAPES = {
+    "star": '<polygon points="50,0 61,35 98,35 68,57 79,92 50,70 21,92 32,57 2,35 39,35"/>',
+    "burst": '<polygon points="50,0 58,28 84,10 74,38 100,42 76,54 92,78 62,66 58,96 46,68 16,84 30,56 2,50 28,40 20,12 44,30"/>',
+    "heart": '<path d="M50 88 C20 62 2 44 2 26 C2 10 14 2 26 2 C36 2 45 8 50 18 C55 8 64 2 74 2 C86 2 98 10 98 26 C98 44 80 62 50 88 Z"/>',
+}
+
+
+def sticker(project_root: str | Path, page_name: str, shape: str = "star", dur: float = 1.2,
+            size: int = 260, rotate: float = -8.0, fill: str = "#ffd23f",
+            stroke: str = "#e5484d") -> dict[str, Any]:
+    """A big sticker popping in with a bounce and a tilt. `shape` is star, burst
+    or heart (inline SVG: emoji glyphs are not reliable in headless renders), or
+    a single emoji/character as a fallback."""
+    if shape in SHAPES:
+        art = (f'<svg viewBox="0 0 100 100" width="{size}" height="{size}">'
+               f'<g fill="{fill}" stroke="{stroke}" stroke-width="4">{SHAPES[shape]}</g></svg>')
+    else:
+        art = f'<span style="font-size:{size}px">{html.escape(shape)}</span>'
+    body = f'<div style="animation:st {dur}s cubic-bezier(.2,.9,.3,1.6) both;transform:rotate({rotate}deg)">{art}</div>'
     css = "@keyframes st{0%{opacity:0;transform:scale(.2) rotate(0deg)}25%{opacity:1;transform:scale(1.15) rotate(var(--r,0deg))}45%{transform:scale(1)}85%{opacity:1}100%{opacity:0;transform:scale(1.05)}}"
     return _write(project_root, page_name, body, css, dur)
 
