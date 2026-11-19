@@ -98,3 +98,17 @@ def test_existing_overrides_outside_scope_do_not_block_proposals():
     ok = [{'op': 'set', 'clip': 'v1', 'field': 'overrides', 'value': [{'fade': [0.2, 0.2]}]},
           {'op': 'set', 'clip': 'a1', 'field': 'overrides', 'value': [{'fade': [0.2, 0.2]}]}]
     assert validate_ops(film, ok, ['v1', 'a1']) == ok
+
+
+def test_worker_effect_plan_uses_trusted_generator(tmp_path,monkeypatch):
+    seen={}
+    def prepare(state,studio,project,selected,plan):
+        seen.update(plan)
+        return {'project':project,'base':'base123','ops':[{'op':'set','clip':'a1','field':'volume','value':.5}]}
+    monkeypatch.setattr('skye.studio.commands.effect_proposal',prepare)
+    def fake(spec):
+        assert spec['role']=='video-editor' and 'Bash' not in spec['tools']
+        Path(spec['repo'],'ops.json').write_text('{"effect":"punch"}')
+        return Result(ok=True,output='Prepared punch.',returncode=0)
+    result=propose(tmp_path,Studio(),'abc123',['v1'],'Punch in',runner=fake)
+    assert seen=={'effect':'punch'} and result['base']=='base123'

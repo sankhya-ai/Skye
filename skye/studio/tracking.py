@@ -64,7 +64,9 @@ def track_text(project, shot, text, *, quad=None, roi=None, track=None, fps=15):
             corners=cv2.perspectiveTransform(q.reshape(-1,1,2),H).reshape(4,2)
             if not np.isfinite(corners).all() or abs(cv2.contourArea(corners))<100: raise EditError('Tracked plane collapsed')
             samples.append({'t':round(t,5),'quad':(corners/np.array([aw,ah])).tolist()}); quality.append({'t':round(t,5),'inliers':count,'error':round(error,3)})
-            prev=gray;current=nxt.reshape(-1,1,2)
+            keep=inliers.ravel().astype(bool)
+            original=original[keep]
+            prev=gray;current=nxt[keep].reshape(-1,1,2)
     finally: cap.release()
     # Homographies are resolved ahead of time, so preview and exact export use identical transforms.
     transforms=[]
@@ -83,9 +85,9 @@ def track_text(project, shot, text, *, quad=None, roi=None, track=None, fps=15):
     return {'page':'pages/'+name+'.html','tracking':'pages/'+name+'.json','frames':len(samples),'min_inliers':min(v['inliers'] for v in quality),'max_median_error':max(v['error'] for v in quality)}
 
 
-def main():
+def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('project');p.add_argument('--shot',type=int,required=True);p.add_argument('--text',required=True);p.add_argument('--track',type=int);p.add_argument('--quad',help='eight normalized corner coordinates');p.add_argument('--roi',help='normalized x0,y0,x1,y1');p.add_argument('--fps',type=int,default=15)
-    a=p.parse_args();q=None
+    a=p.parse_args(argv);q=None
     if a.quad:
         v=list(map(float,a.quad.split(',')));q=[v[i:i+2] for i in range(0,len(v),2)]
     print(json.dumps(track_text(a.project,a.shot,a.text,track=a.track,quad=q,roi=list(map(float,a.roi.split(','))) if a.roi else None,fps=a.fps)))

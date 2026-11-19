@@ -37,26 +37,32 @@ def analyze(source, *, sample_fps=6, ocr=True):
             previous=gray;histprev=hist
             # One OCR pass per second. A screenshot's text is data, never intent.
             if ocr and i%sample_fps==0 and shutil.which('tesseract'):
-                _,png=cv2.imencode('.png',im)
-                result=subprocess.run(['tesseract','stdin','stdout','--psm','11','tsv'],input=png.tobytes(),capture_output=True,timeout=20)
+                # Two local OCR views: original plus a white-letter mask. The
+                # second catches captions whose background defeats page segmentation.
+                mono=cv2.cvtColor(im,cv2.COLOR_BGR2GRAY)
+                views=[im,cv2.threshold(mono,210,255,cv2.THRESH_BINARY_INV)[1]]
                 words=[];boxes=[]
-                for row in csv.DictReader(io.StringIO(result.stdout.decode(errors='replace')),delimiter='\t'):
-                    try:
-                        if float(row.get('conf',-1))<65 or not row.get('text','').strip(): continue
-                        word=row['text'].strip()
-                        if len(word)>80:continue
-                        x,y,bw,bh=[int(row[k]) for k in ('left','top','width','height')]
-                        # Tiny scene signage is not treated as caption evidence.
-                        if bh/h<.018:continue
-                        words.append(word);boxes.append([x/w,y/h,bw/w,bh/h])
-                    except (ValueError,KeyError):continue
+                for view in views:
+                    _,png=cv2.imencode('.png',view)
+                    result=subprocess.run(['tesseract','stdin','stdout','--psm','11','tsv'],input=png.tobytes(),capture_output=True,timeout=20)
+                    for row in csv.DictReader(io.StringIO(result.stdout.decode(errors='replace')),delimiter='\t'):
+                        try:
+                            if float(row.get('conf',-1))<65 or not row.get('text','').strip(): continue
+                            word=row['text'].strip()
+                            if len(word)>80 or max(sum(c.isalpha() for c in word),sum(c.isdigit() for c in word))<2:continue
+                            x,y,bw,bh=[int(row[k]) for k in ('left','top','width','height')]
+                            if bh/h<.018:continue
+                            box=[x/w,y/h,bw/w,bh/h]
+                            if any(abs(box[0]-b[0])<.015 and abs(box[1]-b[1])<.015 for b in boxes):continue
+                            words.append(word);boxes.append(box)
+                        except (ValueError,KeyError):continue
                 if words:
                     heights=[b[3] for b in boxes];ys=[b[1]+b[3]/2 for b in boxes]
                     captions.append({'t':round(t,3),'text':' '.join(words)[:240],'boxes':boxes,'median_height_fraction':round(statistics.median(heights),4),'vertical_center':round(statistics.median(ys),4),'status':'OCR candidates, may include scene signage'})
     finally:cap.release()
     cuts=[]
     for p in points:
-        if not p['flash_edge'] and p['histogram_distance']>.43 and p['pixel_change']>.10 and (not cuts or p['t']-cuts[-1]>.35): cuts.append(p['t'])
+        if not p['flash_edge'] and ((p['histogram_distance']>.43 and p['pixel_change']>.10) or (p['histogram_distance']>.28 and p['pixel_change']>.18)) and (not cuts or p['t']-cuts[-1]>.35): cuts.append(p['t'])
     boundaries=[0]+cuts+[round(duration,3)]
     shots=[]
     for a,b in zip(boundaries,boundaries[1:]):
@@ -88,9 +94,9 @@ def apply_analysis(project, shot, analysis, *, reference_shot=1, text='', track=
     return apply_recipe(project,shot,recipe,track=track)
 
 
-def main():
+def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('source');p.add_argument('--out',required=True);p.add_argument('--no-ocr',action='store_true');p.add_argument('--apply-to');p.add_argument('--shot',type=int,default=1);p.add_argument('--reference-shot',type=int,default=1);p.add_argument('--text',default='');p.add_argument('--track',type=int)
-    a=p.parse_args();result=analyze(a.source,ocr=not a.no_ocr);Path(a.out).write_text(json.dumps(result,indent=2))
+    a=p.parse_args(argv);result=analyze(a.source,ocr=not a.no_ocr);Path(a.out).write_text(json.dumps(result,indent=2))
     if a.apply_to: print(json.dumps(apply_analysis(a.apply_to,a.shot,result,reference_shot=a.reference_shot,text=a.text,track=a.track)))
     print(json.dumps({'analysis':a.out,'shots':len(result['shots']),'median_shot_seconds':result['median_shot_seconds'],'caption_candidates':len(result['caption_candidates'])}))
 if __name__=='__main__':main()

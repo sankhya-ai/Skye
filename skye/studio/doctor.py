@@ -40,6 +40,6 @@ def check(out):
     (out/'report.json').write_text(json.dumps(result,indent=2));return result
 
 
-def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',default='skye-platform-check');a=p.parse_args();r=check(a.out);print(json.dumps(r,indent=2));sys.exit(0 if r['checks'] and all(v['ok'] for v in r['checks'].values()) else 1)
+def main(argv=None):
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',default='skye-platform-check');a=p.parse_args(argv);r=check(a.out);print(json.dumps(r,indent=2));sys.exit(0 if r['checks'] and all(v['ok'] for v in r['checks'].values()) else 1)
 if __name__=='__main__':main()

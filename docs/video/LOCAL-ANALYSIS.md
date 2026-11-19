@@ -7,6 +7,8 @@ install nothing on their own. Optional analysis dependencies:
 python3 -m pip install -e '.[video-analysis]'
 ```
 
+CLI aliases: `skye studio reference`, `skye studio track`, and `skye studio doctor`.
+
 Tesseract is optional for OCR. FFmpeg and Node are also needed for rendering.
 The shipped `video-editor` team role can call these commands through your own
 Claude Code/Codex. The embedded selected-clip proposer gets a narrower tool
@@ -71,6 +73,14 @@ with a prepared matte separately when people must walk in front of the text.
 
 Proofs: a three-second known pan tracks within 1.5 pixels in the automated test;
 the native rendered grid proof moves the lettering with the grid. A real street
-shot passed for 0.9 seconds, but the same setup lost the plane at 1.07 seconds on
+shot passed for 0.9 seconds, but the same setup lost the plane at 1.27 seconds after outlier pruning on
 a two-second attempt and was correctly rejected. That real result is not a
 claim of long, drift-free crowd tracking.
+
+A separate local check on the 19-second edited street reel found all six known
+cut boundaries within 0.14 seconds of the edit, with a 2.5-second median shot.
+The initial conservative detector missed same-source cuts; a second criterion
+now includes large spatial changes with moderate histogram change. A second
+white-letter OCR pass recovered POV and the main caption, but noisy scene text
+remains in candidate output. This is a measured test case, not a general accuracy
+guarantee or a claim that style transfer matches that reel.
