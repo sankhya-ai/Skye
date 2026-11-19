@@ -122,3 +122,21 @@ def test_composed_preview_uses_film_timeline_time(tmp_path,monkeypatch):
     assert [q['path'] for q in seen]==[['film.html'],['film.html']]
     assert [q['ms'] for q in seen]==[['500'],['3500']]
     assert all(s['thumbnail'].startswith('data:image/jpeg;base64,') for s in result['shots'])
+
+
+def test_project_owned_notes_migrate_and_layout_survives_state_move(tmp_path):
+    import shutil
+    from skye.studio.storyboard import save_layout,_file
+    root=tmp_path/'project';root.mkdir();state=tmp_path/'old-state';studio=Studio(root)
+    _file(state,'demo').write_text(json.dumps({'one':'Old note'}))
+    assert describe(state,'demo',studio.request(''))['shots'][0]['note']=='Old note'
+    save_layout(state,studio,'demo',{'clip':'one','position':{'x':700,'y':550}})
+    save_layout(state,studio,'demo',{'viewport':{'x':-50,'y':75,'zoom':.6}})
+    save_note(state,studio,'demo','two','Project note')
+    assert _file(state,'demo').read_text()==json.dumps({'one':'Old note'})
+    copied=tmp_path/'copied';shutil.copytree(root,copied)
+    other=Studio(copied);board=describe(tmp_path/'fresh-state','new-id',other.request(''))
+    assert [s['note'] for s in board['shots']]==['Old note','Project note']
+    assert board['layout']=={'positions':{'one':{'x':700,'y':550}},'viewport':{'x':-50,'y':75,'zoom':.6}}
+    with pytest.raises(MediaError):save_layout(state,studio,'demo',{'clip':'one','position':{'x':float('nan'),'y':0}})
+    with pytest.raises(MediaError):save_layout(state,studio,'demo',{'viewport':{'x':0,'y':0,'zoom':0}})

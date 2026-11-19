@@ -33,7 +33,7 @@ import { TOOL_DIR } from './projects.mjs';
  */
 
 /** Studio's own state of a project that is part of the film (see projects.mjs): kept with each version. */
-export const STUDIO_STATE = [`${TOOL_DIR}/settings.json`, `${TOOL_DIR}/markers.json`, `${TOOL_DIR}/subtitles.json`];
+export const STUDIO_STATE = [`${TOOL_DIR}/skye-storyboard.json`, `${TOOL_DIR}/settings.json`, `${TOOL_DIR}/markers.json`, `${TOOL_DIR}/subtitles.json`];
 
 const VIDEO = new Set(['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi']);
 const AUDIO = new Set(['mp3', 'm4a', 'wav', 'aac', 'ogg', 'oga', 'opus', 'flac', 'aif', 'aiff']);

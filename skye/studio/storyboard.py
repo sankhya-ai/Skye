@@ -17,9 +17,28 @@ def _file(state,project):
     return folder/(project+'.json')
 
 
-def notes(state,project):
-    try:return json.loads(_file(state,project).read_text())
-    except (FileNotFoundError,ValueError):return {}
+def metadata(state,project,snapshot):
+    # Kept with the project and its exported/versioned closure, not the UI state.
+    if not snapshot.get('project',{}).get('path'):return {'version':1,'notes':{},'positions':{}}
+    root=Path(snapshot['project']['path']).resolve();path=root/'.film/skye-storyboard.json'
+    try:
+        data=json.loads(path.read_text())
+        if not isinstance(data,dict):raise ValueError('Invalid storyboard metadata')
+        return data
+    except FileNotFoundError:
+        try:old=json.loads(_file(state,project).read_text())
+        except (FileNotFoundError,ValueError):old={}
+        return {'version':1,'notes':old,'positions':{}}
+
+
+def _write_metadata(snapshot,data):
+    path=Path(snapshot['project']['path']).resolve()/'.film/skye-storyboard.json'
+    path.parent.mkdir(parents=True,exist_ok=True)
+    temp=path.with_suffix('.tmp');temp.write_text(json.dumps(data,ensure_ascii=False));temp.replace(path)
+
+
+def notes(state,project,snapshot):
+    return metadata(state,project,snapshot).get('notes',{})
 
 
 def save_note(state,studio,project,clip,note):
@@ -27,13 +46,31 @@ def save_note(state,studio,project,clip,note):
     snap=studio.request(f'/api/projects/{project}')
     if clip not in {c['id'] for t in snap['value']['tracks'] for c in t['clips']}:raise MediaError('Shot no longer exists')
     with _LOCK:
-        data=notes(state,project);data[clip]=note
-        path=_file(state,project);temp=path.with_suffix('.tmp');temp.write_text(json.dumps(data,ensure_ascii=False));temp.replace(path)
+        data=metadata(state,project,snap);data.setdefault('notes',{})[clip]=note;_write_metadata(snap,data)
     return {'clip':clip,'note':note}
 
 
+def save_layout(state,studio,project,body):
+    import math
+    snap=studio.request(f'/api/projects/{project}')
+    def valid(value):return isinstance(value,(int,float)) and math.isfinite(value)
+    with _LOCK:
+        data=metadata(state,project,snap)
+        if 'clip' in body:
+            clip=body['clip'];pos=body.get('position',{})
+            if clip not in {c['id'] for t in snap['value']['tracks'] for c in t['clips']}:raise MediaError('Shot no longer exists')
+            if not isinstance(pos,dict) or any(not valid(pos.get(k)) or abs(pos[k])>100000 for k in ('x','y')):raise MediaError('Invalid canvas position')
+            data.setdefault('positions',{})[clip]={k:pos[k] for k in ('x','y')}
+        if 'viewport' in body:
+            view=body['viewport']
+            if not isinstance(view,dict) or any(not valid(view.get(k)) for k in ('x','y','zoom')) or not .15<=view['zoom']<=1.5 or max(abs(view['x']),abs(view['y']))>100000:raise MediaError('Invalid canvas view')
+            data['viewport']={k:view[k] for k in ('x','y','zoom')}
+        _write_metadata(snap,data)
+    return {'saved':True}
+
+
 def describe(state,project,snapshot,*,thumbnails=False,studio=None):
-    saved=notes(state,project);film=snapshot.get('value') or {};root=Path(snapshot.get('project',{}).get('path','/nonexistent')).resolve()
+    saved=notes(state,project,snapshot);film=snapshot.get('value') or {};root=Path(snapshot.get('project',{}).get('path','/nonexistent')).resolve()
     video=re.compile(r'\.(mp4|mov|webm|mkv|m4v)(?:$|[?#])',re.I)
     overlays=[c for t in film.get('tracks',[]) for c in t['clips'] if not video.search(c.get('src','')) and not c.get('sound')]
     footage=[c for t in film.get('tracks',[]) for c in t['clips'] if video.search(c.get('src','')) and not c.get('sound') and not c.get('matte')]
@@ -85,7 +122,7 @@ def describe(state,project,snapshot,*,thumbnails=False,studio=None):
             shots.append(item)
     shots.sort(key=lambda s:(s['at'],s['track']))
     for i,shot in enumerate(shots,1):shot['shot']=i
-    return {'project':project,'name':snapshot.get('project',{}).get('name',project),'stage':film.get('stage',{}),'rev':snapshot.get('rev'),'shots':shots}
+    return {'project':project,'name':snapshot.get('project',{}).get('name',project),'stage':film.get('stage',{}),'rev':snapshot.get('rev'),'shots':shots,'layout':{k:v for k,v in metadata(state,project,snapshot).items() if k in ('positions','viewport')}}
 
 
 def plan_change(state,studio,project,body):
@@ -153,7 +190,7 @@ def plan_change(state,studio,project,body):
         if body.get('kind')=='code' or not body.get('source'):
             studio.request(f'/api/projects/{project}/page',{'path':src,'text':page,'expect':None},method='PUT')
         with _LOCK:
-            saved=notes(state,project);saved[cid]=note;path=_file(state,project);path.write_text(json.dumps(saved))
+            data=metadata(state,project,snap);data.setdefault('notes',{})[cid]=note;_write_metadata(snap,data)
     elif action=='code':
         from .codeshots import validate_code,read_code
         current=read_code(studio,project,body.get('clip'));code=validate_code(body.get('code'))

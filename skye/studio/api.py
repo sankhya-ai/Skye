@@ -40,6 +40,10 @@ def post(handler, path: str):
         elif action == 'import-url':
             from .importer import import_url
             handler._json(import_url(studio, body.get('project'), body.get('url'), body.get('rel')))
+        elif action == 'storyboard-layout':
+            from .storyboard import save_layout, _file
+            project=body.get('project');_file(handler.state_dir,project)
+            handler._json(save_layout(handler.state_dir,studio,project,body))
         elif action == 'storyboard-change':
             from .storyboard import plan_change
             handler._json(plan_change(handler.state_dir,studio,body.get('project'),body))
