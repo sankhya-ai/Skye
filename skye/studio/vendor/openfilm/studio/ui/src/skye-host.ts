@@ -11,6 +11,34 @@ let commandListener: ((command: any) => void) | null = null;
   ask: request => send({type: 'skye:ask', request}),
 };
 window.addEventListener('message', e => {
+  if(e.source===parent && e.origin===parentOrigin && e.data?.type==='skye:project') {
+    const {action,request,project,files,name,shape}=e.data;
+    void (async()=>{
+      try {
+        const {api}=await import('./api');
+        let result:unknown;
+        if(action==='new') {
+          const p=await api.newProject(String(name||'Untitled').slice(0,100));
+          const snap=await api.film(p.id);
+          const stage=shape==='landscape'?{w:1920,h:1080}:shape==='square'?{w:1080,h:1080}:{w:1080,h:1920};
+          await api.edit(p.id,snap.rev,[{op:'stage',...stage}]);
+          const {openProject}=await import('./lib/navigate');openProject(p.id);result=p;
+        } else if(action==='open' && typeof project==='string' && /^[\w-]+$/.test(project)) {
+          const {openProject}=await import('./lib/navigate');openProject(project);result={};
+        } else if(action==='import' && typeof project==='string' && /^[\w-]+$/.test(project) && Array.isArray(files)) {
+          const landed=[];
+          for(const file of files) {
+            if(!(file instanceof File)) throw new Error('Choose files to import');
+            const path='assets/'+file.name.replace(/[/\\]/g,'_');
+            const response=await fetch('/api/projects/'+project+'/files?path='+encodeURIComponent(path),{method:'PUT',body:file});
+            const value=await response.json();if(!response.ok||value.unreadable)throw new Error(value.error||value.unreadable||'Import failed');landed.push(value.path);
+          }
+          result={paths:landed};
+        } else throw new Error('Unsupported project action');
+        send({type:'skye:project-result',request,result});
+      } catch(error){send({type:'skye:project-result',request,error:error instanceof Error?error.message:String(error)});}
+    })();return;
+  }
   if (e.source === parent && e.origin === parentOrigin && e.data?.type === 'skye:undo') {window.dispatchEvent(new CustomEvent('skye-undo'));return;}
   if (e.source === parent && e.origin === parentOrigin && e.data?.type === 'skye:select-shot' && typeof e.data.id === 'string') {
     commandListener?.({type:'select-clip',id:e.data.id,seek:true});return;

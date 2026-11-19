@@ -42,3 +42,24 @@ cards while the new board loads; no media browser/uploader in the insertion dial
 only an already-imported project path; no multi-user note merge; no true dissolve;
 source frame cards do not show every applied effect. The audio mixer is a separate
 pending slice.
+
+## Audited workflow repairs
+
+The storyboard header now has its own project picker, New project and Import media.
+New projects choose vertical (default), landscape or square before shots are added.
+Insertion uses an imported-asset picker and explicit source in/out seconds rather
+than a typed project path. New footage fills that project frame. Source preview
+is available in the insertion dialog; source-range and actual export checks still
+matter, and changing the export ratio is not automatic subject-aware reframing.
+
+Spanning-layer policy is explicit. `Keep existing time and length` leaves music
+and overlays that cross shot boundaries unchanged on the absolute timeline,
+including locked spanning layers. Shot-contained layers follow their shot. Thus
+reordering footage does not cut up a music bed. Insert/delete does not stretch,
+loop, trim or regenerate that bed: check its end after changing film length.
+`Stop and ask me to split them` retains the strict refusal policy. The API defaults
+to strict refusal when no policy is supplied. No automatic continuity/beat matching
+or bed length repair is implied.
+
+These changes do not yet implement the queued mixer, persistent layout,
+project-owned notes, or composed final-frame thumbnails.

@@ -90,7 +90,7 @@ def describe(state,project,snapshot,*,thumbnails=False,studio=None):
             shots.append(item)
     shots.sort(key=lambda s:(s['at'],s['track']))
     for i,shot in enumerate(shots,1):shot['shot']=i
-    return {'project':project,'rev':snapshot.get('rev'),'shots':shots}
+    return {'project':project,'name':snapshot.get('project',{}).get('name',project),'stage':film.get('stage',{}),'rev':snapshot.get('rev'),'shots':shots}
 
 
 def plan_change(state,studio,project,body):
@@ -100,6 +100,13 @@ def plan_change(state,studio,project,body):
     snap=studio.request(f'/api/projects/{project}');film=snap['value']
     if body.get('base')!=snap['rev']:raise MediaError('Project changed. Refresh the storyboard')
     board=describe(state,project,snap);shots=board['shots'];action=body.get('action')
+    spanning=body.get('spanning','reject')
+    if spanning not in ('reject','anchor'):raise MediaError('Choose how spanning music and overlays are handled')
+    shot_ids={s['id'] for s in shots}
+    def anchored(c):
+        if spanning!='anchor' or c['id'] in shot_ids:return False
+        x,y=window(c)
+        return any(x<s['at']-1e-6 and y>s['at']+1e-6 for s in shots) or any(x<s['at']+s['duration']-1e-6 and y>s['at']+s['duration']+1e-6 for s in shots)
     rows=[(t,c) for t in film['tracks'] for c in t['clips']]
     def window(c):
         a=c.get('at',0);time=c.get('time',[0,c.get('len',0)]);return a,a+(time[1]-time[0])/c.get('speed',1)
@@ -108,6 +115,8 @@ def plan_change(state,studio,project,body):
         index=body.get('index')
         if not isinstance(index,int) or not 0<=index<=len(shots):raise MediaError('Invalid insertion point')
         duration=body.get('duration',2)
+        source_in=body.get('sourceIn',0)
+        if not isinstance(source_in,(int,float)) or not math.isfinite(source_in) or source_in<0:raise MediaError('Source in must be a positive time or zero')
         if not isinstance(duration,(int,float)) or not math.isfinite(duration) or not .1<=duration<=60:raise MediaError('Shot duration must be 0.1..60 seconds')
         at=shots[index]['at'] if index<len(shots) else max((s['at']+s['duration'] for s in shots),default=0)
         note=body.get('note','')
@@ -120,14 +129,15 @@ def plan_change(state,studio,project,body):
             if source.suffix.lower() in {'.mp4','.mov','.webm','.mkv'}:
                 probe=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','json',str(source)],capture_output=True,text=True,timeout=20)
                 total=float(json.loads(probe.stdout)['format']['duration'])
-                if duration>total+.001:raise MediaError('Requested shot is longer than the source clip')
-            clip={'id':cid,'src':src,'time':[0,duration],'attrs':{'data-skye-shot':'imported'}}
+                if source_in+duration>total+.001:raise MediaError('Requested shot is longer than the source clip')
+            clip={'id':cid,'src':src,'time':[source_in,source_in+duration],'style':'object-fit:cover','attrs':{'data-skye-shot':'imported'}}
         else:
             src='pages/'+cid+'.html'
             page='<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#eeeeef;color:#777;font:48px Arial;display:grid;place-content:center;height:100vh;text-align:center;padding:6vw;box-sizing:border-box}small{font-size:24px}</style></head><body><div>Planned shot</div><small>'+html.escape(note or 'Add footage when ready')+'</small><script>window.film={duration:'+str(duration)+',frame(){}};</script></body></html>'
             clip={'id':cid,'src':src,'time':[0,duration],'attrs':{'data-skye-shot':'placeholder'}}
         # A boundary insert may move every track. Never quietly edit locked data.
         for t,c in rows:
+            if anchored(c):continue
             a,b=window(c)
             if t.get('locked') and b>at+1e-6:raise MediaError('Insertion would change a locked track')
             if a<at-1e-6 and b>at+1e-6:raise MediaError('A clip spans this boundary. Split it in the editor before inserting')
@@ -135,7 +145,11 @@ def plan_change(state,studio,project,body):
         target=shots[min(index,len(shots)-1)]['track']-1 if shots else 0
         if not film['tracks']:
             ops=[{'op':'insert','clip':clip,'at':at,'newTrack':0}]
-        else:ops=plan_insert(film,target,at,clip,duration)
+        else:
+            import copy
+            ripple_film=copy.deepcopy(film)
+            for track in ripple_film['tracks']:track['clips']=[c for c in track['clips'] if not anchored(c)]
+            ops=plan_insert(ripple_film,target,at,clip,duration)
         if not body.get('source'):
             studio.request(f'/api/projects/{project}/page',{'path':src,'text':page,'expect':None},method='PUT')
         with _LOCK:
@@ -149,6 +163,7 @@ def plan_change(state,studio,project,body):
         for left,right in zip(shots,shots[1:]):
             if abs(left['at']+left['duration']-right['at'])>.002:raise MediaError('Reorder requires adjacent nonoverlapping shots')
         for t,c in rows:
+            if anchored(c):continue
             x,y=window(c)
             match=next((s for s in shots if x>=s['at']-1e-6 and y<=s['at']+s['duration']+1e-6),None)
             if match is None:
@@ -219,6 +234,7 @@ def plan_change(state,studio,project,body):
         chosen=shots[index];a=chosen['at'];b=a+chosen['duration']
         if action=='delete':
             for t,c in rows:
+                if anchored(c):continue
                 x,y=window(c)
                 if y<=a+1e-6:continue
                 if t.get('locked'):raise MediaError('Deletion would change a locked track')
@@ -231,6 +247,7 @@ def plan_change(state,studio,project,body):
             left,right=sorted((chosen,shots[j]),key=lambda s:s['at']);cut=right['at'];lo=left['at'];hi=right['at']+right['duration']
             if abs(left['at']+left['duration']-cut)>.002:raise MediaError('Reorder requires adjacent nonoverlapping shots')
             for t,c in rows:
+                if anchored(c):continue
                 x,y=window(c)
                 if y<=lo+1e-6 or x>=hi-1e-6:continue
                 if t.get('locked'):raise MediaError('Reorder would change a locked track')

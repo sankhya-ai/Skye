@@ -49,7 +49,7 @@ def test_locked_protected(tmp_path,action):
 def test_stale_and_spanning_refused(tmp_path):
     studio=Studio(tmp_path)
     with pytest.raises(MediaError,match='changed'):plan_change(tmp_path,studio,'demo',{'base':'old','action':'delete','clip':'one'})
-    studio.film['tracks'].append({'clips':[{'id':'music','src':'assets/bed.mp3','time':[0,5],'sound':True}]})
+    studio.film['tracks'].append({'clips':[{'id':'music','src':'assets/bed.mp3','time':[0,5]}]})
     with pytest.raises(MediaError,match='spans'):plan_change(tmp_path,studio,'demo',{'base':'r1','action':'insert','index':1})
 
 
@@ -83,3 +83,23 @@ def test_replace_transition_with_cut_restores_original(tmp_path):
     final=json.loads(subprocess.check_output(['node',str(helper)],input=json.dumps({'film':studio.film,'ops':second['ops']}).encode()))
     clip=final['tracks'][0]['clips'][0]
     assert not clip.get('style') and not clip.get('attrs',{}).get('data-skye-transition')
+
+
+@pytest.mark.parametrize('action',[{'action':'insert','index':1},{'action':'reorder','order':['two','one']},{'action':'delete','clip':'one'}])
+def test_explicit_anchor_policy_preserves_spanning_audio_and_overlay(tmp_path,action):
+    studio=Studio(tmp_path)
+    studio.film['tracks'] += [{'locked':True,'clips':[{'id':'music','src':'assets/bed.mp3','time':[0,5]}]},{'clips':[{'id':'title','src':'pages/title.html','time':[0,5]}]}]
+    result=plan_change(tmp_path,studio,'demo',{'base':'r1','spanning':'anchor',**action})
+    assert result['ops']
+    assert not any(op.get('clip') in ('music','title') for op in result['ops'] if isinstance(op.get('clip'),str))
+
+
+def test_import_window_validated_against_real_duration(tmp_path):
+    import subprocess
+    studio=Studio(tmp_path);(tmp_path/'assets').mkdir()
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=blue:s=32x32:d=6','-c:v','libx264',str(tmp_path/'assets/a.mp4')],check=True)
+    args={'base':'r1','action':'insert','index':1,'source':'assets/a.mp4','sourceIn':3,'duration':2}
+    result=plan_change(tmp_path,studio,'demo',args)
+    assert result['ops'][-1]['clip']['time']==[3,5]
+    assert result['ops'][-1]['clip']['style']=='object-fit:cover'
+    with pytest.raises(MediaError,match='longer'):plan_change(tmp_path,studio,'demo',{**args,'sourceIn':5})
