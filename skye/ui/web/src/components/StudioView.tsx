@@ -3,6 +3,7 @@ import {api} from '../api';
 import {post} from './video/net';
 import {VideoView} from './VideoView';
 import './studio.css';
+import {Storyboard} from './Storyboard';
 
 type Session = {url: string; origin: string};
 type Selection = {projectId: string; time: number; refs: {kind: string; id?: string; clipId?: string; label?: string}[]};
@@ -10,6 +11,8 @@ type Result = {project: string; base: string; ops: unknown[]; answer?: string};
 type Job = {id: string; status: string; error?: string; result?: Result};
 
 export function StudioView() {
+  const [storyboard,setStoryboard]=useState(true);
+  const [boardRefresh,setBoardRefresh]=useState(0);
   const [legacy, setLegacy] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState('');
@@ -34,7 +37,7 @@ export function StudioView() {
       if (e.data?.type === 'skye:applied' && e.data.request === request.current) {
         setApplying(false);
         if (e.data.error) setError(String(e.data.error));
-        else {setError(''); setAnswer(a => a + ' Applied. Use Undo to revert this edit.');}
+        else {setBoardRefresh(n=>n+1);setError(''); setAnswer(a => a + ' Applied. Use Undo to revert this edit.');}
       }
     };
     window.addEventListener('message', receive);
@@ -73,11 +76,11 @@ export function StudioView() {
   if (legacy) return <><div className="studio-legacy-bar"><button onClick={() => setLegacy(false)}>Back to Video</button><span>Legacy shot projects. Kept unchanged.</span></div><VideoView /></>;
   return <div className="skye-studio">
     <header className="studio-bar"><div><strong>Video</strong><span>Your team's editor</span></div>
-      <button onClick={() => setLegacy(true)}>Legacy projects</button></header>
+      <div><button aria-pressed={storyboard} onClick={()=>{setStoryboard(s=>!s);setBoardRefresh(n=>n+1);}}>{storyboard?"Editor":"Back to storyboard"}</button><button onClick={() => setLegacy(true)}>Legacy projects</button></div></header>
     {error && <div role="alert" className="studio-error">{error}<button onClick={() => setError('')}>Dismiss</button></div>}
     <div className="studio-body">
-      <main className="studio-editor">{session ? <iframe ref={frame} title="Skye video editor" referrerPolicy="origin" src={session.url} allow="clipboard-read; clipboard-write; fullscreen" /> : <div className="studio-start"><p>{error ? 'Editor not ready' : 'Opening editor...'}</p><button onClick={() => void start()}>Retry</button><code>python -m skye.studio.setup</code></div>}</main>
-      <aside className="studio-agent"><div><h2>Video editor</h2><p>One edit at a time. Select clips in the timeline. Linked audio is included.</p></div>
+      <main className={"studio-editor"+(storyboard?" with-board":"")}><div className="studio-frame">{session ? <iframe ref={frame} title="Skye video editor" referrerPolicy="origin" src={session.url} allow="clipboard-read; clipboard-write; fullscreen" /> : <div className="studio-start"><p>{error ? 'Editor not ready' : 'Opening editor...'}</p><button onClick={() => void start()}>Retry</button><code>python -m skye.studio.setup</code></div>}</div>{storyboard&&selection?.projectId&&<Storyboard project={selection.projectId} refresh={boardRefresh} selected={selected} onError={setError} onSelect={id=>{setStoryboard(false);frame.current?.contentWindow?.postMessage({type:"skye:select-shot",id},session!.origin);}} onUndo={()=>{frame.current?.contentWindow?.postMessage({type:"skye:undo"},session!.origin);window.setTimeout(()=>setBoardRefresh(n=>n+1),500);}} onApply={result=>{request.current="storyboard-"+Date.now();frame.current?.contentWindow?.postMessage({type:"skye:apply",request:request.current,...result},session!.origin);}} />}</main>
+      <aside className={"studio-agent"+(storyboard?" board-hidden":"")}><div><h2>Video editor</h2><p>One edit at a time. Select clips in the timeline. Linked audio is included.</p></div>
         <div className="studio-selection"><span>Scope</span><strong>{selected.length ? `${selected.length} selected clip${selected.length === 1 ? '' : 's'} + links` : 'Select clips'}</strong><small>{selected.join(', ') || 'Your agent reads a film snapshot, not media files or service keys.'}</small></div>
         <label>Agent<select value={adapter} onChange={e => setAdapter(e.target.value)}><option value="local">Local commands · free</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></label>
         {adapter !== 'local' && !agents.some(a => a.name === adapter && a.available) && <p className="studio-muted">Not detected here. Set up your local agent to use Ask. Manual editing works without it.</p>}

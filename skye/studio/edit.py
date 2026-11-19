@@ -126,7 +126,8 @@ def _inject_keyframes(text: str, keyframes: str) -> str:
         if f'@keyframes {name}' in text:
             return text
     if '</style>' not in text:
-        raise EditError('film.html has no <style> block for keyframes')
+        if '</head>' not in text:raise EditError('film.html has no head for keyframes')
+        return text.replace('</head>', '<style>'+keyframes+'</style></head>', 1)
     return text.replace('</style>', keyframes + '\n</style>', 1)
 
 

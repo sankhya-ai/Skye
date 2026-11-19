@@ -25,6 +25,16 @@ def post(handler, path: str):
         elif action == 'import-url':
             from .importer import import_url
             handler._json(import_url(studio, body.get('project'), body.get('url'), body.get('rel')))
+        elif action == 'storyboard-change':
+            from .storyboard import plan_change
+            handler._json(plan_change(handler.state_dir,studio,body.get('project'),body))
+        elif action in ('storyboard', 'shot-note'):
+            from .storyboard import describe, save_note, _file
+            project=body.get('project');_file(handler.state_dir,project)
+            if action == 'shot-note':
+                handler._json(save_note(handler.state_dir,studio,project,body.get('clip'),body.get('note')))
+            else:
+                handler._json(describe(handler.state_dir,project,studio.request(f'/api/projects/{project}'),thumbnails=True,studio=studio))
         elif action == 'ask':
             from .agent import propose
             from .commands import local_propose

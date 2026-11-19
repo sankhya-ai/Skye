@@ -25,7 +25,7 @@ def _clip_start(clip: dict[str, Any]) -> float:
 def _clip_len(clip: dict[str, Any]) -> float:
     time = clip.get("time")
     if isinstance(time, (list, tuple)) and len(time) == 2:
-        return float(time[1]) - float(time[0])
+        return (float(time[1]) - float(time[0])) / float(clip.get("speed") or 1)
     if "len" in clip:
         return float(clip["len"])
     raise ValueError(f"clip {clip.get('id')!r} has no length: needs time [in, out] or len")

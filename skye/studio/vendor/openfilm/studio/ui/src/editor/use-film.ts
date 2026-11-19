@@ -277,9 +277,11 @@ export function useFilm(projectId: string, initial: FilmState | null, onChange: 
       if (e.detail.base !== ref.current?.rev) { e.detail.done('Project changed. Ask again.'); return; }
       void run(e.detail.ops, 'do', 'Agent edit').then(e.detail.done);
     };
+    const takeBack=()=>undo();
+    window.addEventListener('skye-undo',takeBack);
     window.addEventListener('skye-apply', apply);
-    return () => window.removeEventListener('skye-apply', apply);
-  }, [projectId, run]);
+    return () => {window.removeEventListener('skye-apply', apply);window.removeEventListener('skye-undo',takeBack);};
+  }, [projectId, run, undo]);
 
   return {
     film: state?.value ?? null, rev: state?.rev ?? null, error, broken, edit, record, undo, redo, rollbackTo, forget, steps,

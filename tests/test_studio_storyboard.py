@@ -1,0 +1,85 @@
+import copy,json
+from pathlib import Path
+import pytest
+from skye.studio.storyboard import describe,save_note,plan_change
+from skye.media.model import MediaError
+
+FILM={'stage':{'w':640,'h':360},'tracks':[{'clips':[{'id':'one','src':'assets/a.mp4','time':[0,3]},{'id':'two','src':'assets/a.mp4','at':3,'time':[3,5]}]}]}
+class Studio:
+    def __init__(self,root):self.film=copy.deepcopy(FILM);self.root=root;self.pages=[]
+    def request(self,route,body=None,method=None):
+        if route.endswith('/page'):self.pages.append(body);return {}
+        return {'value':self.film,'rev':'r1','project':{'path':str(self.root)}}
+
+
+def test_storyboard_current_timing_notes(tmp_path):
+    studio=Studio(tmp_path);save_note(tmp_path,studio,'demo','one','Opening action')
+    board=describe(tmp_path,'demo',studio.request(''))
+    assert len(board['shots'])==2
+    assert board['shots'][0]['note']=='Opening action'
+    assert board['shots'][1]['duration']==2
+
+
+def test_insert_placeholder_ripples_and_validates(tmp_path):
+    studio=Studio(tmp_path)
+    result=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'insert','index':1,'duration':2,'note':'new beat'})
+    assert result['ops'][0]=={'op':'move','clip':'two','track':0,'at':5.0}
+    assert result['ops'][-1]['clip']['attrs']['data-skye-shot']=='placeholder'
+    assert studio.pages
+
+
+def test_reorder_maps_each_shot(tmp_path):
+    studio=Studio(tmp_path)
+    result=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'reorder','order':['two','one']})
+    assert result['ops']==[{'op':'move','clip':'one','at':2},{'op':'move','clip':'two','at':0}]
+
+
+def test_delete_ripples(tmp_path):
+    studio=Studio(tmp_path)
+    result=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'delete','clip':'one'})
+    assert result['ops']==[{'op':'remove','clip':'one'},{'op':'move','clip':'two','at':0}]
+
+
+@pytest.mark.parametrize('action',[{'action':'insert','index':0},{'action':'reorder','order':['two','one']},{'action':'delete','clip':'one'}])
+def test_locked_protected(tmp_path,action):
+    studio=Studio(tmp_path);studio.film['tracks'][0]['locked']=True
+    with pytest.raises(MediaError,match='locked'):plan_change(tmp_path,studio,'demo',{'base':'r1',**action})
+
+
+def test_stale_and_spanning_refused(tmp_path):
+    studio=Studio(tmp_path)
+    with pytest.raises(MediaError,match='changed'):plan_change(tmp_path,studio,'demo',{'base':'old','action':'delete','clip':'one'})
+    studio.film['tracks'].append({'clips':[{'id':'music','src':'assets/bed.mp3','time':[0,5],'sound':True}]})
+    with pytest.raises(MediaError,match='spans'):plan_change(tmp_path,studio,'demo',{'base':'r1','action':'insert','index':1})
+
+
+@pytest.mark.parametrize('effect',['flash','film-burn','glitch','whip-out','fade-black','cut'])
+def test_transition_native_ops(tmp_path,effect):
+    studio=Studio(tmp_path)
+    result=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'transition','clip':'one','effect':effect})
+    assert result['ops']
+    if effect!='cut':assert 'data-skye-transition' in result['ops'][-1]['fields']['attrs']
+
+
+def test_agent_reads_storyboard_note(tmp_path):
+    from skye.studio.agent import propose
+    from skye.adapters.base import Result
+    studio=Studio(tmp_path)
+    save_note(tmp_path,studio,'demo','one','Keep the opening quiet')
+    def worker(spec):
+        assert 'Keep the opening quiet' in spec['brief']
+        Path(spec['repo'],'ops.json').write_text('[{"op":"set","clip":"one","field":"volume","value":0.3}]')
+        return Result(ok=True,output='Lowered the shot.',returncode=0)
+    assert propose(tmp_path,studio,'demo',['one'],'Lower the volume',runner=worker)['ops'][0]['value']==.3
+
+
+def test_replace_transition_with_cut_restores_original(tmp_path):
+    import subprocess
+    studio=Studio(tmp_path)
+    first=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'transition','clip':'one','effect':'whip-out'})
+    helper=Path(__file__).parents[1]/'skye/studio/check.mjs'
+    studio.film=json.loads(subprocess.check_output(['node',str(helper)],input=json.dumps({'film':studio.film,'ops':first['ops']}).encode()))
+    second=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'transition','clip':'one','effect':'cut'})
+    final=json.loads(subprocess.check_output(['node',str(helper)],input=json.dumps({'film':studio.film,'ops':second['ops']}).encode()))
+    clip=final['tracks'][0]['clips'][0]
+    assert not clip.get('style') and not clip.get('attrs',{}).get('data-skye-transition')
