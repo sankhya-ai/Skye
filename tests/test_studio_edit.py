@@ -49,8 +49,8 @@ class TestShots(unittest.TestCase):
     def test_overlay_effect_inserts_iframe_on_top_track(self):
         change = edit.apply_effect(self.dir.name, 2, 'caption-pop', text='code.|games.')
         text = (Path(self.dir.name) / 'film.html').read_text()
-        self.assertIn('fx-cap-2.html', text)
-        self.assertTrue((Path(self.dir.name) / 'pages/fx-cap-2.html').exists())
+        self.assertIn('fx-cap-2-', text)
+        self.assertTrue(list((Path(self.dir.name) / 'pages').glob('fx-cap-2-*.html')))
         # overlay clip sits at the shot's start + default offset
         self.assertIn('at="3.6"', text)
         # footage track untouched
@@ -61,7 +61,7 @@ class TestShots(unittest.TestCase):
         edit.apply_effect(self.dir.name, 1, 'flash', at=0.2)
         text = (Path(self.dir.name) / 'film.html').read_text()
         # 0.2..0.32 collides with the hook iframe (0.2..2.2): a new section opened
-        self.assertEqual(text.count('<section>'), 3)
+        self.assertEqual(text.count('<section'), 3)
 
     def test_shake_edits_shot_style_and_adds_keyframes_once(self):
         edit.apply_effect(self.dir.name, 1, 'shake', dur=0.4)
@@ -79,12 +79,12 @@ class TestShots(unittest.TestCase):
         self.assertIn('animation-delay:2.0s', text)
 
     def test_ramp_replaces_the_shot_with_sequential_speed_clips(self):
-        edit.apply_effect(self.dir.name, 1, 'ramp', speeds='0.5,2')
+        edit.apply_effect(self.dir.name, 1, 'ramp', speeds='0.75,1.5')
         text = (Path(self.dir.name) / 'film.html').read_text()
-        self.assertIn('speed="0.5"', text)
-        self.assertIn('speed="2"', text)
-        # 1.7s at 0.5x takes 3.4s; the 2x half starts at 3.4
-        self.assertIn('at="3.4"', text)
+        self.assertIn('speed="0.75"', text)
+        self.assertIn('speed="1.5"', text)
+        # Balanced speeds preserve the shot and subsequent timeline.
+        self.assertIn('at="2.267"', text)
 
     def test_mirror_splits_halves_and_flips_via_keyframes(self):
         edit.apply_effect(self.dir.name, 1, 'mirror')

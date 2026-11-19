@@ -1,104 +1,117 @@
-# Per-shot effects: one command, any agent
+# Per-shot effects
 
-Every reel effect is addressable per shot through one interface. Claude Code,
-Codex, Instinct, or a person in a terminal runs:
+Run from an installed Skye checkout (or the repository root):
 
-```bash
-python -m skye.studio.edit <project> --shot N --effect NAME [params]
+```sh
+skye studio effect PROJECT --list
+skye studio effect PROJECT --shot 4 --effect caption-pop --text 'sunday|crowd.|*no plan.*'
 ```
 
-A shot is the Nth video clip of the footage track (the last `<section>` of
-`film.html` that holds `<video>` clips), counted from 1. List them:
+Equivalent entry point: `python -m skye.studio.edit`. Python API:
+`from skye.studio.edit import apply_effect, apply_recipe, read_shots`.
+No model or paid service is called by these commands.
 
-```bash
-python -m skye.studio.edit <project> --shot 1 --effect x --list
-```
+## Shot selection and safety
 
-The same operations are a Python API: `skye.studio.edit.apply_effect(root,
-shot, effect, **params)`. Everything is deterministic and local; no model
-calls. The command edits `film.html` and writes pages into `pages/`, so the
-editor, previews and exports all read the change the same way, and git diffs
-stay reviewable.
+A shot is a video clip, in document order, on the footage section. If more
+than one non-effect section contains video, select `--track N`, the section
+number counting from 1. Use `--list` again after adding tracks or splitting
+clips, since numbers can change. Footage clips currently need explicit `id`
+and `at` attributes, double-quoted HTML attributes, and a finite
+`#t=start,end` range. Unsupported/ambiguous cases fail rather than guessing.
 
-Natural-language asks map straight onto it: "add text the crowd walks through
-on shot 3" is `--shot 3 --effect text-behind --text "WALKING IN TOKYO"`;
-"punch in on shot 5" is `--shot 5 --effect punch`. An agent that can describe
-a reference clip's style ("glitch on the drop, then a whip into a freeze
-frame with a label") writes the two or three commands and runs them in order.
+The command validates the resulting film with Skye's native film parser
+before replacing film.html. A successful edit saves film.html.bak. It does
+not post or publish the video. Export it through the normal Skye renderer.
+Do not run concurrent edits against one project.
 
-## Timing
+## Effects and parameters
 
-`--at T` places the effect on the film timeline; the default is 0.2s into the
-shot (`--offset`). A clip's animation clock starts at its own `at`, so
-shot-relative beats (a shake 1.2s into a shot, a whip on its last 0.4s) are
-computed for you.
+`--at` is an absolute film second. Otherwise the effect begins at shot start
+plus `--offset` (default 0.2s). Overlays are clipped at the shot boundary.
+Explicit out-of-range timing is refused. `--dur` sets duration where supported.
+Text lines/words use `|`; asterisks mark accent lines where supported.
 
-## Effects
+| Effect | Parameters | Result |
+|---|---|---|
+| caption-pop | --text 'one|two|*three*', --fg, --accent | Animated words with highlight |
+| ktype | --text 'BIG|*LINES*' | Sliding typography, transparent by default |
+| caption | --text 'KICKER|Main line' | Kicker, accent bar, main line |
+| meme | --text 'TOP|BOTTOM' | Stroked meme text |
+| hook | --text 'Setup|The turn' | Animated two-line hook |
+| freeze-pop | --image ../assets/cutout.png, --label | Cutout still overlay, supplied image required |
+| flash | --dur 0.12, --fg '#ffffff' | Full-frame flash effect |
+| film-burn | --dur 0.4 | Light-leak overlay |
+| grain | --strength 0.45 | Grain and vignette overlay |
+| sticker | --shape star, burst or heart | Inline SVG sticker, no emoji-font dependency |
+| shake | --amp 7, --dur 0.35, --offset 1.2 | Shot-relative jitter |
+| punch | --zoom 1.15 | Push-in across the shot |
+| whip-in / whip-out | --dur 0.4 | Whip at shot beginning/end |
+| glitch | --dur 0.7 | Two silent blended video copies |
+| mirror | | Mirrored halves, duplicate audio muted |
+| ramp | --speeds 0.75,1.5 | Equal source portions with balanced speeds |
+| text-behind | --text 'WALKING IN|TOKYO', --dur 2 | Local baked text occluded by foreground people |
 
-Text and cards (overlay-first: text rides the footage, no tempo-breaking
-cutaways; the full-frame card is still there with the scenes API):
+Text overlays leave footage running. Full-frame scene cards remain available
+through scenes.py with overlay=False for an intentional explanation moment.
+Do not insert cards for routine labels/captions.
 
-| effect | params | what it does |
-| --- | --- | --- |
-| `caption-pop` | `--text "one|two|three"` `--fg` `--accent` | word-by-word captions, the current word highlighted |
-| `ktype` | `--text "BIG|*LINES*"` | kinetic type slamming in over the shot (`*` = accent) |
-| `caption` | `--text "KICKER|the main line"` | small kicker, accent bar, main line |
-| `meme` | `--text "TOP|BOTTOM"` | meme top/bottom text, white with black stroke |
-| `hook` | `--text "setup|the turn"` | two-line hook, the turn in accent italic |
-| `freeze-pop` | `--image ../assets/cutout.png --label "THE LEGEND"` | a cutout still pops in with a hard outline |
+## Known limits
 
-Transitions and motion (these edit the shot clip itself; keyframes only use
-translate/scale/rotate, per the film format):
+- One clip-motion preset per shot. Existing animation is protected rather
+  than silently replaced. Multiple text/effect overlays can be combined.
+- A ramp must preserve the shot's total duration. Timeline ripple for a
+  duration-changing ramp is not implemented here.
+- Text-behind supports a plain un-sped, centered object-fit:cover local shot
+  with an explicit width/height viewport. Other crop, motion and clip fields
+  are refused. It bakes at 30 fps; configurable frame rate is pending.
+- The local text-behind pipeline requires rembg, NumPy, Pillow, ffmpeg and
+  ffprobe. u2netp downloads on first use if not cached. It is a foreground
+  segmentation model, not a guaranteed person-only semantic mask. Inspect
+  each shot. Crowds, small figures and thin edges can flicker or be missed.
+- Exponential temporal smoothing and soft edges reduce shimmer but can
+  leave trails on fast motion. There is no optical-flow stabilization,
+  camera tracking, perspective reconstruction or automatic ground anchoring.
+- Text-behind bakes a new asset, then inserts the processed window and
+  retains the original source. It is not native live track-matte editing,
+  --of-cutout render wiring or an alpha-video declaration.
+- Text-behind measured around 45 seconds for 60 frames in the earlier
+  private crowd test; this varies with source size, masks and encoding.
+- Swipe, outline-glow, color-pop, picture-in-picture, match-cut zooms and
+  beat detection are not all exposed by this command. Lower-level helpers
+  are not proof of a tested per-shot command.
 
-| effect | params | what it does |
-| --- | --- | --- |
-| `flash` | `--dur 0.12 --fg #ffffff` | white flash cut |
-| `film-burn` | `--dur 0.4` | burn/light-leak over the cut |
-| `whip-in` / `whip-out` | `--dur 0.4` | whip pan in (start) or out (last `--dur` of the shot) |
-| `shake` | `--amp 7 --dur 0.35 --offset 1.2` | beat-hit jitter |
-| `punch` | `--zoom 1.15` | slow push-in across the whole shot |
-| `glitch` | `--dur 0.7` | RGB-split glitch (adds two blended copies) |
-| `mirror` | | mirror split-screen (left normal, right flipped) |
-| `ramp` | `--speeds 0.5,1,2` | speed ramp: the shot split into speed sections |
-| `grain` | `--dur --strength 0.45` | film grain + vignette overlay |
-| `sticker` | `--shape star|burst|heart` | SVG sticker pop (emoji glyphs are unreliable headless) |
+## Reference recipes
 
-The heavy one:
+A person or coding agent watches a reference, describes the style and writes
+JSON. This command does not analyze reference video or understand natural
+language itself. A chat-capable agent can translate a request into commands;
+Skye's human chat UI is not wired to this interface yet.
 
-| effect | params | what it does |
-| --- | --- | --- |
-| `text-behind` | `--text "LINE ONE|LINE TWO" --at --dur` | text anchored in the scene with people walking in front of it |
-
-`text-behind` bakes the window offline: per-frame person masks (rembg/u2netp,
-free and local), temporal smoothing, feathered edges, text composited under
-the people, written to `assets/text-behind-N.mp4`; the shot is split and its
-window replaced with the baked asset. Cost is real: about 0.75s of compute
-per frame on a small box, so keep it to 2-4s beats. It needs `rembg`, `numpy`
-and `Pillow` where it runs, and an un-sped shot (ramp first is not
-supported).
-
-## Recipes: "make this shot like that reference"
-
-A recipe is a JSON list of the same operations, so a style can be replayed
-onto any shot:
+recipe.json:
 
 ```json
 [
-  {"effect": "shake", "offset": 1.2, "dur": 0.35},
-  {"effect": "whip-out", "dur": 0.4},
-  {"effect": "caption-pop", "text": "code.|games.|rockets.", "offset": 0.6}
+  {"effect":"punch","zoom":1.12},
+  {"effect":"caption-pop","text":"code.|games.|*rockets.*","offset":0.3}
 ]
 ```
 
-An agent (or a person) watches or describes the reference, writes the recipe,
-and applies it shot by shot. Deterministic: the same recipe on the same film
-produces the same edit.
+```sh
+skye studio effect PROJECT --shot 2 --recipe recipe.json
+```
 
-## What is automatic vs still manual
+Recipes accept 1-30 supported effect objects. A split/bake effect must be last.
+A failed step restores the original film and removes newly generated output
+files. Recipes are a repeatable style description, not an automatic promise
+of visual similarity to a reference. Render and inspect before accepting.
 
-Automatic today: every effect above, per shot, from one command; timing math;
-overlay track placement; keyframe injection; the text-behind mask pipeline.
-Still manual: picking which shot and which effect (the creative call, by a
-person or an agent), choosing words, and the freeze-pop cutout image (auto
-cutout from the shot's midpoint frame is the planned addition). Render still
-goes through the normal export path after the edit.
+## Verification so far
+
+- One-line caption-pop command: applied to a walk shot and rendered through
+  Skye, exported frame inspected.
+- One-line text-behind command: generated a two-second crowd composite,
+  inserted it in film.html, exported through Skye, overlap inspected.
+- Other command paths have unit/native-parser tests, not all end-to-end
+  visual proofs. Effects demonstrated in earlier hand-authored reels are
+  distinct from command-level verification.

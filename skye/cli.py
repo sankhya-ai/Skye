@@ -417,6 +417,9 @@ def main(argv: list[str] | None = None) -> int:
             state_dir = rest[i + 1]
         serve(state_dir=state_dir, port=port)
         return 0
+    if command == "studio" and rest and rest[0] == "effect":
+        from .studio.edit import main as effect_main
+        return effect_main(rest[1:])
     if command == "video":
         from .media.cli import main as video_main
         return video_main(rest)

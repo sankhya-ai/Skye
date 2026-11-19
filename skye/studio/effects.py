@@ -189,7 +189,7 @@ def caption_pop(project_root: str | Path, page_name: str, words: list[str], dur:
 
 def ktype(project_root: str | Path, page_name: str, lines: list[str], dur: float = 2.4,
           fg: str = "#ffffff", bg: str = "#101010", accent: str = "#e5484d",
-          overlay: bool = False) -> dict[str, Any]:
+          overlay: bool = True) -> dict[str, Any]:
     """Kinetic typography: lines slam in from alternating sides. Plain background;
     overlay=True puts the lines over running footage with a scrim instead."""
     blocks = []
@@ -246,10 +246,12 @@ SHAPES = {
 
 def sticker(project_root: str | Path, page_name: str, shape: str = "star", dur: float = 1.2,
             size: int = 260, rotate: float = -8.0, fill: str = "#ffd23f",
-            stroke: str = "#e5484d") -> dict[str, Any]:
+            stroke: str = "#e5484d", emoji: str | None = None) -> dict[str, Any]:
     """A big sticker popping in with a bounce and a tilt. `shape` is star, burst
     or heart (inline SVG: emoji glyphs are not reliable in headless renders), or
     a single emoji/character as a fallback."""
+    if emoji is not None:
+        shape = emoji
     if shape in SHAPES:
         art = (f'<svg viewBox="0 0 100 100" width="{size}" height="{size}">'
                f'<g fill="{fill}" stroke="{stroke}" stroke-width="4">{SHAPES[shape]}</g></svg>')
