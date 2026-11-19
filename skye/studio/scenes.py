@@ -85,8 +85,27 @@ def endcard(title: str, subtitle: str, url: str, bg: str = NAVY, fg: str = PAPER
     return _page(body, bg, fg, 4.0)
 
 
+def shot(image: str, caption_text: str = "", bg: str = PAPER, fg: str = INK, accent: str = TERRACOTTA) -> str:
+    """A real app screenshot framed as a storyboard card, slow zoom. Default 3s.
+
+    image is a path relative to the page file (e.g. ../assets/overview.png).
+    """
+    ec = html.escape(caption_text)
+    eimg = html.escape(image, quote=True)
+    cap = f'<div style="font-size:40px;letter-spacing:.12em;text-transform:uppercase;color:{accent};margin-top:48px">{ec}</div>' if caption_text else ""
+    body = f"""
+<div style="animation:rise 3s cubic-bezier(.2,.7,.3,1) both;display:flex;flex-direction:column;align-items:center">
+ <div style="width:920px;border-radius:28px;overflow:hidden;box-shadow:0 40px 100px rgba(23,42,56,.25);border:1px solid rgba(23,42,56,.12)">
+  <img src="{eimg}" style="width:100%;display:block;animation:zoomin 3s ease-out both">
+ </div>{cap}
+</div>
+<style>@keyframes zoomin{{0%{{transform:scale(1.06)}}100%{{transform:scale(1)}}}}</style>"""
+    return _page(body, bg, fg, 3.0)
+
+
 TEMPLATES = {
     "hook": (hook, 2.5),
+    "shot": (shot, 3.0),
     "meme": (meme, 2.0),
     "caption": (caption, 2.5),
     "endcard": (endcard, 4.0),

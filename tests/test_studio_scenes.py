@@ -14,6 +14,7 @@ class TestScenes(unittest.TestCase):
             "meme": dict(top="pov", bottom="tura"),
             "caption": dict(kicker="reads past papers", main="teaches what carries the marks"),
             "endcard": dict(title="TURA", subtitle="tutor for university exams", url="turalearn.com"),
+            "shot": dict(image="../assets/overview.png", caption_text="your course, mapped"),
         }
         for name, kw in cases.items():
             page = scenes.render_scene(name, **kw)
