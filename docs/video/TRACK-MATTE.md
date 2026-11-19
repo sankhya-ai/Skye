@@ -33,8 +33,7 @@ Missing manifests/images or out-of-range source time stop export with an
 error. They do not silently show unmasked footage. Do not change manifest
 content during an open browser session; reload after preparing a new version.
 
-Current integration limits: the property can be edited via film.html/API;
-there is no dedicated matte panel in the UI. Native project dependency collection now follows declared matte manifests and
+The property can be edited via film.html/API. The Masks panel provides prepared-alpha edge correction (see below). Native project dependency collection follows declared matte manifests and
 all their relative frames for versioning and linked-folder packaging. Missing or
 invalid manifests and missing frames stop a portable-project export. The project
 ZIP copies the sequence as real files, including when its source folder is linked. Alpha PNGs require
@@ -55,3 +54,9 @@ model; modes 1/2/4 use other models. A short mode-0 render completed on the
 small test machine and visibly removed the background, but the shoulder
 edge was soft and ragged. Model choice and footage affect quality. A failure
 of a larger model does not prove all cutout modes are unusable.
+
+## Prepared-mask edge correction UI
+
+**Masks** in the storyboard lists prepared alpha layers, including layers hidden from the shot cards. The first source-time alpha is displayed. Grow/shrink (-20..20 mask pixels) uses a max/min filter, followed by an optional additional Gaussian feather (0..20 mask pixels). The correction applies to every frame, writes a new sequence, and changes only that layer's native `matte` field. Native Undo restores the previous manifest. Locked tracks and stale revisions are rejected. Originals are never rewritten. New versions consume disk space.
+
+This is a bounded edge-correction panel, not brush/roto editing or per-frame shape repair. It does not edit live `--of-cutout` effects, add segmentation, select a subject, or repair wrongly classified body parts. The alpha preview is the current first source frame, not a live correction preview. Inspect the full composed export. A 60-frame moving-strip workflow verified shrink/feather, native Undo, rerun, and exported motion. This synthetic test does not demonstrate hair/hand/people segmentation quality.

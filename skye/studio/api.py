@@ -22,6 +22,12 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action in ('masks','mask-change'):
+            from . import mask_editor
+            from .storyboard import _file
+            project=body.get('project');_file(handler.state_dir,project)
+            if action=='masks':handler._json(mask_editor.read(studio,project))
+            else:handler._json(job_start(handler.state_dir,'mask-correction',lambda progress:mask_editor.change(studio,project,body)),202)
         elif action == 'track-preview':
             from .storyboard import describe, _file
             import urllib.request, urllib.parse, base64
