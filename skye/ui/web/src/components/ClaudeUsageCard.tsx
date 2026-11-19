@@ -114,11 +114,11 @@ export function ClaudeUsageCard() {
       </div>
       {!account.installed ? (
         <p className="text-[11px] leading-4 text-destructive">
-          Not installed. Get it at claude.com/claude-code, run <code>claude</code> once and log in.
+          Not installed
         </p>
       ) : !account.logged_in ? (
         <p className="text-[11px] leading-4 text-destructive">
-          Not logged in. Run <code>claude</code> in a terminal and log in.
+          Not signed in
         </p>
       ) : windows.length > 0 ? (
         <div className="space-y-2">
@@ -143,7 +143,7 @@ export function ClaudeUsageCard() {
         rel="noreferrer"
         className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
       >
-        Full usage on claude.ai <ExternalLink className="size-3" />
+        Usage <ExternalLink className="size-3" />
       </a>
     </section>
   );

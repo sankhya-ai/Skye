@@ -48,7 +48,7 @@ export function StudioView() {
       if (e.data?.type === 'skye:applied' && e.data.request === request.current) {
         setApplying(false);
         if (e.data.error) setError(String(e.data.error));
-        else {setBoardRefresh(n=>n+1);setError(''); setAnswer(a => a + ' Applied. Use Undo to revert this edit.');}
+        else {setBoardRefresh(n=>n+1);setError(''); setAnswer('Applied');}
       }
     };
     window.addEventListener('message', receive);
@@ -64,7 +64,7 @@ export function StudioView() {
         setJob(next);
         if (next.status === 'failed') setError(next.error ?? 'Agent edit failed');
         if (next.status === 'done' && next.result && session) {
-          setAnswer(next.result.answer ?? 'Edit ready'); setApplying(true);
+          setAnswer('Applying...'); setApplying(true);
           request.current = job.id;
           frame.current?.contentWindow?.postMessage({type: 'skye:apply', request: job.id, ...next.result}, session.origin);
         }
@@ -84,24 +84,24 @@ export function StudioView() {
     try {setJob(await post<Job>('/api/studio/ask', {project: selection.projectId, selected, goal, adapter}));}
     catch (e) {setError(e instanceof Error ? e.message : String(e));}
   };
-  if (legacy) return <><div className="studio-legacy-bar"><button onClick={() => setLegacy(false)}>Back to Video</button><span>Legacy shot projects. Kept unchanged.</span></div><VideoView /></>;
+  if (legacy) return <><div className="studio-legacy-bar"><button onClick={() => setLegacy(false)}>Back to Video</button></div><VideoView /></>;
   return <div className="skye-studio">
-    <header className="studio-bar"><div><strong>Video</strong><span>Your team's editor</span></div>
+    <header className="studio-bar"><div><strong>Video</strong></div>
       <div><select aria-label="Current video project" disabled={projectBusy} value={selection?.projectId??''} onChange={e=>projectCommand({action:'open',project:e.target.value})}><option value="" disabled>Choose project</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><button disabled={!session||projectBusy} onClick={()=>setProjectDialog(true)}>New project</button><button disabled={!selection?.projectId||projectBusy} onClick={()=>upload.current?.click()}>{projectBusy?'Working...':'Import media'}</button><input ref={upload} type="file" multiple accept="video/*,image/*,audio/*" hidden onChange={e=>{const files=[...(e.target.files??[])];if(files.length)projectCommand({action:'import',project:selection?.projectId,files});e.target.value='';}}/><button disabled={!selection?.projectId} onClick={()=>void post<NonNullable<typeof preflight>>('/api/studio/preflight',{project:selection?.projectId}).then(setPreflight).catch(e=>setError(e.message))}>Export check</button><button aria-pressed={storyboard} onClick={()=>{setStoryboard(s=>!s);setBoardRefresh(n=>n+1);}}>{storyboard?"Editor":"Back to storyboard"}</button><button onClick={() => setLegacy(true)}>Legacy projects</button></div></header>
-    {preflight&&<div className="studio-board-dialog"><strong>Export check · {preflight.name}</strong><p>{preflight.stage.w}×{preflight.stage.h} project · {preflight.duration.toFixed(2)} seconds</p><p>{preflight.mediaFiles} source files · {(preflight.mediaBytes/1048576).toFixed(1)} MB<br/>Existing cache: {(preflight.cacheBytes/1048576).toFixed(1)} MB<br/>Disk available: {(preflight.freeBytes/1073741824).toFixed(1)} GB</p><p>{preflight.warning}</p><button onClick={()=>{setPreflight(null);setStoryboard(false);}}>Open editor to export</button><button onClick={()=>setPreflight(null)}>Close check</button></div>}
+    {preflight&&<div className="studio-board-dialog"><strong>Export check · {preflight.name}</strong><p>{preflight.stage.w}×{preflight.stage.h} project · {preflight.duration.toFixed(2)} seconds</p><p>{preflight.mediaFiles} source files · {(preflight.mediaBytes/1048576).toFixed(1)} MB<br/>Existing cache: {(preflight.cacheBytes/1048576).toFixed(1)} MB<br/>Disk available: {(preflight.freeBytes/1073741824).toFixed(1)} GB</p><button onClick={()=>{setPreflight(null);setStoryboard(false);}}>Export</button><button onClick={()=>setPreflight(null)}>Close</button></div>}
     {projectDialog&&<div className="studio-board-dialog"><strong>New video project</strong><input aria-label="Project name" value={projectName} placeholder="Untitled" onChange={e=>setProjectName(e.target.value)}/><select aria-label="Project aspect" value={shape} onChange={e=>setShape(e.target.value)}><option value="portrait">9:16 · Vertical reel</option><option value="landscape">16:9 · Landscape</option><option value="square">1:1 · Square</option></select><button disabled={projectBusy} onClick={()=>projectCommand({action:'new',name:projectName,shape})}>Create project</button><button disabled={projectBusy} onClick={()=>setProjectDialog(false)}>Cancel</button></div>}
     {error && <div role="alert" className="studio-error">{error}<button onClick={() => setError('')}>Dismiss</button></div>}
     <div className="studio-body">
       <main className={"studio-editor"+(storyboard?" with-board":"")}><div className="studio-frame">{session ? <iframe ref={frame} title="Skye video editor" referrerPolicy="origin" src={session.url} allow="clipboard-read; clipboard-write; fullscreen" /> : <div className="studio-start"><p>{error ? 'Editor not ready' : 'Opening editor...'}</p><button onClick={() => void start()}>Retry</button><code>python -m skye.studio.setup</code></div>}</div>{storyboard&&selection?.projectId&&<Storyboard key={selection.projectId} project={selection.projectId} refresh={boardRefresh} selected={selected} onError={setError} onSelect={id=>{setStoryboard(false);frame.current?.contentWindow?.postMessage({type:"skye:select-shot",id},session!.origin);}} onUndo={()=>{request.current="undo-"+Date.now();frame.current?.contentWindow?.postMessage({type:"skye:undo",request:request.current},session!.origin);}} onApply={result=>{request.current="storyboard-"+Date.now();frame.current?.contentWindow?.postMessage({type:"skye:apply",request:request.current,...result},session!.origin);}} />}</main>
-      <aside className={"studio-agent"+(storyboard?" board-hidden":"")}><div><h2>Video editor</h2><p>One edit at a time. Select clips in the timeline. Linked audio is included.</p></div>
-        <div className="studio-selection"><span>Scope</span><strong>{selected.length ? `${selected.length} selected clip${selected.length === 1 ? '' : 's'} + links` : 'Select clips'}</strong><small>{selected.join(', ') || 'Your agent reads a film snapshot, not media files or service keys.'}</small></div>
+      <aside className={"studio-agent"+(storyboard?" board-hidden":"")}><div><h2>Video editor</h2></div>
+        <div className="studio-selection"><span>Scope</span><strong>{selected.length ? `${selected.length} selected clip${selected.length === 1 ? '' : 's'} + links` : 'Select clips'}</strong></div>
         <label>Agent<select value={adapter} onChange={e => setAdapter(e.target.value)}><option value="local">Local commands · free</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></label>
-        {adapter !== 'local' && !agents.some(a => a.name === adapter && a.available) && <p className="studio-muted">Not detected here. Set up your local agent to use Ask. Manual editing works without it.</p>}
+        {adapter !== 'local' && !agents.some(a => a.name === adapter && a.available) && <p className="studio-muted">Not installed</p>}
         <textarea aria-label="Ask the video agent" maxLength={4000} rows={5} value={goal} onChange={e => setGoal(e.target.value)} placeholder={adapter === 'local' ? 'caption "Your words"\npunch · shake · volume 50%' : 'Describe the selected shot edit...'} disabled={busy} />
         <button className="studio-send" disabled={busy || !goal.trim() || !selected.length || adapter !== 'local' && !agents.some(a => a.name === adapter && a.available)} onClick={() => void send()}>{busy ? applying ? 'Applying...' : 'Editing...' : 'Send'}</button>
         {answer && <p role="status" className="studio-answer">{answer}</p>}
-        <details className="studio-muted"><summary>Commands</summary><p>caption "Words" · text "Words" · punch · shake · flash · grain · glitch · mirror · volume 50% · mute</p><p>track "Words" uses a textured ground plane. reference "assets/ref.mp4" text "New words" measures a local reference. Both need OpenCV; OCR uses Tesseract when installed.</p></details>
-        <div className="studio-note">Canvas, timeline and color use the same film. Agent edits use the same operations and Undo as manual edits.<br /><br />Local commands need no model. Claude Code and Codex use your own installed agent. Remote generation and automatic updates are off.</div>
+
+
       </aside>
     </div>
   </div>;
