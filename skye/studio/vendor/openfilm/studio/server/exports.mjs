@@ -132,7 +132,7 @@ export { exportsRoot };
  * @typedef {ExportSpec & { range?: [number, number], ranges?: [number, number][], label?: string, name?: string, workers?: number }} ExportAsk
  * @typedef {import('./film-subtitle.mjs').FilmSubtitleCue & { draftLook?: import('./jianying-captions.mjs').CaptionLook }} Cue
  * @typedef {import('./film-subtitle.mjs').FilmSubtitleStyle} SubtitleStyle
- * @typedef {'preparing' | 'audio' | 'rendering' | 'encoding' | 'copying' | 'finishing'} ExportPhase
+ * @typedef {'preparing' | 'proxy' | 'audio' | 'rendering' | 'encoding' | 'copying' | 'finishing'} ExportPhase
  * @typedef {{ id: string, project: string, name: string, label: string, kind: ExportSpec['kind'], ask: ExportAsk,
  *   status: 'waiting' | 'running' | 'done' | 'failed' | 'cancelled', progress: number, phase: ExportPhase | null,
  *   framesDone: number, framesTotal: number, rate: number, etaMs: number | null, encoder: string | null,
@@ -983,6 +983,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
   const renderTo = (job, target, out, opts, signal, share = 0.96) => {
     const range = job.ask.range ? [`${num(job.ask.range[0])}-${num(job.ask.range[1])}`] : [];
     return render([target, ...range], { ...opts, ...(job.ask.workers != null ? { workers: renderWorkerLimit(job.ask.workers) } : {}), ...(job.ask.ranges ? { ranges: job.ask.ranges } : {}), out, signal, onProgress: frames(job, share),
+      onStage: (stage) => update(job,{phase:stage,rate:0,etaMs:null}),
       onEncoder: (/** @type {string} */ encoder) => update(job, { encoder, rate: 0, etaMs: null }),
       /* drawn without a graphics chip: said on the export while it runs, slowly */
       onSoftware: () => update(job, { software: true }) });
@@ -2062,7 +2063,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
  * @param {string[]} args @param {Record<string, any>} opts @returns {Promise<{ out: string, encoder: string, lines: string[], ranges?: [number, number][] }>}
  */
 function render(args, opts) {
-  const { signal, onProgress, onSoftware, onEncoder, ...rest } = opts;
+  const { signal, onProgress, onStage, onSoftware, onEncoder, ...rest } = opts;
   return new Promise((done, fail) => {
     if (signal?.aborted) return fail(new Error('cancelled'));
     const child = fork(fileURLToPath(new URL('./render-worker.mjs', import.meta.url)), [], { stdio: ['ignore', 'inherit', 'pipe', 'ipc'] });
@@ -2081,6 +2082,7 @@ function render(args, opts) {
     signal?.addEventListener('abort', cancel, { once: true });
     child.on('message', (/** @type {any} */ m) => {
       if (m?.type === 'progress') onProgress?.(m.done, m.total);
+      else if (m?.type === 'stage') onStage?.(m.stage);
       else if (m?.type === 'software') onSoftware?.();
       else if (m?.type === 'encoder') onEncoder?.(m.encoder);
       else if (m?.type === 'done') settle(() => done(m.result));
@@ -2107,7 +2109,7 @@ function drawer() {
   below(child);
   let said = '';
   child.stderr?.on('data', (d) => { said = (said + d).slice(-4000); process.stderr.write(d); });
-  /** @type {Map<string, { onProgress?: (done: number, total: number) => void, onEncoder?: (encoder: string) => void, done: (r: any) => void, fail: (e: Error) => void, signal?: AbortSignal }>} */
+  /** @type {Map<string, { onProgress?: (done: number, total: number) => void, onEncoder?: (encoder: string) => void, onStage?: (stage: string) => void, done: (r: any) => void, fail: (e: Error) => void, signal?: AbortSignal }>} */
   const jobs = new Map();
   /** @type {Error | null} */
   let gone = null;
@@ -2116,6 +2118,7 @@ function drawer() {
     const job = jobs.get(m?.id);
     if (!job) return;
     if (m.type === 'progress') job.onProgress?.(m.done, m.total);
+    else if (m.type === 'stage') job.onStage?.(m.stage);
     else if (m.type === 'encoder') job.onEncoder?.(m.encoder);
     else if (m.type === 'done' || m.type === 'failed') {
       jobs.delete(m.id);
@@ -2135,7 +2138,7 @@ function drawer() {
   return {
     /** @param {string[]} args @param {Record<string, any>} opts @returns {Promise<{ out: string, encoder: string, clear?: boolean, heldFrames?: number, dependencies?: string[], dependencySignatures?: [string, string][], cacheable?: boolean, lines: string[] }>} */
     render(args, opts) {
-      const { signal, onProgress, onEncoder, ...rest } = opts;
+      const { signal, onProgress, onEncoder, onStage, ...rest } = opts;
       return new Promise((done, fail) => {
         if (signal?.aborted) return fail(new Error('cancelled'));
         if (gone) return fail(gone);
@@ -2143,7 +2146,7 @@ function drawer() {
         const cancel = () => { if (child.connected) child.send({ type: 'cancel', id }); };
         signal?.addEventListener('abort', cancel, { once: true });
         const off = () => signal?.removeEventListener('abort', cancel);
-        jobs.set(id, { onProgress, onEncoder, signal, done: (r) => { off(); done(r); }, fail: (e) => { off(); fail(e); } });
+        jobs.set(id, { onProgress, onEncoder, onStage, signal, done: (r) => { off(); done(r); }, fail: (e) => { off(); fail(e); } });
         child.send({ type: 'render', id, args, opts: rest });
       });
     },

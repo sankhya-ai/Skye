@@ -22,6 +22,11 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action == 'preflight':
+            from .storyboard import _file
+            from .preflight import inspect
+            project=body.get('project');_file(handler.state_dir,project)
+            handler._json(inspect(studio,project))
         elif action == 'code-shot':
             from .storyboard import _file
             from .codeshots import read_code

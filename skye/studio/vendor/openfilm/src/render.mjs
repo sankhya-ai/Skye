@@ -315,7 +315,9 @@ export async function render(args, opts = {}) {
       console.error(`openfilm render: ${shown(file)}: a copy this browser plays could not be made, so it is drawn as it is`);
     };
     try {
+      if(files.length)opts.onStage?.('proxy');
       copies = await browserCopies(browser, site.url, root, files, { signal: opts.signal, slow: total >= fps * 2, fine: !!opts.fine, failed });
+      if(files.length)opts.onStage?.('preparing');
     } catch (e) {
       await probe.close();
       await pool?.give(lent, { retire: true });

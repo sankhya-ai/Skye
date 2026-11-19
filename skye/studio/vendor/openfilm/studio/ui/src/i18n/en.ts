@@ -842,6 +842,7 @@ export const en = {
     queued: 'Waiting…',
     phase: {
       preparing: 'Preparing',
+      proxy: 'Checking / preparing video seek copies (full sources may be processed)',
       audio: 'Mixing sound',
       rendering: 'Rendering',
       encoding: 'Encoding',

@@ -55,7 +55,7 @@ export interface ExportJob {
   label: string;
   kind: ExportRequest['kind'];
   status: ExportJobStatus;
-  phase: 'preparing' | 'audio' | 'rendering' | 'encoding' | 'copying' | 'finishing' | null;
+  phase: 'preparing' | 'proxy' | 'audio' | 'rendering' | 'encoding' | 'copying' | 'finishing' | null;
   /** 0 to 1. */
   progress: number;
   framesDone: number;

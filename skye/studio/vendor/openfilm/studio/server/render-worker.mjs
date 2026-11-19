@@ -32,6 +32,7 @@ if (process.argv.includes('--pool')) {
         try {
           const result = await render(args, {
             ...opts, signal, browsers: pool,
+            onStage: (stage) => { process.send?.({type:'stage',id,stage}); },
             onEncoder: (/** @type {string} */ encoder) => { process.send?.({ type: 'encoder', id, encoder }); },
             onProgress: (/** @type {number} */ done, /** @type {number} */ total) => { process.send?.({ type: 'progress', id, done, total }); },
           });
@@ -72,6 +73,7 @@ if (process.argv.includes('--pool')) {
           result = await render(args, {
             ...opts, signal: abort.signal,
             onProgress: (/** @type {number} */ done, /** @type {number} */ total) => { process.send?.({ type: 'progress', done, total }); },
+            onStage: (stage) => { process.send?.({type:'stage',stage}); },
             onSoftware: () => { process.send?.({ type: 'software' }); },
             onEncoder: (/** @type {string} */ encoder) => { process.send?.({ type: 'encoder', encoder }); },
           });
