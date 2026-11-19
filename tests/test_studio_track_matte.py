@@ -31,7 +31,7 @@ console.log(JSON.stringify([matteFrame(m,2),matteFrame(m,2+1/30),throws]));''')
     assert result==['a.png','b.png',True]
 
 def test_matte_disables_unmasked_straight_export():
-    assert 'if (clip.matte || clipFade(clip)' in (VENDOR/'direct.mjs').read_text()
+    assert 'clip.matte || clipFade(clip)' in (VENDOR/'direct.mjs').read_text()
 
 def test_matte_module_is_served_to_browser():
     assert "'track-matte.mjs'" in (VENDOR/'vision-assets.mjs').read_text()

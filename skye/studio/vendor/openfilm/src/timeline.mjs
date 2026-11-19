@@ -1377,6 +1377,8 @@ async function load(row, track, ti, el) {
     }
   } else if (kind === 'video') {
     el.muted = true; el.playsInline = true;
+    el.disableRemotePlayback = true;
+    el.disablePictureInPicture = true;
     rest(c);
     const facts = await factsOf(row.src);
     if (!facts && !(await mustBeThere(row.src))) c.missing = true;

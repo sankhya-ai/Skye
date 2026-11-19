@@ -51,6 +51,8 @@ export type FilmClip = {
   id: string;
   /** Video-only prepared source-time alpha PNG sequence manifest, relative to film.html. */
   matte?: string;
+  /** Video has transparency: retain browser compositing, never the opaque straight path. */
+  alpha?: true;
   at?: number;
   time?: FilmTimeSpan;
   /** Neither drawn nor heard; its timing and original level stay available in the editor. */

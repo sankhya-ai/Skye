@@ -16,6 +16,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { hasAlpha } from './seekable.mjs';
 import { readVtt } from './captions.mjs';
 import { clipFade, clipSpan, kindOf, lutsOf, readFilmFile, srcHref } from './film-doc.mjs';
 import { hardwareDecoding } from './encoders.mjs';
@@ -57,7 +58,7 @@ const COLOR_APART = 1.8;
 function probed(file) {
   return new Promise((done) => {
     execFile('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries',
-      'stream=codec_name,pix_fmt,width,height,sample_aspect_ratio,field_order,color_space,color_transfer,color_primaries,color_range', '-of', 'json', file],
+      'stream=codec_name,pix_fmt,width,height,sample_aspect_ratio,field_order,color_space,color_transfer,color_primaries,color_range,view_ids_available:stream_tags=alpha_mode', '-of', 'json', file],
     { windowsHide: true, timeout: 20_000 }, (error, stdout) => {
       try { done(error ? null : JSON.parse(String(stdout)).streams?.[0] ?? null); } catch { done(null); }
     });
@@ -72,7 +73,7 @@ function probed(file) {
  * @param {Record<string, any> | null} s @returns {Footage | null}
  */
 export function footageOf(s) {
-  if (!s || !(s.width > 0 && s.height > 0)) return null;
+  if (!s || hasAlpha(s) || !(s.width > 0 && s.height > 0)) return null;
   if (s.pix_fmt !== 'yuv420p' && s.pix_fmt !== 'yuvj420p') return null;
   if (s.sample_aspect_ratio && !['1:1', '0:1', 'N/A'].includes(s.sample_aspect_ratio)) return null;
   if (s.field_order && !['progressive', 'unknown'].includes(s.field_order)) return null;
@@ -169,7 +170,7 @@ export async function layersOf(film, root, entry, graded) {
       /* no fade, and no effect a host makes of its custom properties (a cutout, a retouch, a place in 3D), but a grade:
          its graded copy is the picture */
       const luts = lutsOf(clip);
-      if (clip.matte || clipFade(clip) || /--(of|fx)-/.test(`${clip.style ?? ''}`.replace(/--of-lut\s*:[^;]*;?/g, ''))) continue;
+      if (clip.alpha || clip.matte || clipFade(clip) || /--(of|fx)-/.test(`${clip.style ?? ''}`.replace(/--of-lut\s*:[^;]*;?/g, ''))) continue;
       if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(clip.src) || !existsSync(layer.file)) continue;
       let copy = null;
       if (luts.length) {

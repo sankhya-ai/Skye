@@ -29,8 +29,8 @@ const MAX_SECONDS = 10 * 60;
 /** Bigger than this is not copied at its size (H.264 stops at 4096 on a side in most decoders): left as it is when it
     plays, else copied scaled down to fit. */
 const MAX_SIDE = 4096;
-/** Changing how copies are made makes new ones (3: a VP9's or an HEVC's alpha was not seen, and its copy was without it). */
-const VERSION = 3;
+/** Version 4 preserves VP9 auxiliary alpha during decode and supports older FFmpeg copy timing. */
+const VERSION = 4;
 /** A copy on the graphics chip that writes nothing for this long has hung (VideoToolbox does on some virtual Macs):
     stopped, and made on the processor. */
 const STALL_MS = 15_000;
@@ -287,6 +287,15 @@ const making = new Map();
  */
 async function makeCopy(file, out, need, signal, fine = false) {
   if (signal?.aborted) return 'cancelled';
+  // FFmpeg's native VP9 decoder discards the auxiliary alpha plane. Select
+  // libvpx for a VP9-alpha source, but do not force it on ProRes/HEVC inputs.
+  let alphaDecoding = [];
+  if (need.alpha) {
+    try {
+      const info = JSON.parse(await probe(file, ['-select_streams', 'v:0', '-show_entries', `stream=codec_name,${ALPHA_ENTRIES}`, '-of', 'json']));
+      if (info.streams?.[0]?.codec_name === 'vp9' && hasAlpha(info.streams[0])) alphaDecoding = ['-c:v', 'libvpx-vp9'];
+    } catch { /* decoder failure is reported by makeCopy */ }
+  }
   const gop = Math.max(1, Math.round(need.fps * COPY_GOP_S));
   const part = `${out}.part-${process.pid}-${randomBytes(4).toString('hex')}${extname(out)}`;
   /* all but lossless: about 19 Mbps at 1080p and 30 fps; the chip's encoder keeps the source's color tags only
@@ -303,7 +312,7 @@ async function makeCopy(file, out, need, signal, fine = false) {
     /* the same frames at the same times (passthrough: no frame is added or dropped), the picture only */
     /* a part of the file (need.range): from its first second, its picture starting at 0 */
     const trim = need.range ? ['-ss', String(need.range.from), '-t', String(need.range.to - need.range.from)] : [];
-    const run = ffmpeg([...decoding, ...trim, '-i', file, '-map', '0:v:0', '-an', '-sn', '-dn', '-fps_mode', 'passthrough',
+    const run = ffmpeg([...decoding, ...alphaDecoding, ...trim, '-i', file, '-map', '0:v:0', '-an', '-sn', '-dn', '-vsync', '0',
       ...(graded ? ['-vf', graded] : need.scaled ? ['-vf', `scale=${need.w}:${need.h}`] : []),
       ...(need.alpha ? ['-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-b:v', '0', '-crf', '18', '-row-mt', '1', '-deadline', 'realtime', '-cpu-used', '8',
         '-g', String(gop), '-keyint_min', String(gop), '-auto-alt-ref', '0', ...(graded ? GRADED_VP9_TAGS : [])]

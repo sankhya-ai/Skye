@@ -124,7 +124,7 @@ const pair = (v, ok) => Array.isArray(v) && v.length === 2 && ok(v[0]) && ok(v[1
 /** The fields each kind of clip takes, in the order they are written back. */
 const CLIP_FIELDS = {
   page: ['src', 'id', 'at', 'time', 'disabled', 'box', 'size', 'class', 'style', 'overrides', 'attrs'],
-  video: ['src', 'id', 'at', 'time', 'disabled', 'box', 'volume', 'speed', 'class', 'style', 'overrides', 'attrs', 'matte'],
+  video: ['src', 'id', 'at', 'time', 'disabled', 'box', 'volume', 'speed', 'class', 'style', 'overrides', 'attrs', 'matte', 'alpha'],
   still: ['src', 'id', 'at', 'time', 'disabled', 'box', 'class', 'style', 'overrides', 'attrs'],
   sound: ['src', 'id', 'sound', 'at', 'time', 'disabled', 'volume', 'speed', 'overrides', 'attrs'],
 };
@@ -269,6 +269,7 @@ function readClip(raw, where, problems) {
       }
     }
   }
+  if (raw.alpha !== undefined && raw.alpha !== true) problems.push(`${at}alpha is true, or absent, on a transparent video clip.`);
   if (raw.matte !== undefined && (typeof raw.matte !== 'string' || !/^[^:\\]+\.json$/.test(raw.matte) || raw.matte.startsWith('/') || raw.matte.split('/').includes('..'))) problems.push(`${at}matte is a relative project JSON manifest path.`);
   if (raw.class !== undefined && (typeof raw.class !== 'string' || !raw.class.trim())) problems.push(`${at}class has to be class names.`);
   if (raw.style !== undefined && (typeof raw.style !== 'string' || !raw.style.trim())) problems.push(`${at}style has to be CSS declarations.`);
@@ -645,7 +646,7 @@ const keyframesText = (/** @type {string} */ name, /** @type {string} */ body) =
 /** A keyframes name: one CSS identifier. */
 const KEYFRAMES_NAME = /^-?[A-Za-z_][\w-]*$/;
 /** A clip's attributes, each with what it says. */
-const CLIP_ATTRIBUTES = new Set(['id', 'src', 'at', 'disabled', 'speed', 'volume', 'muted', 'size', 'class', 'style', 'overrides', 'matte']);
+const CLIP_ATTRIBUTES = new Set(['id', 'src', 'at', 'disabled', 'speed', 'volume', 'muted', 'size', 'class', 'style', 'overrides', 'matte', 'alpha']);
 
 /** What one kind of clip does not take, and why. */
 const NO_SOUND = 'has no sound: a sound is a clip of its own, an <audio> (or a <video>\'s own sound)';
@@ -891,6 +892,7 @@ function clipOfTag(tag, where, problems) {
       if (!m) problems.push(`${where}: size is the px the page is laid out at, width x height, like size="1920x1080" — "${value}" is not.`);
       else raw.size = { w: Number(m[1]), h: Number(m[2]) };
     }
+    else if (name === 'alpha') raw.alpha = true;
     else if (name === 'muted') muted = true;
     else if (name === 'disabled') raw.disabled = true;
     else if (name === 'overrides') {
@@ -1104,6 +1106,7 @@ export function clipTag(clip) {
   parts.push(`src="${escapeAttr(src)}"`);
   if (clip.at) parts.push(`at="${num(clip.at)}"`);
   if (clip.disabled) parts.push('disabled');
+  if (clip.alpha) parts.push('alpha');
   if (clip.matte) parts.push(`matte="${escapeAttr(clip.matte)}"`);
   if (clip.speed != null && clip.speed !== 1) parts.push(`speed="${clip.speed}"`);
   if (clip.volume === 0) parts.push('muted');
