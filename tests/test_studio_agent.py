@@ -82,3 +82,19 @@ def test_worker_tampering_rejected(tmp_path):
 def test_linked_audio_cannot_be_left_behind():
     with pytest.raises(MediaError, match='out of sync'):
         validate_ops(FILM, [{'op': 'move', 'clip': 'v1', 'at': 1}], ['v1', 'a1'])
+
+
+def test_existing_overrides_outside_scope_do_not_block_proposals():
+    # Found editing a real reel: the editor's own fades on other
+    # shots made every proposal fail with "Unsupported manual override".
+    film = copy.deepcopy(FILM)
+    film['tracks'][0]['clips'][1]['overrides'] = [{'fade': [0.2, 0]}]
+    ops = [{'op': 'set', 'clip': 'a1', 'field': 'volume', 'value': 0.5}]
+    assert validate_ops(film, ops, ['v1', 'a1']) == ops
+    # In-scope clips are still checked, and a fade must be two numbers.
+    bad = [{'op': 'set', 'clip': 'v1', 'field': 'overrides', 'value': [{'fade': ['x']}]}]
+    with pytest.raises(MediaError):
+        validate_ops(film, bad, ['v1', 'a1'])
+    ok = [{'op': 'set', 'clip': 'v1', 'field': 'overrides', 'value': [{'fade': [0.2, 0.2]}]},
+          {'op': 'set', 'clip': 'a1', 'field': 'overrides', 'value': [{'fade': [0.2, 0.2]}]}]
+    assert validate_ops(film, ok, ['v1', 'a1']) == ok

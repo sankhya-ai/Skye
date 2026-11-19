@@ -104,9 +104,14 @@ def validate_ops(film: dict, ops: list, selected: list[str]) -> list:
             if c['src'] not in assets:
                 raise MediaError('Agent introduced a new media source')
             # Prevent JS/CSS/network payloads in overrides. Text is plain text in OpenFilm.
-            for o in c.get('overrides', []):
-                if not isinstance(o, dict) or not set(o) <= {'at', 'n', 't', 's', 'r', 'text', 'lock', 'style'}:
+            # Only the approved clips are checked: a clip outside scope is already proven unchanged
+            # above, so its pre-existing overrides (the editor's own fades, a person's styled text)
+            # must not make every proposal for the film fail.
+            for o in (c.get('overrides', []) if c['id'] in allowed else []):
+                if not isinstance(o, dict) or not set(o) <= {'at', 'n', 't', 's', 'r', 'text', 'lock', 'style', 'fade'}:
                     raise MediaError('Unsupported manual override')
+                if 'fade' in o and not (isinstance(o['fade'], list) and len(o['fade']) == 2 and all(isinstance(x, (int, float)) and 0 <= x <= 60 for x in o['fade'])):
+                    raise MediaError('A fade is [in, out] seconds')
                 if 'style' in o and (not isinstance(o['style'], dict) or not set(o['style']) <= {'color', 'opacity', 'fontSize', 'fontWeight'}):
                     raise MediaError('Agent styles are limited to color, opacity and type size/weight')
                 if any('url(' in str(v).lower() or 'expression(' in str(v).lower() for v in o.get('style', {}).values()):
