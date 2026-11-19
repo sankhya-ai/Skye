@@ -5,7 +5,7 @@ import shutil
 from ..media.model import MediaError
 
 HERE=Path(__file__).parent
-TEMPLATES={'orbit':'3D Orbit','kinetic':'Kinetic type'}
+TEMPLATES={'orbit':'3D Orbit','kinetic':'Kinetic type','liquid':'Liquid Aurora · WebGL','morph':'Particle Type · Three.js','chrome':'Liquid Chrome · Paper WebGL'}
 
 def validate_code(code):
     if not isinstance(code,str) or not 1<=len(code.encode())<=55000:
@@ -17,14 +17,16 @@ def validate_code(code):
 
 def template(root,kind,duration):
     if kind not in TEMPLATES:raise MediaError('Choose a code-shot template')
-    if kind=='orbit':
-        source=HERE/'code-assets'/'three-0.187.0'
-        target=Path(root)/'assets/skye-code/three-0.187.0'
+    libraries={'orbit':['three-0.187.0'],'morph':['three-0.187.0','morph-hero'],'liquid':['liquid-aurora'],'chrome':['paper-shaders']}.get(kind,[])
+    for library in libraries:
+        source=HERE/'code-assets'/library
+        target=Path(root)/'assets/skye-code'/library
         target.mkdir(parents=True,exist_ok=True)
-        for filename in ('three.module.js','three.core.js','LICENSE'):
-            dst=target/filename;src=source/filename
+        for src in source.iterdir():
+            if not src.is_file():continue
+            dst=target/src.name
             if dst.exists() and hashlib.sha256(dst.read_bytes()).digest()!=hashlib.sha256(src.read_bytes()).digest():
-                raise MediaError('A different Three.js asset already uses this path. Rename it before inserting')
+                raise MediaError('A different code-shot asset already uses this path. Rename it before inserting')
             if not dst.exists():shutil.copyfile(src,dst)
     code=(HERE/'code-templates'/(kind+'.html')).read_text()
     # Templates use a fixed clock contract, never wall time or a requestAnimationFrame loop.

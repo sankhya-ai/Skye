@@ -15,7 +15,7 @@ class Studio:
         helper=Path(__file__).parents[1]/'skye/studio/check.mjs'
         self.film=json.loads(subprocess.check_output(['node',str(helper)],input=json.dumps({'film':self.film,'ops':result['ops']}).encode()))
 
-@pytest.mark.parametrize('name',['orbit','kinetic'])
+@pytest.mark.parametrize('name',['orbit','kinetic','liquid','morph','chrome'])
 def test_code_shot_insert_edit_versions_and_native_undo_model(tmp_path,name):
     studio=Studio(tmp_path)
     result=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'insert','index':0,'kind':'code','template':name,'duration':2})

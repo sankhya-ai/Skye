@@ -1,0 +1,4 @@
+Adapted from CrazyGL-com/hero-liquid-aurora-gradient by ybouane.
+Source: https://github.com/CrazyGL-com/hero-liquid-aurora-gradient
+Revision: 7a163ad6a6364036a264e48b2223b3dcd9298d4f
+Apache License 2.0. Modified: deterministic frame(t), local raw WebGL2 host, violet palette and typography.

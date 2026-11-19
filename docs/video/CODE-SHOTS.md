@@ -2,8 +2,10 @@
 
 A code shot is an ordinary editable HTML page clip, tagged `data-skye-shot="code"`
 so the storyboard treats it as a shot. Insert chooses Code shot and a template:
-3D Orbit (Three.js) or Kinetic type (CSS/JS). This is a starting set, not a library
-of product spins, logo reveals or arbitrary 3D asset importers.
+Liquid Chrome (Paper WebGL), Liquid Aurora (raw WebGL), Particle Type (Three.js),
+3D Orbit or Kinetic type. Source ranking, license checks and exclusions are in
+[TEMPLATE-SOURCES.md](TEMPLATE-SOURCES.md). This is a curated starting set, not
+a library of product spins or arbitrary 3D asset importers.
 
 The existing native page clock is the scene API:
 
