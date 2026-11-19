@@ -28,11 +28,13 @@ body{width:100vw;height:100vh;display:flex;flex-direction:column;align-items:cen
 background:@BG@;color:@FG@;font-family:Georgia,'Times New Roman',serif;text-align:center}
 @keyframes rise{0%{opacity:0;transform:translateY(60px)}12%{opacity:1;transform:none}88%{opacity:1}100%{opacity:0}}
 @keyframes pop{0%{opacity:0;transform:scale(.6)}10%{opacity:1;transform:scale(1)}92%{opacity:1}100%{opacity:0}}
-</style></head><body>@BODY@</body></html>"""
+</style></head><body>@BODY@
+<script>window.film={duration:@DUR@,frame(t){}};</script></body></html>"""
 
 
-def _page(body: str, bg: str, fg: str) -> str:
-    return _BASE.replace("@BG@", bg).replace("@FG@", fg).replace("@BODY@", body)
+def _page(body: str, bg: str, fg: str, duration: float = 4.0) -> str:
+    return (_BASE.replace("@BG@", bg).replace("@FG@", fg)
+            .replace("@BODY@", body).replace("@DUR@", repr(float(duration))))
 
 
 def hook(line1: str, line2: str, bg: str = PAPER, fg: str = INK, accent: str = TERRACOTTA) -> str:
@@ -43,7 +45,7 @@ def hook(line1: str, line2: str, bg: str = PAPER, fg: str = INK, accent: str = T
  <div style="animation:rise 1.3s cubic-bezier(.2,.7,.3,1) both">{e1}</div>
  <div style="animation:rise 2.4s cubic-bezier(.2,.7,.3,1) .9s both;color:{accent};font-style:italic">{e2}</div>
 </div>"""
-    return _page(body, bg, fg)
+    return _page(body, bg, fg, 2.5)
 
 
 def meme(top: str, bottom: str, bg: str = NAVY, fg: str = PAPER) -> str:
@@ -55,7 +57,7 @@ text-transform:uppercase;letter-spacing:.01em;-webkit-text-stroke:3px {NAVY};tex
  <div style="animation:pop 1.2s cubic-bezier(.2,.9,.3,1.4) both">{et}</div>
  <div style="animation:pop 2.2s cubic-bezier(.2,.9,.3,1.4) .7s both;margin-top:640px">{eb}</div>
 </div>"""
-    return _page(body, bg, fg)
+    return _page(body, bg, fg, 2.0)
 
 
 def caption(kicker: str, main: str, bg: str = PAPER, fg: str = INK, accent: str = TERRACOTTA) -> str:
@@ -67,7 +69,7 @@ def caption(kicker: str, main: str, bg: str = PAPER, fg: str = INK, accent: str 
  <div style="width:120px;height:6px;background:{accent};margin:36px auto"></div>
  <div style="font-size:76px;line-height:1.25">{em}</div>
 </div>"""
-    return _page(body, bg, fg)
+    return _page(body, bg, fg, 2.5)
 
 
 def endcard(title: str, subtitle: str, url: str, bg: str = NAVY, fg: str = PAPER, dot: str = BLUE) -> str:
@@ -80,7 +82,7 @@ def endcard(title: str, subtitle: str, url: str, bg: str = NAVY, fg: str = PAPER
  <div style="font-size:52px;font-style:italic;opacity:.85;margin-top:24px">{es}</div>
  <div style="font-size:44px;letter-spacing:.2em;margin-top:64px;color:{dot}">{eu}</div>
 </div>"""
-    return _page(body, bg, fg)
+    return _page(body, bg, fg, 4.0)
 
 
 TEMPLATES = {

@@ -20,6 +20,8 @@ class TestScenes(unittest.TestCase):
             self.assertTrue(page.startswith("<!doctype html>"))
             self.assertIn("</html>", page)
             self.assertNotIn("@BODY@", page)
+            self.assertIn("window.film={duration:", page)
+            self.assertIn("frame(t)", page)
             for value in kw.values():
                 want = value.upper() if name == "meme" else value
                 self.assertIn(html.escape(want), page)
