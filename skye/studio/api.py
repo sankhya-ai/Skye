@@ -22,6 +22,24 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action == 'track-preview':
+            from .storyboard import describe, _file
+            import urllib.request, urllib.parse, base64
+            project=body.get('project');_file(handler.state_dir,project)
+            snap=studio.request(f'/api/projects/{project}');shot=next((s for s in describe(handler.state_dir,project,snap)['shots'] if s['id']==body.get('clip')),None)
+            if not shot:raise MediaError('Shot no longer exists')
+            route=f'/api/projects/{project}/media?'+urllib.parse.urlencode({'path':'film.html','what':'frame','ms':round(shot['at']*1000),'w':480})
+            req=urllib.request.Request(studio.origin+route,headers={'x-studio-key':studio.session['key']})
+            with urllib.request.urlopen(req,timeout=30) as response:preview='data:image/jpeg;base64,'+base64.b64encode(response.read()).decode()
+            handler._json({'preview':preview})
+        elif action == 'track-prepare':
+            from .commands import effect_proposal
+            from .storyboard import _file
+            project=body.get('project');_file(handler.state_dir,project)
+            selected=[body.get('clip')]
+            if not isinstance(selected[0],str):raise MediaError('Choose a footage shot')
+            plan={k:body[k] for k in ('text','quad','roi','fps','replace') if k in body};plan['effect']='track-text'
+            handler._json(job_start(handler.state_dir,'planar-tracking',lambda progress:effect_proposal(handler.state_dir,studio,project,selected,plan)),202)
         elif action in ('audio','audio-change'):
             from .audio import read, change
             from .storyboard import _file

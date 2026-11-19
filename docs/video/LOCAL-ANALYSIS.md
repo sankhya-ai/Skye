@@ -109,3 +109,9 @@ now includes large spatial changes with moderate histogram change. A second
 white-letter OCR pass recovered POV and the main caption, but noisy scene text
 remains in candidate output. This is a measured test case, not a general accuracy
 guarantee or a claim that style transfer matches that reel.
+
+### Tracking correction in the storyboard
+
+Select a footage shot and choose **Track text**. The dialog shows the composed first frame and accepts a normalized feature ROI and four text corners in perimeter order (TL, TR, BR, BL), text, and sampling fps. Correct coordinates and run again. By default this replaces only overlays explicitly tagged as tracking owned by that shot; older untagged overlays are not guessed or removed. Locked prior tracking cannot be replaced. All edits use native operations and Undo.
+
+The current UI is numeric, not a corner-drag editor. Tracking is limited to unsped centered-cover shots, 30 seconds, local OpenCV. Inlier counts and median reprojection errors are diagnostics, not confidence percentages or proof of the intended plane. Inspect the full export for drift. No 3D camera solve, segmentation, automatic occlusion or model calls. Changing project/closing the view while preparing prevents the abandoned dialog from submitting an edit.

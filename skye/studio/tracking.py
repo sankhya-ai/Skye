@@ -18,8 +18,8 @@ def track_text(project, shot, text, *, quad=None, roi=None, track=None, fps=15):
     s=shots[shot-1]
     if s.speed!=1 or s.style.replace(' ', '').replace('object-fit:cover','').strip('; '):
         raise EditError('Tracking requires an unsped centered-cover shot without existing styles or animation')
-    if not 1<=fps<=30 or s.dur>30: raise EditError('Use 1..30 tracking fps and a shot no longer than 30 seconds')
-    if not text.strip() or len(text)>160: raise EditError('Text needs 1..160 characters')
+    if type(fps) is not int or not 1<=fps<=30 or s.dur>30: raise EditError('Use 1..30 tracking fps and a shot no longer than 30 seconds')
+    if not isinstance(text,str) or not text.strip() or len(text)>160: raise EditError('Text needs 1..160 characters')
     # Project paths must remain local and inside the project.
     source=(root/s.src).resolve()
     if not source.is_relative_to(root.resolve()) or not source.is_file(): raise EditError('Tracking source must be a local project asset')
@@ -28,10 +28,14 @@ def track_text(project, shot, text, *, quad=None, roi=None, track=None, fps=15):
     stage=json.loads(subprocess.check_output(['node',str(Path(__file__).with_name('effect-check.mjs'))],input=body.encode()))['stage']
     w,h=stage['w'],stage['h']
     scale=min(1,720/max(w,h)); aw,ah=round(w*scale),round(h*scale)
-    q=np.array(quad or [[.2,.69],[.8,.69],[.91,.87],[.09,.87]],np.float32)
+    try:
+        q=np.array(quad if quad is not None else [[.2,.69],[.8,.69],[.91,.87],[.09,.87]],np.float32)
+    except (TypeError,ValueError) as exc: raise EditError('Quad needs four numeric x,y corners') from exc
     if q.shape!=(4,2) or not np.isfinite(q).all() or (q<0).any() or (q>1).any(): raise EditError('Quad is four normalized x,y corners, clockwise from top-left')
+    if not cv2.isContourConvex(q) or cv2.contourArea(q)<.0001: raise EditError('Quad corners must form a convex area in perimeter order')
     q*=np.array([aw,ah])
-    region=roi or [0,.52,1,.98]
+    region=roi if roi is not None else [0,.52,1,.98]
+    if not isinstance(region,(list,tuple)) or any(type(v) not in (int,float) for v in region): raise EditError('ROI needs four numeric coordinates')
     if len(region)!=4 or not 0<=region[0]<region[2]<=1 or not 0<=region[1]<region[3]<=1: raise EditError('ROI is normalized x0,y0,x1,y1')
     cap=cv2.VideoCapture(str(source))
     def frame(t):

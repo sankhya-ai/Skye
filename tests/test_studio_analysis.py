@@ -66,3 +66,12 @@ def test_comparison_does_not_invent_visual_match():
     assert r['caption_geometry']['vertical_center']=={'reference':None,'output':None}
     assert any('No overall style-match score' in s for s in r['limits'])
     with pytest.raises(ValueError):compare_analyses(ref,out,tolerance=float('nan'))
+
+@pytest.mark.parametrize('extra',[{'fps':1.5},{'fps':True},{'fps':'15'},{'text':None},{'roi':12},{'roi':['a',0,1,1]},{'quad':[]},{'quad':[[0,0],[1,1],[0,1],[1,0]]}])
+def test_tracking_invalid_correction_never_edits(tmp_path,extra):
+    from skye.studio.edit import EditError
+    make_video(tmp_path,[np.full((180,320,3),100,np.uint8)]*3)
+    before=(tmp_path/'film.html').read_bytes()
+    options={'text':'Hi',**extra}
+    with pytest.raises(EditError):track_text(tmp_path,1,**options)
+    assert (tmp_path/'film.html').read_bytes()==before

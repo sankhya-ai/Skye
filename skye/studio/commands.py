@@ -58,8 +58,10 @@ def effect_proposal(state, studio, project, selected, plan):
         from .agent import validate_ops
         ops = validate_ops(film, [{'op': 'set', 'clip': c['id'], 'field': 'volume', 'value': plan['volume']} for c in rows if c['id'] in picked], sorted(picked))
     else:
-        if not ((not (set(plan) - {'effect', 'text'}) and plan.get('effect') in EFFECTS | {'track-text'}) or ('reference' in plan and not (set(plan) - {'reference', 'text', 'reference_shot'}))):
+        if not ((not (set(plan) - {'effect', 'text'}) and plan.get('effect') in EFFECTS) or (plan.get('effect')=='track-text' and not(set(plan)-{'effect','text','quad','roi','fps','replace'})) or ('reference' in plan and not (set(plan) - {'reference', 'text', 'reference_shot'}))):
             raise MediaError('Unsupported local effect plan')
+        if plan.get('effect')=='track-text' and 'replace' in plan and type(plan['replace']) is not bool:
+            raise MediaError('Replace tracking must be true or false')
         # One footage clip is intentional. Linked sound is scope, not another shot.
         videos = [(ti, ci, c) for ti,t in enumerate(film['tracks']) for ci,c in enumerate(t['clips']) if c['id'] in picked and re.search(r'\.(mp4|webm|mov|mkv)(?:$|[?#])', c.get('src', ''), re.I) and not c.get('sound')]
         if len(videos) != 1:
@@ -93,7 +95,7 @@ def effect_proposal(state, studio, project, selected, plan):
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         try: os.link(source,dest)
                         except OSError: shutil.copyfile(source,dest)
-                        report = track_text(root,number,plan.get('text',''),track=ti+1)
+                        report = track_text(root,number,plan.get('text',''),track=ti+1,quad=plan.get('quad'),roi=plan.get('roi'),fps=plan.get('fps',15))
                         metadata = (root/report['tracking']).read_text().replace('<', '\\u003c')
                         page = root/report['page']
                         page.write_text(page.read_text() + '<script type="application/json" id="tracking-data">'+metadata+'</script>')
@@ -106,6 +108,14 @@ def effect_proposal(state, studio, project, selected, plan):
             if result.returncode:
                 raise MediaError('The effect could not be applied safely. Your film is unchanged. Try Undo or refresh the shot, then retry. If this continues, use the manual effect controls.')
             ops = json.loads(result.stdout)
+            if plan.get('effect')=='track-text':
+                owned=[(t,c) for t in film['tracks'] for c in t['clips'] if c.get('attrs',{}).get('data-skye-tracking-owner')==clip['id']]
+                if plan.get('replace'):
+                    if any(t.get('locked') for t,c in owned):raise MediaError('The prior tracked text is on a locked track')
+                    ops=[{'op':'remove','clip':c['id']} for t,c in owned]+ops
+                for op in ops:
+                    if op['op']=='insert':op['clip'].setdefault('attrs',{})['data-skye-tracking-owner']=clip['id']
+                answer += f" Maximum median reprojection error {report['max_median_error']} analysis pixels. Diagnostics are not a confidence percentage or proof of the intended plane."
             if studio.request(f'/api/projects/{project}')['rev'] != snap['rev']:
                 raise MediaError('Project changed. Ask again')
             # Pages have unique generated names, and never replace existing assets.

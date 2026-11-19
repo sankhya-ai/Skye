@@ -99,3 +99,37 @@ def test_effect_diff_still_rejects_unselected_move():
     text='<html><head><meta name="viewport" content="width=640,height=360"></head><body><section><video id="a" src="a.mp4#t=0,2" at="1"></video><video id="b" src="a.mp4#t=0,2" at="2"></video></section></body></html>'
     result=subprocess.run(['node',str(helper)],input=json.dumps({'before':before,'text':text,'selected':'b'}),capture_output=True,text=True)
     assert result.returncode and 'unselected clip' in result.stderr
+
+@pytest.mark.parametrize('replace',[1,'yes',None])
+def test_tracking_replace_is_boolean(tmp_path,replace):
+    from skye.studio.commands import effect_proposal
+    with pytest.raises(MediaError,match='true or false'):
+        effect_proposal(tmp_path,Studio(),'demo',['v1'],{'effect':'track-text','replace':replace})
+
+def test_tracking_correction_tags_and_replaces_only_owned(tmp_path,monkeypatch):
+    from skye.studio.commands import effect_proposal
+    import skye.studio.tracking as tracking
+    (tmp_path/'assets').mkdir();(tmp_path/'assets/a.mp4').write_bytes(b'fixture')
+    studio=Studio();studio.film['tracks'].append({'clips':[{'id':'old','src':'pages/old.html','time':[0,4],'attrs':{'data-skye-tracking-owner':'v1'}},{'id':'other','src':'pages/other.html','time':[0,4]}]})
+    original=studio.request
+    def request(*args,**kwargs):
+        result=original(*args,**kwargs)
+        if result:result['project']={'path':str(tmp_path)}
+        return result
+    studio.request=request
+    def fake(root,number,text,**kwargs):
+        assert kwargs['quad']==[[.1,.1],[.8,.1],[.8,.8],[.1,.8]] and kwargs['roi']==[0,0,1,1] and kwargs['fps']==12
+        from skye.studio.edit import _insert_overlay
+        # Retain existing rows so the native effect guard can verify scope.
+        source=Path(root)/'film.html';source.write_text(source.read_text().replace('</body>','<section><iframe id="old" src="pages/old.html#t=0,4" data-skye-tracking-owner="v1"></iframe><iframe id="other" src="pages/other.html#t=0,4"></iframe></section></body>'))
+        (Path(root)/'pages').mkdir();(Path(root)/'pages/new.html').write_text('<html></html>');(Path(root)/'data.json').write_text('{}')
+        source.write_text(source.read_text().replace('</body>','<section><iframe id="new" src="pages/new.html#t=0,4"></iframe></section></body>'))
+        return {'tracking':'data.json','page':'pages/new.html','frames':48,'min_inliers':40,'max_median_error':.2}
+    monkeypatch.setattr(tracking,'track_text',fake)
+    plan={'effect':'track-text','text':'Hi','quad':[[.1,.1],[.8,.1],[.8,.8],[.1,.8]],'roi':[0,0,1,1],'fps':12,'replace':True}
+    result=effect_proposal(tmp_path,studio,'demo',['v1'],plan)
+    assert {'op':'remove','clip':'old'} in result['ops']
+    assert not any(o.get('clip')=='other' for o in result['ops'])
+    assert next(o for o in result['ops'] if o['op']=='insert')['clip']['attrs']['data-skye-tracking-owner']=='v1'
+    studio.film['tracks'][1]['locked']=True
+    with pytest.raises(MediaError,match='locked'):effect_proposal(tmp_path,studio,'demo',['v1'],plan)
