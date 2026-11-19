@@ -44,6 +44,31 @@ speech or semantics. OCR can mistake scene signage for captions; dissolves,
 whip-pans and lighting changes can confuse cuts. It does not change your target
 cut structure. Read the report before treating it as a reference match.
 
+## Compare a rendered result
+
+```sh
+python3 -m skye.studio.reference reference.mp4 --compare rendered.mp4 \
+  --out comparison.json --no-ocr --tolerance .2
+```
+
+This is read-only. It reports duration difference, median detected-shot length,
+paired cut/flash candidates and unpaired events on each side. Events are paired
+one-to-one in time order within the tolerance, not credited more than once.
+The report includes the sampling resolution. It does not stretch either timeline
+or hide missing events behind a single percentage. With OCR enabled it also gives
+aggregate candidate text height/vertical center; null means unmeasured, not zero.
+It deliberately produces no overall style-match score. Same cut times do not
+prove matching footage, story, typography, motion, color, camera or sound.
+`--compare` cannot be combined with `--apply-to`.
+
+Verification: two 19-second versions of the real street reel paired six detected
+cut candidates at the same sampled times, median 2.5s, duration delta -0.019s.
+OCR was disabled, so caption geometry stayed null. Comparing the six-second hero
+proof against the four-second sound fixture reported two unpaired reference cuts
+and a -2s duration difference, not a match. Those are bounded detector examples,
+not a general accuracy claim. Real footage is private testing only; creators
+retain their rights.
+
 ## Plant text on a plane
 
 ```sh

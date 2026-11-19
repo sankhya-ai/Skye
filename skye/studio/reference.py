@@ -94,9 +94,45 @@ def apply_analysis(project, shot, analysis, *, reference_shot=1, text='', track=
     return apply_recipe(project,shot,recipe,track=track)
 
 
+def compare_analyses(reference,output,*,tolerance=.2):
+    """Compare only measured timing/geometry. Never collapse this into a style score."""
+    import math
+    if not isinstance(tolerance,(int,float)) or not math.isfinite(tolerance) or not 0<tolerance<=2:
+        raise ValueError('Timing tolerance must be above zero and no more than two seconds')
+    def events(a,b):
+        # Earliest in-order pairs within tolerance, one-to-one. No duplicate credit.
+        pairs=[];missing=[];extra=[];i=j=0
+        while i<len(a) and j<len(b):
+            if abs(a[i]-b[j])<=tolerance:
+                pairs.append({'reference':a[i],'output':b[j],'delta':round(b[j]-a[i],4)});i+=1;j+=1
+            elif b[j]<a[i]-tolerance:extra.append(b[j]);j+=1
+            else:missing.append(a[i]);i+=1
+        return {'pairs':pairs,'reference_unpaired':missing+a[i:],'output_unpaired':extra+b[j:]}
+    def median(candidates,key):
+        values=[c[key] for c in candidates if key in c]
+        return round(statistics.median(values),4) if values else None
+    return {'version':1,'reference':reference['source'],'output':output['source'],
+            'duration':{'reference':reference['duration'],'output':output['duration'],'delta':round(output['duration']-reference['duration'],4)},
+            'median_shot_seconds':{'reference':reference['median_shot_seconds'],'output':output['median_shot_seconds']},
+            'timing_tolerance_seconds':tolerance,
+            'measurement_resolution_seconds':max(reference['cut_resolution_seconds'],output['cut_resolution_seconds']),
+            'cuts':events(reference['cuts'],output['cuts']),
+            'flash_candidates':events(reference['flash_candidates'],output['flash_candidates']),
+            'caption_geometry':{key:{'reference':median(reference['caption_candidates'],key),'output':median(output['caption_candidates'],key)} for key in ('median_height_fraction','vertical_center')},
+            'limits':['Timing pairs are earliest in-order events within tolerance, not proof of a visual match.',
+                      'Cuts and flashes are heuristic candidates. Missed/false detections can affect this comparison.',
+                      'Caption geometry is an aggregate of OCR candidates, possibly scene signage. Null means unmeasured.',
+                      'No assessment of story, subject, exact fonts, animation, colors, camera, speech or music. No overall style-match score.']}
+
+
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('source');p.add_argument('--out',required=True);p.add_argument('--no-ocr',action='store_true');p.add_argument('--apply-to');p.add_argument('--shot',type=int,default=1);p.add_argument('--reference-shot',type=int,default=1);p.add_argument('--text',default='');p.add_argument('--track',type=int)
-    a=p.parse_args(argv);result=analyze(a.source,ocr=not a.no_ocr);Path(a.out).write_text(json.dumps(result,indent=2))
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('source');p.add_argument('--out',required=True);p.add_argument('--no-ocr',action='store_true');p.add_argument('--compare',help='Rendered output video to compare measured timing, not style');p.add_argument('--tolerance',type=float,default=.2);p.add_argument('--apply-to');p.add_argument('--shot',type=int,default=1);p.add_argument('--reference-shot',type=int,default=1);p.add_argument('--text',default='');p.add_argument('--track',type=int)
+    a=p.parse_args(argv);result=analyze(a.source,ocr=not a.no_ocr)
+    if a.compare:
+        if a.apply_to:p.error('--compare is read-only and cannot be combined with --apply-to')
+        output=analyze(a.compare,ocr=not a.no_ocr);Path(a.out).write_text(json.dumps(compare_analyses(result,output,tolerance=a.tolerance),indent=2))
+        print(json.dumps({'comparison':a.out,'scope':'Measured timing and OCR geometry only, no visual-match claim'}));return
+    Path(a.out).write_text(json.dumps(result,indent=2))
     if a.apply_to: print(json.dumps(apply_analysis(a.apply_to,a.shot,result,reference_shot=a.reference_shot,text=a.text,track=a.track)))
     print(json.dumps({'analysis':a.out,'shots':len(result['shots']),'median_shot_seconds':result['median_shot_seconds'],'caption_candidates':len(result['caption_candidates'])}))
 if __name__=='__main__':main()

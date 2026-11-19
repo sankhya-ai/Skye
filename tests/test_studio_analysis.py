@@ -51,3 +51,18 @@ def test_untextured_plane_fails_without_edit(tmp_path):
     before=(tmp_path/'film.html').read_bytes()
     with pytest.raises(Exception,match='features'):track_text(tmp_path,1,'NO')
     assert (tmp_path/'film.html').read_bytes()==before
+
+
+def test_comparison_does_not_invent_visual_match():
+    from skye.studio.reference import compare_analyses
+    ref={'source':'reference.mp4','duration':4,'median_shot_seconds':1,'cut_resolution_seconds':1/6,'cuts':[1,2,3],'flash_candidates':[.5],'caption_candidates':[]}
+    out={**ref,'source':'output.mp4','duration':5,'cuts':[1.1,1.2,3.05,4],'flash_candidates':[]}
+    r=compare_analyses(ref,out,tolerance=.15)
+    assert r['duration']['delta']==1
+    assert len(r['cuts']['pairs'])==2
+    assert r['cuts']['reference_unpaired']==[2]
+    assert r['cuts']['output_unpaired']==[1.2,4]
+    assert r['flash_candidates']['reference_unpaired']==[.5]
+    assert r['caption_geometry']['vertical_center']=={'reference':None,'output':None}
+    assert any('No overall style-match score' in s for s in r['limits'])
+    with pytest.raises(ValueError):compare_analyses(ref,out,tolerance=float('nan'))
