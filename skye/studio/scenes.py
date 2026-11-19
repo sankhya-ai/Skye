@@ -72,12 +72,14 @@ def caption(kicker: str, main: str, bg: str = PAPER, fg: str = INK, accent: str 
     return _page(body, bg, fg, 2.5)
 
 
-def endcard(title: str, subtitle: str, url: str, bg: str = NAVY, fg: str = PAPER, dot: str = BLUE) -> str:
-    """Mark, name, tagline and address. Default 4s."""
+def endcard(title: str, subtitle: str, url: str, bg: str = NAVY, fg: str = PAPER, dot: str = BLUE, mark: str = "t") -> str:
+    """Mark, name, tagline and address. Default 4s. `mark` is the monogram letter; empty hides it."""
     et, es, eu = html.escape(title), html.escape(subtitle), html.escape(url)
+    em = html.escape(mark)
+    logo = f'<div style="font-size:220px;line-height:1">{em}<span style="color:{dot}">.</span></div>' if mark else ""
     body = f"""
 <div style="animation:rise 4s cubic-bezier(.2,.7,.3,1) both">
- <div style="font-size:220px;line-height:1">t<span style="color:{dot}">.</span></div>
+ {logo}
  <div style="font-size:120px;letter-spacing:.08em">{et}</div>
  <div style="font-size:52px;font-style:italic;opacity:.85;margin-top:24px">{es}</div>
  <div style="font-size:48px;letter-spacing:.18em;margin-top:64px;color:#8fb6d9">{eu}</div>
