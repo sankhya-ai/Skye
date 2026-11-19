@@ -140,3 +140,25 @@ def test_project_owned_notes_migrate_and_layout_survives_state_move(tmp_path):
     assert board['layout']=={'positions':{'one':{'x':700,'y':550}},'viewport':{'x':-50,'y':75,'zoom':.6}}
     with pytest.raises(MediaError):save_layout(state,studio,'demo',{'clip':'one','position':{'x':float('nan'),'y':0}})
     with pytest.raises(MediaError):save_layout(state,studio,'demo',{'viewport':{'x':0,'y':0,'zoom':0}})
+
+
+def test_edge_preview_is_current_composed_film(tmp_path,monkeypatch):
+    import urllib.parse
+    from skye.studio.storyboard import edge_preview
+    seen=[]
+    class Response:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self):return b'jpeg'
+    def fetch(request,timeout):
+        seen.append(urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query));return Response()
+    monkeypatch.setattr('urllib.request.urlopen',fetch)
+    studio=Studio(tmp_path);studio.origin='http://localhost:1234';studio.session={'key':'test'}
+    result=edge_preview(tmp_path,studio,'demo','one')
+    assert result['effect']=='cut' and result['base']=='r1'
+    assert [q['ms'] for q in seen]==[['2880'],['3000'],['3120']]
+    assert all(q['path']==['film.html'] for q in seen)
+    with pytest.raises(MediaError,match='edge'):edge_preview(tmp_path,studio,'demo','two')
+    def failed(*args,**kwargs):raise OSError('missing frame')
+    monkeypatch.setattr('urllib.request.urlopen',failed)
+    with pytest.raises(MediaError,match='unavailable'):edge_preview(tmp_path,studio,'demo','one')

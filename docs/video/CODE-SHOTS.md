@@ -52,3 +52,5 @@ auto-fit across aspect ratios, scrubber inside the code editor, stronger resourc
 budgets and actual owner-CLI code generation tests. The optional video agent can
 propose template insertion or code edits for an explicit code-shot request;
 no real Claude/Codex run has yet been verified on this host.
+
+Storyboard edges also expose three composed samples of the **saved film** at the next shot's boundary and ±0.12 seconds. The native film renderer draws all layers, including code scenes and effects. These are still frames, not a playback preview or an unapplied transition preview. The picker starts at the edge's current effect; apply and reopen to inspect the changed edge. A flash can correctly appear as a white sample. Do not infer full transition quality from three samples.

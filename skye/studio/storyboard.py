@@ -305,3 +305,22 @@ def plan_change(state,studio,project,body):
     result=subprocess.run(['node',str(Path(__file__).with_name('check.mjs'))],input=json.dumps({'film':film,'ops':ops}),capture_output=True,text=True,timeout=20)
     if result.returncode:raise MediaError(result.stderr[-2000:])
     return {'project':project,'base':snap['rev'],'ops':ops,'answer':'Storyboard edit ready'}
+
+
+def edge_preview(state,studio,project,clip):
+    """Three composed samples of the saved film, not the uncommitted picker."""
+    import urllib.request,urllib.parse
+    _file(state,project);snap=studio.request(f'/api/projects/{project}');board=describe(state,project,snap)
+    index=next((i for i,s in enumerate(board['shots'][:-1]) if s['id']==clip),None)
+    if index is None:raise MediaError('Choose an edge between current shots')
+    left,right=board['shots'][index:index+2];boundary=right['at'];end=max(s['at']+s['duration'] for s in board['shots']);frames=[]
+    for label,offset in [('Before',-.12),('At edge',0),('After',.12)]:
+        when=max(0,min(end-.001,boundary+offset))
+        route=f'/api/projects/{project}/media?'+urllib.parse.urlencode({'path':'film.html','what':'frame','ms':round(when*1000),'w':240})
+        req=urllib.request.Request(studio.origin+route,headers={'x-studio-key':studio.session['key']})
+        try:
+            with urllib.request.urlopen(req,timeout=30) as response:image='data:image/jpeg;base64,'+base64.b64encode(response.read()).decode()
+        except OSError as exc:raise MediaError('Composed edge preview is unavailable. Open the editor to inspect it') from exc
+        frames.append({'label':label,'time':round(when,3),'image':image})
+    if studio.request(f'/api/projects/{project}')['rev']!=snap['rev']:raise MediaError('Film changed while reading edge previews. Reopen the edge')
+    return {'base':snap['rev'],'effect':left['transition'],'frames':frames}

@@ -22,6 +22,9 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action=='edge-preview':
+            from .storyboard import edge_preview
+            handler._json(edge_preview(handler.state_dir,studio,body.get('project'),body.get('clip')))
         elif action in ('masks','mask-change'):
             from . import mask_editor
             from .storyboard import _file
