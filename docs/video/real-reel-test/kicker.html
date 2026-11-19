@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Kicker</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:transparent}
+#k{position:fixed;left:0;right:0;bottom:var(--bottom,150px);text-align:center;font:600 30px/1 'Noto Sans','DejaVu Sans',sans-serif;letter-spacing:.5em;text-indent:.5em;color:var(--color,#2b2118);text-transform:uppercase;opacity:0;text-shadow:var(--shadow,none)}
+#k::before,#k::after{content:"";display:inline-block;width:60px;height:2px;background:currentColor;vertical-align:middle;margin:0 28px;opacity:.7}
+</style></head>
+<body><div id="k">Act I</div>
+<script>
+const k=document.getElementById('k');
+window.film={duration:4,frame(t){k.style.opacity=String(Math.max(0,Math.min(1,t/0.5)));k.style.letterSpacing=(0.5+0.06*t)+'em';}};
+</script></body></html>
