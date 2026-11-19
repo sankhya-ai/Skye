@@ -34,7 +34,7 @@ export function StudioView() {
       if (e.data?.type === 'skye:applied' && e.data.request === request.current) {
         setApplying(false);
         if (e.data.error) setError(String(e.data.error));
-        else {setError(''); setAnswer(a => a + ' Use Undo to revert this edit.');}
+        else {setError(''); setAnswer(a => a + ' Applied. Use Undo to revert this edit.');}
       }
     };
     window.addEventListener('message', receive);
@@ -84,6 +84,7 @@ export function StudioView() {
         <textarea aria-label="Ask the video agent" maxLength={4000} rows={5} value={goal} onChange={e => setGoal(e.target.value)} placeholder={adapter === 'local' ? 'caption "Your words"\npunch · shake · volume 50%' : 'Describe the selected shot edit...'} disabled={busy} />
         <button className="studio-send" disabled={busy || !goal.trim() || !selected.length || adapter !== 'local' && !agents.some(a => a.name === adapter && a.available)} onClick={() => void send()}>{busy ? applying ? 'Applying...' : 'Editing...' : 'Send'}</button>
         {answer && <p role="status" className="studio-answer">{answer}</p>}
+        <details className="studio-muted"><summary>Commands</summary><p>caption "Words" · text "Words" · punch · shake · flash · grain · glitch · mirror · volume 50% · mute</p><p>track "Words" uses a textured ground plane. reference "assets/ref.mp4" text "New words" measures a local reference. Both need OpenCV; OCR uses Tesseract when installed.</p></details>
         <div className="studio-note">Canvas, timeline and color use the same film. Agent edits use the same operations and Undo as manual edits.<br /><br />Local commands need no model. Claude Code and Codex use your own installed agent. Remote generation and automatic updates are off.</div>
       </aside>
     </div>

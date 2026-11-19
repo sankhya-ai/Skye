@@ -16,7 +16,7 @@ def test_no_guess(text):
 def test_video_team_role():
     assert 'video-editor' in roles.known()
     assert agents.definition_for('video-editor')['instructions']
-    assert 'Bash' not in gateway.resolve('video-editor')['tools']
+    assert 'Bash' in gateway.resolve('video-editor')['tools']
 
 FILM='''<!doctype html><html><head><style>body {width:640px;height:360px}</style></head><body><section><video id="v1" src="assets/a.mp4#t=0,4" at="0" volume="0"></video></section></body></html>'''
 class Studio:
@@ -41,3 +41,28 @@ def test_effect_becomes_native_ops(tmp_path,text):
 def test_local_locked(tmp_path):
     studio=Studio(); studio.film['tracks'][0]['locked']=True
     with pytest.raises(MediaError,match='locked'): local_propose(tmp_path,studio,'demo',['v1'],'punch')
+
+
+def test_extended_grammar():
+    assert parse_command('track "PLANTED"') == {'effect':'track-text','text':'PLANTED'}
+    assert parse_command('reference "assets/ref.mp4" text "New words"') == {'reference':'assets/ref.mp4','text':'New words'}
+
+def test_reference_path_cannot_escape(tmp_path):
+    studio=Studio(); studio.project_root=tmp_path
+    original=studio.request
+    def request(route,body=None,method=None):
+        result=original(route,body,method)
+        if result: result['project']={'path':str(tmp_path)}
+        return result
+    studio.request=request
+    with pytest.raises(MediaError,match='local asset'):
+        local_propose(tmp_path,studio,'demo',['v1'],'reference "../outside.mp4"')
+
+
+def test_recipe_tracks_selected_clip_after_new_sections(tmp_path):
+    from skye.studio.edit import apply_recipe, read_shots
+    (tmp_path/'film.html').write_text(FILM)
+    apply_recipe(tmp_path,1,[{'effect':'flash','offset':1,'dur':.12},{'effect':'caption-pop','text':'one|two','offset':0}],track=1)
+    assert len(list((tmp_path/'pages').glob('*.html')))==2
+    shots=read_shots(tmp_path)
+    assert len(shots)==1 and shots[0].clip_id=='v1'

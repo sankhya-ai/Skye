@@ -161,12 +161,17 @@ def propose(state: Path, studio, project: str, selected: list[str], goal: str,
         'remove {op:"remove",clip}; split {op:"split",clip,left:{start,end},right:{at,start,end},rightId}. '
         'Do not change anything outside the allowed ids or introduce new sources. Keep linked A/V in sync. '
         'For a supported visual effect, ops.json may instead be an object with effect (caption-pop, ktype, hook, meme, flash, film-burn, grain, shake, punch, whip-in, whip-out, glitch, mirror, sticker) and optional text. Skye generates its pages locally. Select exactly one footage clip for this. '
+        'For local planar lettering use {effect:"track-text",text}. For a video already in this project use {reference:"assets/ref.mp4",text,reference_shot:1}; this measures cuts/OCR/flash timing, not an exact visual match. '
         'Do not claim a render or preview was checked. Finish with one sentence about the edit.')
     contract = validate({'goal': goal.strip(), 'brief': brief, 'repo': str(folder), 'role': 'video-editor',
         'adapter': adapter, 'claims': ['ops.json'], 'gates': [],
         'budget': {'timeout_seconds': 300, 'max_steps': 20}})
     approvals.approve(contract, state / 'approvals.json', note='Owner clicked Send for selected timeline clips')
-    outcome = dispatch(contract, Policy.load(), state_dir=state, approvals_path=state / 'approvals.json', runner=runner)
+    # General team editors may run local tools. Embedded proposals deliberately cannot.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='skye-proposal-catalogue-') as catalogue:
+        write_json(Path(catalogue) / 'video-editor.json', {'tools': ['Read','Glob','Grep','Write','Edit'], 'writable': True})
+        outcome = dispatch(contract, Policy.load(), state_dir=state, approvals_path=state / 'approvals.json', runner=runner, catalogues_dir=catalogue)
     if outcome.status != 'done':
         raise MediaError(f'Agent {outcome.status}: {outcome.reason}')
     if {p.name for p in folder.iterdir()} != {'.git', 'film.json', 'ops.json'}:

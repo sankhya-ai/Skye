@@ -15,6 +15,12 @@ def parse_command(text: str) -> dict:
     text = text.strip()
     if not text or len(text) > 4000:
         raise MediaError('Describe one edit in at most 4000 characters')
+    match = re.fullmatch(r'track\s+["\'](.+)["\']', text, re.I | re.S)
+    if match:
+        return {'effect': 'track-text', 'text': match[1]}
+    match = re.fullmatch(r'reference\s+"([^"]+)"(?:\s+text\s+"([^"]+)")?', text, re.I)
+    if match:
+        return {'reference': match[1], 'text': match[2] or ''}
     match = re.fullmatch(r'(?:add\s+)?(caption|text|caption-pop|ktype|hook|meme)\s+["\'](.+)["\']', text, re.I | re.S)
     if match:
         return {'effect': {'caption': 'caption-pop', 'text': 'ktype'}.get(match[1].lower(), match[1].lower()), 'text': match[2]}
@@ -45,11 +51,14 @@ def effect_proposal(state, studio, project, selected, plan):
     picked.update(c['id'] for c in rows if c.get('attrs', {}).get('data-link') in links)
     if any(t.get('locked') and any(c['id'] in picked for c in t['clips']) for t in film['tracks']):
         raise MediaError('A selected or linked track is locked')
+    answer = 'Local edit ready. No model was called.'
+    if not isinstance(plan, dict):
+        raise MediaError('Unsupported local effect plan')
     if set(plan) == {'volume'}:
         from .agent import validate_ops
         ops = validate_ops(film, [{'op': 'set', 'clip': c['id'], 'field': 'volume', 'value': plan['volume']} for c in rows if c['id'] in picked], sorted(picked))
     else:
-        if not isinstance(plan, dict) or set(plan) - {'effect', 'text'} or plan.get('effect') not in EFFECTS:
+        if not ((not (set(plan) - {'effect', 'text'}) and plan.get('effect') in EFFECTS | {'track-text'}) or ('reference' in plan and not (set(plan) - {'reference', 'text', 'reference_shot'}))):
             raise MediaError('Unsupported local effect plan')
         # One footage clip is intentional. Linked sound is scope, not another shot.
         videos = [(ti, ci, c) for ti,t in enumerate(film['tracks']) for ci,c in enumerate(t['clips']) if c['id'] in picked and re.search(r'\.(mp4|webm|mov|mkv)(?:$|[?#])', c.get('src', ''), re.I) and not c.get('sound')]
@@ -64,8 +73,34 @@ def effect_proposal(state, studio, project, selected, plan):
             shots = read_shots(root, ti + 1)
             number = next(s.index for s in shots if s.clip_id == clip['id'])
             try:
-                apply_effect(root, number, plan['effect'], text=plan.get('text', ''), track=ti+1, offset=0)
-            except EditError as exc:
+                if 'reference' in plan or plan.get('effect') == 'track-text':
+                    project_root = Path(snap['project']['path']).resolve()
+                    rel = plan.get('reference') if 'reference' in plan else shots[number-1].src
+                    if not isinstance(rel, str) or Path(rel).is_absolute() or '..' in Path(rel).parts:
+                        raise MediaError('Use a local asset inside this project')
+                    source = (project_root/rel).resolve()
+                    if not source.is_relative_to(project_root) or not source.is_file() or source.suffix.lower() not in {'.mp4','.webm','.mov','.mkv'}:
+                        raise MediaError('Use a local video asset inside this project')
+                    if 'reference' in plan:
+                        from .reference import analyze, apply_analysis
+                        analysis = analyze(source)
+                        apply_analysis(root, number, analysis, reference_shot=plan.get('reference_shot',1), text=plan.get('text',''), track=ti+1)
+                        answer = f"Reference measured: {len(analysis['shots'])} shots, {analysis['median_shot_seconds']}s median. Applied measured timing with generic presets, not an exact style match. No model was called."
+                    else:
+                        from .tracking import track_text
+                        import os, shutil
+                        dest = root/rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        try: os.link(source,dest)
+                        except OSError: shutil.copyfile(source,dest)
+                        report = track_text(root,number,plan.get('text',''),track=ti+1)
+                        metadata = (root/report['tracking']).read_text().replace('<', '\\u003c')
+                        page = root/report['page']
+                        page.write_text(page.read_text() + '<script type="application/json" id="tracking-data">'+metadata+'</script>')
+                        answer = f"Planar text tracked across {report['frames']} samples; minimum {report['min_inliers']} inliers. Inspect for drift. No model was called."
+                else:
+                    apply_effect(root, number, plan['effect'], text=plan.get('text', ''), track=ti+1, offset=0)
+            except (EditError, ValueError, ImportError) as exc:
                 raise MediaError(str(exc)) from exc
             result = subprocess.run(['node', str(Path(__file__).with_name('effect-diff.mjs'))], input=json.dumps({'before': film, 'text': (root/'film.html').read_text(), 'selected': clip['id']}), text=True, capture_output=True, timeout=20)
             if result.returncode:
@@ -78,7 +113,7 @@ def effect_proposal(state, studio, project, selected, plan):
                 studio.request(f'/api/projects/{project}/page', {'path': page.relative_to(root).as_posix(), 'text': page.read_text(), 'expect': None}, method='PUT')
     if studio.request(f'/api/projects/{project}')['rev'] != snap['rev']:
         raise MediaError('Project changed. Ask again')
-    return {'project': project, 'base': snap['rev'], 'ops': ops, 'selected': sorted(picked), 'answer': 'Local edit applied. No model was called.'}
+    return {'project': project, 'base': snap['rev'], 'ops': ops, 'selected': sorted(picked), 'answer': answer}
 
 
 def local_propose(state, studio, project, selected, goal):

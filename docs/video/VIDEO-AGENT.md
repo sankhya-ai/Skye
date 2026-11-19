@@ -16,8 +16,6 @@ stale result. Generated but unapplied pages may remain as unused assets after a
 conflict or a closed tab. No film edit is silently committed in that case.
 
 Boundaries: one visual effect per request on one footage clip; linked sound stays
-in scope. Locked tracks are rejected. Masks/cutouts and tracking are not exposed
-through the text grammar yet. Reference analysis, tracking and M1 verification
-remain separate milestones. On the Linux test host neither Claude Code nor Codex
+in scope. Locked tracks are rejected. Masks/cutouts are not exposed through the text grammar yet. Tracking uses `track "Words"`; reference measurements use `reference "assets/ref.mp4" text "Words"`. Reference measurements and planar tracking are now local commands too; see LOCAL-ANALYSIS.md. The Mac check kit is in MAC-CHECK.md. Actual M1 execution is still unverified. On the Linux test host neither Claude Code nor Codex
 is installed, so only deterministic local edits and stubbed dispatcher tests have
 been exercised, not a real owner-LLM run.
