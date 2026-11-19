@@ -245,7 +245,7 @@ export function useFilm(projectId: string, initial: FilmState | null, onChange: 
   /* undo, redo and the history's jumps one at a time: the next step is looked for once the last one is taken */
   const turn = useRef(inTurn());
   const undo = useCallback(() => {
-    void turn.current(() => { const one = nextStep(stepsRef.current, 'undo'); return one ? step(one, 'undo') : undefined; });
+    return turn.current(() => { const one = nextStep(stepsRef.current, 'undo'); return one ? step(one, 'undo') : undefined; });
   }, [step]);
   const redo = useCallback(() => {
     void turn.current(() => { const one = nextStep(stepsRef.current, 'redo'); return one ? step(one, 'redo') : undefined; });
@@ -277,7 +277,7 @@ export function useFilm(projectId: string, initial: FilmState | null, onChange: 
       if (e.detail.base !== ref.current?.rev) { e.detail.done('Project changed. Ask again.'); return; }
       void run(e.detail.ops, 'do', 'Agent edit').then(e.detail.done);
     };
-    const takeBack=()=>undo();
+    const takeBack=(event:Event)=>{const done=(event as CustomEvent).detail?.done;void Promise.resolve(undo()).then(()=>done?.(null)).catch(e=>done?.(e instanceof Error?e.message:String(e)));};
     window.addEventListener('skye-undo',takeBack);
     window.addEventListener('skye-apply', apply);
     return () => {window.removeEventListener('skye-apply', apply);window.removeEventListener('skye-undo',takeBack);};

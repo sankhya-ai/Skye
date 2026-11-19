@@ -39,7 +39,7 @@ window.addEventListener('message', e => {
       } catch(error){send({type:'skye:project-result',request,error:error instanceof Error?error.message:String(error)});}
     })();return;
   }
-  if (e.source === parent && e.origin === parentOrigin && e.data?.type === 'skye:undo') {window.dispatchEvent(new CustomEvent('skye-undo'));return;}
+  if (e.source === parent && e.origin === parentOrigin && e.data?.type === 'skye:undo') {const request=e.data.request;window.dispatchEvent(new CustomEvent('skye-undo',{detail:{done:(error:string|null)=>send({type:'skye:applied',request,error})}}));return;}
   if (e.source === parent && e.origin === parentOrigin && e.data?.type === 'skye:select-shot' && typeof e.data.id === 'string') {
     commandListener?.({type:'select-clip',id:e.data.id,seek:true});return;
   }

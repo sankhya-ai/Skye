@@ -22,6 +22,11 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action in ('audio','audio-change'):
+            from .audio import read, change
+            from .storyboard import _file
+            project=body.get('project');_file(handler.state_dir,project)
+            handler._json(read(handler.state_dir,studio,project) if action=='audio' else change(handler.state_dir,studio,project,body))
         elif action == 'preflight':
             from .storyboard import _file
             from .preflight import inspect
@@ -36,7 +41,7 @@ def post(handler, path: str):
             from .storyboard import _file
             project=body.get('project');_file(handler.state_dir,project)
             listing=studio.request(f'/api/projects/{project}/files')
-            handler._json({'folder':studio.request(f'/api/projects/{project}').get('folder',''),'files':[f for f in listing.get('files',[]) if f.get('kind') in ('video','image')]})
+            handler._json({'folder':studio.request(f'/api/projects/{project}').get('folder',''),'files':[f for f in listing.get('files',[]) if f.get('kind') in ('video','image','audio')]})
         elif action == 'import-url':
             from .importer import import_url
             handler._json(import_url(studio, body.get('project'), body.get('url'), body.get('rel')))
