@@ -26,7 +26,7 @@ import { readable } from './files.mjs';
 import { TOOL_DIR } from './projects.mjs';
 
 /** Changing how proxies are made makes new ones. */
-const VERSION = 1;
+const VERSION = 2;
 /** Decoded at full speed by every browser, 8-bit: light enough as it is, up to 1080p. */
 const LIGHT_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1']);
 const LIGHT_PIXFMTS = new Set(['yuv420p', 'yuvj420p']);
@@ -243,7 +243,7 @@ async function make(abs, out, size, fps, seconds, progress, encoder, decoding, s
     : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-g', String(gop), '-keyint_min', String(gop), '-pix_fmt', 'yuv420p'];
   return new Promise((done, fail) => {
     const proc = spawn('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'error', '-y', ...decoding, '-i', abs,
-      '-map', '0:v:0', '-an', '-sn', '-dn', '-fps_mode', 'passthrough', '-vf', `scale=${size.w}:${size.h}`, ...codec,
+      '-map', '0:v:0', '-an', '-sn', '-dn', '-vsync', '0', '-vf', `scale=${size.w}:${size.h}`, ...codec,
       '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', part], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal });
     let err = '';
     proc.stderr.on('data', (d) => { err += d; });

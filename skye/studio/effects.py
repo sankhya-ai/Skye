@@ -179,9 +179,9 @@ def caption_pop(project_root: str | Path, page_name: str, words: list[str], dur:
         w2 = html.escape(w.strip("*"))
         color = accent if hot else fg
         spans.append(
-            f'<span style="display:inline-block;margin:0 .12em;color:{color};'
+            f'<span style="display:inline-block;max-width:100%;overflow-wrap:anywhere;margin:0 .12em;color:{color};'
             f'animation:cw {dur}s cubic-bezier(.2,.9,.3,1.5) both;animation-delay:{i * per_word:.2f}s">{w2}</span>')
-    body = f'<div style="max-width:920px;line-height:1.3;font-weight:900;font-size:{size}px;text-shadow:0 4px 18px rgba(0,0,0,.55)">{"".join(spans)}</div>'
+    body = f'<div style="max-width:85vw;line-height:1.3;font-weight:900;font-size:min({size}px,11.1vw);text-shadow:0 4px 18px rgba(0,0,0,.55)">{"".join(spans)}</div>'
     css = ("@keyframes cw{0%{opacity:0;transform:scale(.4) translateY(40px)}8%{opacity:1;transform:scale(1.12)}"
            "14%{transform:scale(1)}88%{opacity:1}100%{opacity:1;transform:scale(1)}}")
     return _write(project_root, page_name, body, css, dur)

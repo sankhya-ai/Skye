@@ -473,7 +473,18 @@ def apply_recipe(project_root: str | Path, shot: int, recipe: list[dict], *, tra
     old_backup = backup.read_bytes() if backup.exists() else None
     known = {p for folder in ('pages', 'assets') for p in (root/folder).glob('*')}
     try:
-        changes = [apply_effect(root, shot, track=track, **step) for step in recipe]
+        # Overlays can insert sections before the footage. A section number is
+        # a locator for the initial read, not a stable identity across steps.
+        selected_id = read_shots(root, track)[shot-1].clip_id
+        changes = []
+        for step in recipe:
+            current = _canonical_text(film.read_text())
+            sections = re.findall(r'<section\b[^>]*>.*?</section>', current, re.S)
+            section = next(i for i, sec in enumerate(sections, 1)
+                           if any(_attrs(m.group(0)).get('id') == selected_id
+                                  for m in re.finditer(r'<video\b[^>]*>', sec)))
+            current_shot = next(s.index for s in read_shots(root, section, _text=current) if s.clip_id == selected_id)
+            changes.append(apply_effect(root, current_shot, track=section, **step))
         backup.write_bytes(before)
         return changes
     except Exception:

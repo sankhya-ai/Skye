@@ -52,11 +52,11 @@ export async function compactDraftPng(file, { fps, signal }) {
       const n = original.packets.length, take = Math.min(12, n), from = Math.floor((n - take) / 2);
       await exec('ffmpeg', ['-hide_banner', '-nostdin', '-v', 'error', '-y', '-threads', '2', '-i', file,
         '-an', '-vf', `trim=start_frame=${from}:end_frame=${from + take},setpts=PTS-STARTPTS,format=rgba`,
-        '-frames:v', String(take), '-fps_mode', 'passthrough', '-c:v', 'png', '-compression_level', '3', '-pred', 'sub', '-threads', '2', sample], { signal, windowsHide: true });
+        '-frames:v', String(take), '-vsync', '0', '-c:v', 'png', '-compression_level', '3', '-pred', 'sub', '-threads', '2', sample], { signal, windowsHide: true });
       if ((await stat(sample)).size * n / take < before * 0.9) codec = 'png';
     }
     await exec('ffmpeg', ['-hide_banner', '-nostdin', '-v', 'error', '-y', '-threads', '2', '-i', file,
-      '-map', '0:v:0', '-map', '0:a?', '-vf', codec === 'png' ? 'format=rgba' : 'format=argb', '-fps_mode', 'passthrough', '-c:v', codec,
+      '-map', '0:v:0', '-map', '0:a?', '-vf', codec === 'png' ? 'format=rgba' : 'format=argb', '-vsync', '0', '-c:v', codec,
       ...(codec === 'png' ? ['-compression_level', '3', '-pred', 'sub'] : ['-g', String(Math.max(1, Math.round(fps * 10)))]),
       '-threads', '2', '-enc_time_base', `${rate.den}:${rate.num}`,
       '-bsf:v', `setts=duration=1/((${ffmpegRate(rate)})*TB)`, '-c:a', 'copy', temporary], { signal, windowsHide: true });
@@ -183,7 +183,7 @@ export async function cropDraftPng(file, size, signal, compact) {
   const rate = exactRate(size.fps ?? 30);
   try {
     await exec('ffmpeg', ['-hide_banner', '-nostdin', '-v', 'error', '-y', '-threads', '2', '-i', file,
-      '-map', '0:v:0', '-map', '0:a?', '-vf', `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y}:exact=1,format=rgba`, '-fps_mode', 'passthrough',
+      '-map', '0:v:0', '-map', '0:a?', '-vf', `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y}:exact=1,format=rgba`, '-vsync', '0',
       '-c:v', 'png', '-compression_level', '3', '-pred', 'sub', '-threads', '2', '-enc_time_base', `${rate.den}:${rate.num}`,
       '-bsf:v', `setts=duration=1/((${ffmpegRate(rate)})*TB)`, '-c:a', 'copy', part], { signal, windowsHide: true });
     await compact?.(part, signal);
