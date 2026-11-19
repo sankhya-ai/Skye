@@ -160,8 +160,9 @@ def propose(state: Path, studio, project: str, selected: list[str], goal: str,
         'props {op:"props",edits:[{clip,prop,value}]} props at/start/end (seconds), volume/speed/fade/box/overrides/disabled/link; '
         'remove {op:"remove",clip}; split {op:"split",clip,left:{start,end},right:{at,start,end},rightId}. '
         'Do not change anything outside the allowed ids or introduce new sources. Keep linked A/V in sync. '
+        'For a supported visual effect, ops.json may instead be an object with effect (caption-pop, ktype, hook, meme, flash, film-burn, grain, shake, punch, whip-in, whip-out, glitch, mirror, sticker) and optional text. Skye generates its pages locally. Select exactly one footage clip for this. '
         'Do not claim a render or preview was checked. Finish with one sentence about the edit.')
-    contract = validate({'goal': goal.strip(), 'brief': brief, 'repo': str(folder), 'role': 'artist',
+    contract = validate({'goal': goal.strip(), 'brief': brief, 'repo': str(folder), 'role': 'video-editor',
         'adapter': adapter, 'claims': ['ops.json'], 'gates': [],
         'budget': {'timeout_seconds': 300, 'max_steps': 20}})
     approvals.approve(contract, state / 'approvals.json', note='Owner clicked Send for selected timeline clips')
@@ -172,7 +173,15 @@ def propose(state: Path, studio, project: str, selected: list[str], goal: str,
         raise MediaError('Agent wrote outside ops.json')
     if read_json(safe_file(folder, 'film.json')) != film:
         raise MediaError('Agent changed its reference film')
-    ops = validate_ops(film, read_json(safe_file(folder, 'ops.json')), sorted(picked))
+    proposal = read_json(safe_file(folder, 'ops.json'))
+    if isinstance(proposal, dict):
+        from .commands import effect_proposal
+        if studio.request(f'/api/projects/{project}')['rev'] != snapshot['rev']:
+            raise MediaError('Project changed while the agent worked. Ask again')
+        result = effect_proposal(state, studio, project, sorted(picked), proposal)
+        result['answer'] = outcome.answer or 'Effect prepared by your video editor.'
+        return result
+    ops = validate_ops(film, proposal, sorted(picked))
     if studio.request(f'/api/projects/{project}')['rev'] != snapshot['rev']:
         raise MediaError('Project changed while the agent worked. Ask again')
     result = {'project': project, 'base': snapshot['rev'], 'ops': ops, 'selected': sorted(picked),

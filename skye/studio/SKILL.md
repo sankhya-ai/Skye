@@ -13,9 +13,7 @@ command, or that a supported command has been visually proven on this clip.
    sections pass `--track N`. Resolve the intended shot from source range and
    timeline time before editing. Work on a copy when trying a new style.
 2. Translate the requested style into a supported command or JSON recipe.
-   A reference clip must first be watched/described by the caller. Skye does
-   not automatically analyze a reference, infer a match, or provide a human
-   chat-to-effect UI through this command.
+   A reference clip must first be watched/described by the caller. The Video tab accepts a small local command grammar: caption "words", text "words", punch, shake, flash, grain, glitch, mirror, volume 50%, mute. Other edits use the owner's installed Claude Code/Codex. Reference analysis is not yet connected.
 3. Apply the effect, for example:
    `skye studio effect PROJECT --shot 4 --effect caption-pop --text 'one|two|*three*'`.
    For moving foreground occlusion:

@@ -27,12 +27,15 @@ def post(handler, path: str):
             handler._json(import_url(studio, body.get('project'), body.get('url'), body.get('rel')))
         elif action == 'ask':
             from .agent import propose
+            from .commands import local_propose
             selected = body.get('selected')
             if not isinstance(selected, list) or len(selected) > 1000 or any(not isinstance(x, str) for x in selected):
                 raise MediaError('Select clips in the timeline first')
             handler._json(job_start(handler.state_dir, 'timeline-edit', lambda progress:
-                propose(handler.state_dir, studio, body['project'], selected,
-                        body.get('goal', ''), body.get('adapter', 'claude-code'))), 202)
+                (local_propose(handler.state_dir, studio, body['project'], selected, body.get('goal', ''))
+                 if body.get('adapter') == 'local' else
+                 propose(handler.state_dir, studio, body['project'], selected,
+                        body.get('goal', ''), body.get('adapter', 'claude-code')))), 202)
         else:
             handler._json({'error': 'Unknown editor action'}, 404)
     except (OSError, ValueError, KeyError, TypeError) as exc:

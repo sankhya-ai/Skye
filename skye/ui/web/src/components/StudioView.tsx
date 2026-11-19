@@ -15,7 +15,7 @@ export function StudioView() {
   const [error, setError] = useState('');
   const [selection, setSelection] = useState<Selection | null>(null);
   const [goal, setGoal] = useState('');
-  const [adapter, setAdapter] = useState('claude-code');
+  const [adapter, setAdapter] = useState('local');
   const [agents, setAgents] = useState<{name: string; available: boolean}[]>([]);
   const [job, setJob] = useState<Job | null>(null);
   const [answer, setAnswer] = useState('');
@@ -70,21 +70,21 @@ export function StudioView() {
     try {setJob(await post<Job>('/api/studio/ask', {project: selection.projectId, selected, goal, adapter}));}
     catch (e) {setError(e instanceof Error ? e.message : String(e));}
   };
-  if (legacy) return <><div className="studio-legacy-bar"><button onClick={() => setLegacy(false)}>Back to Studio</button><span>Legacy shot projects. Kept unchanged.</span></div><VideoView /></>;
+  if (legacy) return <><div className="studio-legacy-bar"><button onClick={() => setLegacy(false)}>Back to Video</button><span>Legacy shot projects. Kept unchanged.</span></div><VideoView /></>;
   return <div className="skye-studio">
-    <header className="studio-bar"><div><strong>Studio</strong><span>Local video workspace</span></div>
+    <header className="studio-bar"><div><strong>Video</strong><span>Your team's editor</span></div>
       <button onClick={() => setLegacy(true)}>Legacy projects</button></header>
     {error && <div role="alert" className="studio-error">{error}<button onClick={() => setError('')}>Dismiss</button></div>}
     <div className="studio-body">
       <main className="studio-editor">{session ? <iframe ref={frame} title="Skye video editor" referrerPolicy="origin" src={session.url} allow="clipboard-read; clipboard-write; fullscreen" /> : <div className="studio-start"><p>{error ? 'Editor not ready' : 'Opening editor...'}</p><button onClick={() => void start()}>Retry</button><code>python -m skye.studio.setup</code></div>}</main>
-      <aside className="studio-agent"><div><h2>Ask</h2><p>One edit at a time. Select clips in the timeline. Linked audio is included.</p></div>
+      <aside className="studio-agent"><div><h2>Video editor</h2><p>One edit at a time. Select clips in the timeline. Linked audio is included.</p></div>
         <div className="studio-selection"><span>Scope</span><strong>{selected.length ? `${selected.length} selected clip${selected.length === 1 ? '' : 's'} + links` : 'Select clips'}</strong><small>{selected.join(', ') || 'No project files or service keys are shared with the worker.'}</small></div>
-        <label>Agent<select value={adapter} onChange={e => setAdapter(e.target.value)}><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></label>
-        {!agents.some(a => a.name === adapter && a.available) && <p className="studio-muted">Not detected here. Set up your local agent to use Ask. Manual editing works without it.</p>}
-        <textarea aria-label="Ask the video agent" maxLength={4000} rows={5} value={goal} onChange={e => setGoal(e.target.value)} placeholder="Lower the selected clip's audio..." disabled={busy} />
-        <button className="studio-send" disabled={busy || !goal.trim() || !selected.length || !agents.some(a => a.name === adapter && a.available)} onClick={() => void send()}>{busy ? applying ? 'Applying...' : 'Editing...' : 'Send'}</button>
+        <label>Agent<select value={adapter} onChange={e => setAdapter(e.target.value)}><option value="local">Local commands · free</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></label>
+        {adapter !== 'local' && !agents.some(a => a.name === adapter && a.available) && <p className="studio-muted">Not detected here. Set up your local agent to use Ask. Manual editing works without it.</p>}
+        <textarea aria-label="Ask the video agent" maxLength={4000} rows={5} value={goal} onChange={e => setGoal(e.target.value)} placeholder={adapter === 'local' ? 'caption "Your words"\npunch · shake · volume 50%' : 'Describe the selected shot edit...'} disabled={busy} />
+        <button className="studio-send" disabled={busy || !goal.trim() || !selected.length || adapter !== 'local' && !agents.some(a => a.name === adapter && a.available)} onClick={() => void send()}>{busy ? applying ? 'Applying...' : 'Editing...' : 'Send'}</button>
         {answer && <p role="status" className="studio-answer">{answer}</p>}
-        <div className="studio-note">Canvas, timeline and color use the same film. Agent edits use the same operations and Undo as manual edits.<br /><br />Remote generation, provider connections and automatic updates are off in this build.</div>
+        <div className="studio-note">Canvas, timeline and color use the same film. Agent edits use the same operations and Undo as manual edits.<br /><br />Local commands need no model. Claude Code and Codex use your own installed agent. Remote generation and automatic updates are off.</div>
       </aside>
     </div>
   </div>;
