@@ -463,7 +463,8 @@ export async function projectFiles(root, parts, skip) {
   /** @type {{ name: string, file: string, size: number }[]} */
   const files = [];
   /** @type {Promise<Map<string, number>> | undefined} */
-  let used;
+  let used = filmClosure(folderView(root));
+  await used; // Validate declared matte sequences before producing a portable project.
   const walk = async (/** @type {string} */ dir, /** @type {string} */ rel) => {
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -494,6 +495,8 @@ export async function projectFiles(root, parts, skip) {
       if (file) files.push({ name: ref.name, file, size: statSync(file).size });
     }
   }
+  const storyboard = join(root, TOOL_DIR, 'skye-storyboard.json');
+  if (existsSync(storyboard)) files.push({ name: `${TOOL_DIR}/skye-storyboard.json`, file: storyboard, size: statSync(storyboard).size });
   const style = join(root, TOOL_DIR, 'subtitles.json');
   if (existsSync(style)) files.push({ name: `${TOOL_DIR}/subtitles.json`, file: style, size: statSync(style).size });
   const settings = join(root, TOOL_DIR, 'settings.json');

@@ -36,3 +36,23 @@ def test_matte_disables_unmasked_straight_export():
 def test_matte_module_is_served_to_browser():
     assert "'track-matte.mjs'" in (VENDOR/'vision-assets.mjs').read_text()
     assert 'await applyTrackMatte(c,' in (VENDOR/'timeline.mjs').read_text()
+
+
+def test_packaged_matte_closure_is_complete_and_missing_frames_fail(tmp_path):
+    (tmp_path/'assets/masks').mkdir(parents=True)
+    (tmp_path/'assets/clip.mp4').write_bytes(b'video')
+    (tmp_path/'assets/masks/a.png').write_bytes(b'alpha')
+    (tmp_path/'assets/masks/b.png').write_bytes(b'alpha')
+    (tmp_path/'assets/masks/manifest.json').write_text(json.dumps({'fps':2,'start':0,'frames':['a.png','b.png']}))
+    (tmp_path/'film.html').write_text('<html><head><meta name="viewport" content="width=360,height=640"></head><body><section><video id="v" src="assets/clip.mp4#t=0,1" matte="assets/masks/manifest.json"></video></section></body></html>')
+    module=(VENDOR.parent/'studio/server/closure.mjs').as_uri()
+    code=f"import {{filmClosure,folderView}} from {json.dumps(module)};const files=await filmClosure(folderView({json.dumps(str(tmp_path))}));console.log(JSON.stringify([...files.keys()]));"
+    files=node(code)
+    (tmp_path/'.film').mkdir()
+    (tmp_path/'.film/skye-storyboard.json').write_text('{}')
+    exported=node(f"import {{projectFiles}} from {json.dumps((VENDOR.parent/'studio/server/exports.mjs').as_uri())};console.log(JSON.stringify((await projectFiles({json.dumps(str(tmp_path))},[])).map(f=>f.name)));")
+    assert '.film/skye-storyboard.json' in exported
+    assert {'assets/masks/manifest.json','assets/masks/a.png','assets/masks/b.png'}<=set(files)
+    (tmp_path/'assets/masks/b.png').unlink()
+    code=f"import {{filmClosure,folderView}} from {json.dumps(module)};let error='';try{{await filmClosure(folderView({json.dumps(str(tmp_path))}))}}catch(e){{error=e.message}}console.log(JSON.stringify(error));"
+    assert 'Matte frame is missing' in node(code)

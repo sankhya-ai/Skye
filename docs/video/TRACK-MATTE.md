@@ -34,9 +34,10 @@ error. They do not silently show unmasked footage. Do not change manifest
 content during an open browser session; reload after preparing a new version.
 
 Current integration limits: the property can be edited via film.html/API;
-there is no dedicated matte panel in the UI. Project packaging/dependency
-collection does not yet automatically gather the PNG sequence, so keep the
-entire assets/masks directory when moving the project. Alpha PNGs require
+there is no dedicated matte panel in the UI. Native project dependency collection now follows declared matte manifests and
+all their relative frames for versioning and linked-folder packaging. Missing or
+invalid manifests and missing frames stop a portable-project export. The project
+ZIP copies the sequence as real files, including when its source folder is linked. Alpha PNGs require
 more disk space than an alpha video. The primitive consumes a prepared mask;
 it is not a person segmentation model.
 

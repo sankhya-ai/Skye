@@ -25,6 +25,7 @@ import { join, posix } from 'node:path';
 import { FILM_FILE, readFilmFile } from '../../src/film-doc.mjs';
 import { mediaReferences, referenceSource } from '../../src/media-links.mjs';
 import { TOOL_DIR } from './projects.mjs';
+import { matteFrame } from '../../src/track-matte.mjs';
 
 /**
  * A project's files as the closure reads them, by folder-relative path with `/`. `size`: a file's bytes, or null
@@ -302,10 +303,22 @@ export async function filmClosure(view) {
   let value = null;
   try { value = readFilmFile(filmText).value; } catch { /* read as HTML below */ }
   for (const track of value?.tracks ?? []) {
-    for (const clip of /** @type {{ src?: unknown, overrides?: unknown }[]} */ (track.clips ?? [])) {
+    for (const clip of /** @type {{ src?: unknown, overrides?: unknown, matte?: unknown }[]} */ (track.clips ?? [])) {
       if (typeof clip?.src !== 'string') continue;
       const file = clipFile(clip.src);
       if (file) await take(file, FILM_FILE);
+      if (typeof clip.matte === 'string') {
+        const manifestPath = projectPath(clip.matte, '');
+        if (!manifestPath || !(await take(manifestPath, FILM_FILE))) throw new Error(`Matte manifest is missing: ${clip.matte}`);
+        if (((await sizeOf(manifestPath)) ?? Infinity) > READ_MAX) throw new Error(`Matte manifest is too large: ${clip.matte}`);
+        let manifest;
+        try { manifest = JSON.parse((await view.text(manifestPath)) ?? ''); matteFrame(manifest, manifest.start); }
+        catch { throw new Error(`Matte manifest is invalid: ${clip.matte}`); }
+        for (const name of manifest.frames) {
+          const frame = projectPath(name, posix.dirname(manifestPath));
+          if (!frame || !(await take(frame, manifestPath))) throw new Error(`Matte frame is missing: ${manifestPath}: ${name}`);
+        }
+      }
       /* a picture the person put in a page's place (an override's `url()`), named from the page's folder */
       const dir = posix.dirname(clip.src) === '.' ? '' : posix.dirname(clip.src);
       for (const o of Array.isArray(clip.overrides) ? clip.overrides : []) {
