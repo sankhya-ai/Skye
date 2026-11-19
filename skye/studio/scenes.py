@@ -55,7 +55,7 @@ def meme(top: str, bottom: str, bg: str = NAVY, fg: str = PAPER) -> str:
 <div style="font-family:'Arial Black',Arial,sans-serif;font-size:96px;line-height:1.15;max-width:960px;
 text-transform:uppercase;letter-spacing:.01em;-webkit-text-stroke:3px {NAVY};text-shadow:0 6px 0 rgba(0,0,0,.25)">
  <div style="animation:pop 1.2s cubic-bezier(.2,.9,.3,1.4) both">{et}</div>
- <div style="animation:pop 2.2s cubic-bezier(.2,.9,.3,1.4) .7s both;margin-top:640px">{eb}</div>
+ <div style="animation:pop 2.2s cubic-bezier(.2,.9,.3,1.4) .7s both;margin-top:280px">{eb}</div>
 </div>"""
     return _page(body, bg, fg, 2.0)
 
@@ -80,7 +80,7 @@ def endcard(title: str, subtitle: str, url: str, bg: str = NAVY, fg: str = PAPER
  <div style="font-size:220px;line-height:1">t<span style="color:{dot}">.</span></div>
  <div style="font-size:120px;letter-spacing:.08em">{et}</div>
  <div style="font-size:52px;font-style:italic;opacity:.85;margin-top:24px">{es}</div>
- <div style="font-size:44px;letter-spacing:.2em;margin-top:64px;color:{dot}">{eu}</div>
+ <div style="font-size:48px;letter-spacing:.18em;margin-top:64px;color:#8fb6d9">{eu}</div>
 </div>"""
     return _page(body, bg, fg, 4.0)
 
