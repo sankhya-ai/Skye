@@ -188,20 +188,24 @@ def caption_pop(project_root: str | Path, page_name: str, words: list[str], dur:
 
 
 def ktype(project_root: str | Path, page_name: str, lines: list[str], dur: float = 2.4,
-          fg: str = "#ffffff", bg: str = "#101010", accent: str = "#e5484d") -> dict[str, Any]:
-    """Kinetic typography: lines slam in from alternating sides. Plain background."""
+          fg: str = "#ffffff", bg: str = "#101010", accent: str = "#e5484d",
+          overlay: bool = False) -> dict[str, Any]:
+    """Kinetic typography: lines slam in from alternating sides. Plain background;
+    overlay=True puts the lines over running footage with a scrim instead."""
     blocks = []
     for i, ln in enumerate(lines):
         side = "-60vw" if i % 2 == 0 else "60vw"
         color = accent if ln.startswith("*") else fg
+        scrim = 'text-shadow:0 4px 24px rgba(0,0,0,.85),0 2px 8px rgba(0,0,0,.9);' if overlay else ''
         blocks.append(
-            f'<div style="font-weight:900;font-size:110px;line-height:1.15;color:{color};'
+            f'<div style="font-weight:900;font-size:110px;line-height:1.15;color:{color};{scrim}'
             f'animation:kt {dur}s cubic-bezier(.2,.8,.25,1) both;animation-delay:{i * .35:.2f}s;--kt-from:{side}">{html.escape(ln.strip("*"))}</div>')
     css = ("@keyframes kt{0%{opacity:0;transform:translateX(var(--kt-from))}12%{opacity:1;transform:none}"
            "88%{opacity:1}100%{opacity:0}}")
     page = _write(project_root, page_name, "".join(blocks), css, dur)
     p = Path(project_root) / "pages" / f"{page_name}.html"
-    p.write_text(p.read_text().replace("background:transparent", f"background:{bg}"), encoding="utf-8")
+    if not overlay:
+        p.write_text(p.read_text().replace("background:transparent", f"background:{bg}"), encoding="utf-8")
     return page
 
 

@@ -26,45 +26,90 @@ _BASE = """<!doctype html><html><head><meta charset="utf-8">
 html,body{margin:0;height:100%;overflow:hidden}
 body{width:100vw;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
 background:@BG@;color:@FG@;font-family:Georgia,'Times New Roman',serif;text-align:center}
+@EXTRA@
 @keyframes rise{0%{opacity:0;transform:translateY(60px)}12%{opacity:1;transform:none}88%{opacity:1}100%{opacity:0}}
 @keyframes pop{0%{opacity:0;transform:scale(.6)}10%{opacity:1;transform:scale(1)}92%{opacity:1}100%{opacity:0}}
 </style></head><body>@BODY@
 <script>window.film={duration:@DUR@,frame(t){}};</script></body></html>"""
 
 
-def _page(body: str, bg: str, fg: str, duration: float = 4.0) -> str:
-    return (_BASE.replace("@BG@", bg).replace("@FG@", fg)
+_SCRIM = "text-shadow:0 4px 24px rgba(0,0,0,.85),0 2px 8px rgba(0,0,0,.9)"
+
+
+def _page(body: str, bg: str, fg: str, duration: float = 4.0, extra: str = "") -> str:
+    return (_BASE.replace("@BG@", bg).replace("@FG@", fg).replace("@EXTRA@", extra)
             .replace("@BODY@", body).replace("@DUR@", repr(float(duration))))
 
 
-def hook(line1: str, line2: str, bg: str = PAPER, fg: str = INK, accent: str = TERRACOTTA) -> str:
-    """Two lines in sequence: a setup, then its turn. Default 2.5s."""
+def hook(line1: str, line2: str, bg: str | None = None, fg: str | None = None,
+         accent: str | None = None, overlay: bool = True) -> str:
+    """Two lines in sequence: a setup, then its turn. Default 2.5s.
+
+    Overlay-first: over running footage by default (transparent background,
+    white scrimmed text). Pass overlay=False for a full-frame card.
+    """
     e1, e2 = html.escape(line1), html.escape(line2)
+    if overlay:
+        bg = bg or "transparent"
+        fg = fg or "#ffffff"
+        accent = accent or "#ffd23f"
+        scrim = _SCRIM
+    else:
+        bg = bg or PAPER
+        fg = fg or INK
+        accent = accent or TERRACOTTA
+        scrim = ""
     body = f"""
-<div style="font-size:84px;line-height:1.25;max-width:900px">
+<div style="font-size:84px;line-height:1.25;max-width:900px;{scrim}">
  <div style="animation:rise 1.3s cubic-bezier(.2,.7,.3,1) both">{e1}</div>
  <div style="animation:rise 2.4s cubic-bezier(.2,.7,.3,1) .9s both;color:{accent};font-style:italic">{e2}</div>
 </div>"""
     return _page(body, bg, fg, 2.5)
 
 
-def meme(top: str, bottom: str, bg: str = NAVY, fg: str = PAPER) -> str:
-    """Top/bottom caption card, the meme-editor staple. Default 2s."""
+def meme(top: str, bottom: str, bg: str | None = None, fg: str | None = None, overlay: bool = True) -> str:
+    """Top/bottom caption card, the meme-editor staple. Default 2s.
+
+    Overlay-first: over running footage by default (white, black-stroked).
+    Pass overlay=False for a full-frame card.
+    """
     et, eb = html.escape(top.upper()), html.escape(bottom.upper())
+    stroke = "rgba(0,0,0,.9)" if overlay else NAVY
+    if overlay:
+        bg = bg or "transparent"
+        fg = fg or "#ffffff"
+    else:
+        bg = bg or NAVY
+        fg = fg or PAPER
     body = f"""
 <div style="font-family:'Arial Black',Arial,sans-serif;font-size:96px;line-height:1.15;max-width:960px;
-text-transform:uppercase;letter-spacing:.01em;-webkit-text-stroke:3px {NAVY};text-shadow:0 6px 0 rgba(0,0,0,.25)">
+text-transform:uppercase;letter-spacing:.01em;-webkit-text-stroke:3px {stroke};text-shadow:0 6px 0 rgba(0,0,0,.25)">
  <div style="animation:pop 1.2s cubic-bezier(.2,.9,.3,1.4) both">{et}</div>
  <div style="animation:pop 2.2s cubic-bezier(.2,.9,.3,1.4) .7s both;margin-top:280px">{eb}</div>
 </div>"""
     return _page(body, bg, fg, 2.0)
 
 
-def caption(kicker: str, main: str, bg: str = PAPER, fg: str = INK, accent: str = TERRACOTTA) -> str:
-    """Small kicker over a main line with an accent bar. Default 2.5s."""
+def caption(kicker: str, main: str, bg: str | None = None, fg: str | None = None,
+            accent: str | None = None, overlay: bool = True) -> str:
+    """Small kicker over a main line with an accent bar. Default 2.5s.
+
+    Overlay-first: over running footage by default (transparent background,
+    white scrimmed text). Pass overlay=False for a full-frame card.
+    """
     ek, em = html.escape(kicker), html.escape(main)
+    if overlay:
+        bg = bg or "transparent"
+        fg = fg or "#ffffff"
+        accent = accent or "#ffd23f"
+        scrim = _SCRIM
+    else:
+        bg = bg or PAPER
+        fg = fg or INK
+        accent = accent or TERRACOTTA
+        scrim = ""
     body = f"""
-<div style="animation:rise 2.5s cubic-bezier(.2,.7,.3,1) both;max-width:900px">
+<div style="animation:rise 2.5s cubic-bezier(.2,.7,.3,1) both;max-width:900px;{scrim}">
  <div style="font-size:44px;letter-spacing:.35em;text-transform:uppercase;color:{accent}">{ek}</div>
  <div style="width:120px;height:6px;background:{accent};margin:36px auto"></div>
  <div style="font-size:76px;line-height:1.25">{em}</div>
