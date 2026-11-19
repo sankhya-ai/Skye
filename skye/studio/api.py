@@ -22,6 +22,9 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action == 'import-url':
+            from .importer import import_url
+            handler._json(import_url(studio, body.get('project'), body.get('url'), body.get('rel')))
         elif action == 'ask':
             from .agent import propose
             selected = body.get('selected')
