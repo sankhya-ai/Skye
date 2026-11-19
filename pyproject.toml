@@ -26,7 +26,7 @@ packages = ["skye", "skye.adapters", "skye.ui", "skye.media", "skye.studio"]
 [tool.setuptools.package-data]
 "skye.media" = ["render.mjs", "harness.js", "package.json", "package-lock.json"]
 "skye.ui" = ["dist/**/*", "NOTICE"]
-"skye.studio" = ["*.mjs", "*.md", "*.txt", "*.json", "vendor/**/*"]
+"skye.studio" = ["*.mjs", "*.md", "*.txt", "*.json", "code-assets/**/*", "code-templates/*.html", "vendor/**/*"]
 
 [tool.setuptools.exclude-package-data]
 "skye.studio" = ["**/node_modules/**/*", "**/__pycache__/*", "**/.DS_Store"]

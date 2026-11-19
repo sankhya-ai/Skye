@@ -70,7 +70,7 @@ def describe(state,project,snapshot,*,thumbnails=False,studio=None):
                 if over:effects.append('clip adjustment')
             if c.get('style'):effects.append('clip style')
             if speed!=1:effects.append(f'{speed:g}x speed')
-            item={'id':c['id'],'shot':len(shots)+1,'track':ti+1,'at':at,'duration':round(duration,3),'source':src,'sourceIn':start,'sourceOut':end,'text':texts,'effects':list(dict.fromkeys(effects)),'note':saved.get(c['id'],''),'locked':bool(t.get('locked')),'placeholder':c.get('attrs',{}).get('data-skye-shot')=='placeholder','transition':json.loads(c.get('attrs',{}).get('data-skye-transition','{}')).get('effect','cut')}
+            item={'id':c['id'],'shot':len(shots)+1,'track':ti+1,'at':at,'duration':round(duration,3),'source':src,'sourceIn':start,'sourceOut':end,'text':texts,'effects':list(dict.fromkeys(effects)),'note':saved.get(c['id'],''),'code':c.get('attrs',{}).get('data-skye-shot')=='code','locked':bool(t.get('locked')),'placeholder':c.get('attrs',{}).get('data-skye-shot')=='placeholder','transition':json.loads(c.get('attrs',{}).get('data-skye-transition','{}')).get('effect','cut')}
             if thumbnails:
                 source=(root/src.split('#')[0]).resolve()
                 if source.is_relative_to(root) and source.is_file():
@@ -122,7 +122,12 @@ def plan_change(state,studio,project,body):
         note=body.get('note','')
         if not isinstance(note,str) or len(note)>2000:raise MediaError('Shot note must be at most 2000 characters')
         src=body.get('source','');cid='shot-'+uuid.uuid4().hex[:10]
-        if src:
+        if body.get('kind')=='code':
+            from .codeshots import template
+            src='pages/'+cid+'.html'
+            page=template(snap['project']['path'],body.get('template','orbit'),duration)
+            clip={'id':cid,'src':src,'time':[0,duration],'attrs':{'data-skye-shot':'code'}}
+        elif src:
             root=Path(snap['project']['path']).resolve();source=(root/src).resolve()
             if Path(src).is_absolute() or '..' in Path(src).parts or not source.is_relative_to(root) or not source.is_file() or source.suffix.lower() not in {'.mp4','.mov','.webm','.mkv','.png','.jpg','.jpeg','.webp'}:raise MediaError('Choose an imported video or image inside the project')
             # Do not guess source duration or silently extend beyond the real clip.
@@ -150,10 +155,18 @@ def plan_change(state,studio,project,body):
             ripple_film=copy.deepcopy(film)
             for track in ripple_film['tracks']:track['clips']=[c for c in track['clips'] if not anchored(c)]
             ops=plan_insert(ripple_film,target,at,clip,duration)
-        if not body.get('source'):
+        if body.get('kind')=='code' or not body.get('source'):
             studio.request(f'/api/projects/{project}/page',{'path':src,'text':page,'expect':None},method='PUT')
         with _LOCK:
             saved=notes(state,project);saved[cid]=note;path=_file(state,project);path.write_text(json.dumps(saved))
+    elif action=='code':
+        from .codeshots import validate_code,read_code
+        current=read_code(studio,project,body.get('clip'));code=validate_code(body.get('code'))
+        clip=next(c for t,c in rows if c['id']==body.get('clip'))
+        if any(t.get('locked') and c['id']==clip['id'] for t,c in rows):raise MediaError('Code shot is locked')
+        path='pages/code-'+uuid.uuid4().hex[:12]+'.html'
+        studio.request(f'/api/projects/{project}/page',{'path':path,'text':code,'expect':None},method='PUT')
+        ops=[{'op':'fields','clip':clip['id'],'fields':{'src':path}}]
     elif action=='reorder':
         order=body.get('order')
         if not isinstance(order,list) or len(order)!=len(shots) or len(set(order))!=len(order) or set(order)!={s['id'] for s in shots}:raise MediaError('Order must contain each current shot exactly once')

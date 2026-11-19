@@ -22,6 +22,11 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action == 'code-shot':
+            from .storyboard import _file
+            from .codeshots import read_code
+            project=body.get('project');_file(handler.state_dir,project)
+            handler._json(read_code(studio,project,body.get('clip')))
         elif action == 'assets':
             from .storyboard import _file
             project=body.get('project');_file(handler.state_dir,project)
