@@ -423,9 +423,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "studio":
         import importlib
-        modules = {"effect": "edit", "reference": "reference", "track": "tracking", "doctor": "doctor", "compose": "motion", "timing": "timing"}
+        modules = {"effect": "edit", "reference": "reference", "track": "tracking", "doctor": "doctor", "compose": "motion", "timing": "timing", "review": "review"}
         if not rest or rest[0] not in modules:
-            print("skye studio: effect, reference, track, doctor, compose, timing")
+            print("skye studio: effect, reference, track, doctor, compose, timing, review")
             return 0 if not rest else 2
         module = importlib.import_module("skye.studio." + modules[rest[0]])
         return module.main(rest[1:]) or 0
