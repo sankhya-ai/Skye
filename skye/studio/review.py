@@ -7,7 +7,10 @@ from ..media.model import MediaError
 
 @contextmanager
 def locked(root):
-    folder=Path(root)/'review';folder.mkdir(exist_ok=True)
+    folder=Path(root)/'review'
+    if folder.is_symlink():raise MediaError('Review folder must be local')
+    folder.mkdir(exist_ok=True)
+    if (folder/'.lock').is_symlink() or (folder/'notes.json').is_symlink():raise MediaError('Review files must be local')
     with (folder/'.lock').open('a+b') as f:
         if os.name=='nt':
             import msvcrt
@@ -46,7 +49,15 @@ def span(a,b,duration):
 def version(root,film):
     """Film plus exact bytes of local picture/audio/pages, not a mutable version label."""
     root=Path(root).resolve();h=hashlib.sha256(json.dumps(film,sort_keys=True).encode());manifest={}
-    for p in [root/'film.html']+sorted((root/'assets').rglob('*'))+sorted((root/'pages').rglob('*')):
+    sources=[]
+    for track in film.get('tracks',[]):
+        for clip in track['clips']:
+            src=clip.get('src','')
+            if src.startswith(('/', 'http:', 'https:', 'data:', '//')) or '..' in Path(src).parts:raise MediaError('Review needs local project sources')
+            p=root/src
+            if not p.is_file():raise MediaError('Review source is missing')
+            sources.append(p)
+    for p in sorted(set([root/'film.html']+sources+list((root/'assets').rglob('*'))+list((root/'pages').rglob('*')))):
         if not p.is_file():continue
         if p.is_symlink() or not p.resolve().is_relative_to(root):raise MediaError('Review versions need local project files')
         digest=hashlib.sha256()
@@ -65,6 +76,8 @@ def speech_words(root,film):
         try:data=json.loads(p.read_text())
         except (ValueError,OSError):continue
         if not set(data.get('anchors',[])).issubset(ids) or not data.get('anchors'):continue
+        source=root/data.get('source','')
+        if not source.is_file() or data.get('source_hash')!=hashlib.sha256(source.read_bytes()).hexdigest():continue
         for c in clips:
             if c.get('src')!=data.get('source') or not (c.get('sound') or Path(c.get('src','')).suffix.lower() in ('.wav','.mp3','.m4a','.ogg','.flac','.aac')):continue
             a,b=c.get('time',[0,0]);speed=c.get('speed',1)
@@ -141,9 +154,12 @@ def public(note,current):
 
 def remember_speech(root,source,report,anchors):
     if report.get('mode')!='speech':return
-    folder=Path(root)/'review';folder.mkdir(exist_ok=True)
+    folder=Path(root)/'review'
+    if folder.is_symlink():raise MediaError('Review folder must be local')
+    folder.mkdir(exist_ok=True)
+    if (folder/'.lock').is_symlink() or (folder/'notes.json').is_symlink():raise MediaError('Review files must be local')
     key=hashlib.sha256(json.dumps(anchors).encode()).hexdigest()[:16]
-    write(folder/f'speech-{key}.json',{'source':source,'anchors':anchors,'words':report.get('words',[]),'reviewed':all(w.get('reviewed') for w in report.get('words',[]))})
+    write(folder/f'speech-{key}.json',{'source':source,'source_hash':hashlib.sha256((Path(root)/source).read_bytes()).hexdigest(),'anchors':anchors,'words':report.get('words',[]),'reviewed':all(w.get('reviewed') for w in report.get('words',[]))})
 
 def main(argv=None):
     import argparse,subprocess
