@@ -43,6 +43,7 @@ window.addEventListener('message', e => {
   if (e.source === parent && e.origin === parentOrigin && e.data?.type === 'skye:select-shot' && typeof e.data.id === 'string') {
     commandListener?.({type:'select-clip',id:e.data.id,seek:true});return;
   }
+  if(e.source===parent && e.origin===parentOrigin && e.data?.type==='skye:seek' && Number.isFinite(e.data.time)){commandListener?.({type:'seek',time:Math.max(0,e.data.time)});return;}
   if (e.source !== parent || e.origin !== parentOrigin || e.data?.type !== 'skye:apply') return;
   const {project, base, ops, request} = e.data;
   if (typeof project !== 'string' || typeof base !== 'string' || !Array.isArray(ops)) return;

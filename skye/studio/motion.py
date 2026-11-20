@@ -167,6 +167,9 @@ def prepare(state,studio,project,body):
     if check.returncode:raise MediaError('Motion recipe failed native validation')
     if studio.request(f'/api/projects/{project}')['rev']!=snap['rev']:raise MediaError('Project changed. Reopen Compose')
     for path,text in pages.items():studio.request(f'/api/projects/{project}/page',{'path':path,'text':text,'expect':None},method='PUT')
+    if timing_report and timing_report.get('mode')=='speech':
+        from .review import remember_speech
+        remember_speech(root,timing_report['source'],timing_report,[o['clip']['id'] for o in ops if 'clip' in o])
     design_report=lint([o['clip'] for o in ops if 'clip' in o],W,H)
     return {'design':design_report,'decisions':decisions,'timing':timing_report,'project':project,'base':snap['rev'],'ops':ops,'answer':f'{len(validated)} scenes, {sum(len(s["words"]) for s in validated)} text layers. {design_report["metrics"]["upright"]} upright, {design_report["metrics"]["tilted"]} angled. {len(design_report["warnings"])} design warnings.','duration':round(at-start,3)}
 

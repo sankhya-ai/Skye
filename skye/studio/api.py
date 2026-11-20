@@ -22,6 +22,17 @@ def post(handler, path: str):
             handler._json({'url': studio.session['url'], 'origin': studio.origin})
         elif action == 'projects':
             handler._json(studio.request('/api/projects'))
+        elif action == 'review':
+            from .review import apply
+            from .storyboard import _file
+            from urllib.parse import urlparse
+            project=body.get('project');_file(handler.state_dir,project)
+            snap=studio.request(f'/api/projects/{project}')
+            # Browser provenance is derived here, never accepted from JSON.
+            # Review text is data, not a general-purpose execution grant.
+            origin=handler.headers.get('Origin','')
+            owner_ui=bool(origin and urlparse(origin).netloc==handler.headers.get('Host') and handler.headers.get('Sec-Fetch-Site')=='same-origin')
+            handler._json(apply(snap['project']['path'],snap['value'],body,owner_ui=owner_ui))
         elif action=='edge-preview':
             from .storyboard import edge_preview
             handler._json(edge_preview(handler.state_dir,studio,body.get('project'),body.get('clip')))
