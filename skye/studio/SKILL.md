@@ -34,3 +34,8 @@ per shot is supported; multiple overlays can be combined. Duration-changing
 ramps and unsupported clip fields are refused. Never bypass a refusal by
 silently dropping existing edits. Re-list shots after splitting or track
 insertion. No paid model/service calls are needed for these commands.
+
+## Built-in composition recipes
+
+For a new motion reel without hand-written scene code, read docs/video/COMPOSE.md.
+Use Video > Compose for the no-code form or `skye studio compose PROJECT --recipe recipe.json --apply` with the project closed. Recipes generate separate native footage and editable text-page clips, not a whole-film canvas. Words edits phrases through native overrides. Use source assets already imported into the project, respect source ranges, and inspect the result. BPM is manual, not speech/music alignment. Arc is a phrase arrangement, not a native per-letter path. A generated block overlay is not a subject matte. Read docs/video/FRAMEY-STUDY.md for the reference analysis and unproven items.

@@ -54,6 +54,14 @@ def post(handler, path: str):
             from .storyboard import _file
             project=body.get('project');_file(handler.state_dir,project)
             handler._json(read(handler.state_dir,studio,project) if action=='audio' else change(handler.state_dir,studio,project,body))
+        elif action in ('motion-text','motion-text-change'):
+            from .motion import text_layers
+            from .storyboard import _file
+            project=body.get('project');_file(handler.state_dir,project)
+            handler._json(text_layers(studio,project,body if action=='motion-text-change' else None))
+        elif action == 'compose':
+            from .motion import prepare
+            handler._json(prepare(handler.state_dir,studio,body.get('project'),body))
         elif action == 'preflight':
             from .storyboard import _file
             from .preflight import inspect

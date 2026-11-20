@@ -81,6 +81,7 @@ def describe(state,project,snapshot,*,thumbnails=False,studio=None):
     for ti,t in enumerate(film.get('tracks',[])):
         for c in t['clips']:
             src=c.get('src','')
+            if c.get('attrs',{}).get('data-skye-motion') not in (None,'scene'):continue
             if c.get('attrs',{}).get('data-skye-edge'):continue
             if c.get('sound') or (not video.search(src) and not c.get('attrs',{}).get('data-skye-shot') and (not src.lower().endswith(('.html','.htm')) or overlaps_footage(c))) or c.get('matte') or 'glitch' in c.get('id',''):continue
             start,end=c.get('time',[0,c.get('len',0)]);speed=c.get('speed',1);at=c.get('at',0);duration=(end-start)/speed if speed else 0
@@ -102,6 +103,7 @@ def describe(state,project,snapshot,*,thumbnails=False,studio=None):
                         def handle_data(self,data):
                             if not self.skip and data.strip():self.words.append(data.strip())
                     parser=Text();parser.feed(page.read_text(errors='replace'));text=' '.join(parser.words)
+                    if over.get('attrs',{}).get('data-skye-motion')=='text':text=next((o.get('text',text) for o in over.get('overrides',[]) if o.get('at')=='#words'),text)
                     if text:texts.append(text[:250])
             for over in c.get('overrides',[]):
                 if over:effects.append('clip adjustment')
