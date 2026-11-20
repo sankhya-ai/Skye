@@ -59,6 +59,15 @@ def post(handler, path: str):
             from .storyboard import _file
             project=body.get('project');_file(handler.state_dir,project)
             handler._json(text_layers(studio,project,body if action=='motion-text-change' else None))
+        elif action in ('voice-list','voice-generate'):
+            from .voice import voices,create
+            if action=='voice-list':handler._json(voices())
+            else:
+                from .storyboard import _file
+                project=body.get('project');_file(handler.state_dir,project)
+                from ..media.tts import validate,ENGINE
+                validate(body.get('text'),body.get('voice','Danny'),body.get('language','en'),body.get('speed',1),body.get('engine',ENGINE))
+                handler._json(job_start(handler.state_dir,'local-voice',lambda progress:create(handler.state_dir,studio,project,body,progress)),202)
         elif action in ('motion-timing','motion-design'):
             from .storyboard import _file
             from pathlib import Path

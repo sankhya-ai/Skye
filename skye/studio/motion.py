@@ -38,7 +38,7 @@ def prepare(state,studio,project,body):
         timing_report['timelineStart']=start
         import copy
         scenes=copy.deepcopy(scenes)
-        if timing['mode']=='speech':scenes=align(scenes,timing_report)
+        if timing['mode'] in ('speech','voice'):scenes=align(scenes,timing_report)
         else:
             if timing_report['bpm'] is None:raise MediaError('Pulse is uncertain. Choose manual BPM')
             bpm=timing_report['bpm'];clock=0;grid=timing_report['grid']
@@ -86,7 +86,7 @@ def prepare(state,studio,project,body):
             clip['box']={k:round(v,3) for k,v in box.items()}
             if src.endswith('.html'):clip['size']={'w':round(box['w']), 'h':round(box['h'])}
         if style:clip['style']=style
-        if not src.endswith('.html'):clip['style']=clip.get('style','')+';object-fit:cover'
+        if Path(src).suffix.lower() in {'.mp4','.mov','.webm','.png','.jpg','.jpeg','.webp'}:clip['style']=clip.get('style','')+';object-fit:cover'
         if overrides:clip['overrides']=overrides
         if Path(src).suffix.lower() in {'.mp4','.mov','.webm'}:clip['volume']=0
         ops.append({'op':'insert','clip':clip,'newTrack':0});return cid
@@ -144,11 +144,13 @@ def prepare(state,studio,project,body):
             mosaic=page(f'blocks{i}',f'''<!doctype html><html><body style="margin:0;overflow:hidden"><script>for(let i=0;i<48;i++){{const e=document.createElement('div');e.style.cssText='position:absolute;left:'+(i%8*12.5)+'vw;top:'+Math.floor(i/8)*16.67+'vh;width:12.6vw;height:16.8vh;background:'+(i%5?'{{accent}}':'{{red}}');document.body.append(e)}}const tiles=[...document.body.children].filter(e=>e.tagName==='DIV');window.film={{frame(t){{tiles.forEach((e,i)=>e.style.opacity=t/.22<((i*29)%47)/47?'1':'0')}}}};</script></body></html>'''.replace('{accent}',accent).replace('{red}',red))
             add(mosaic,.22,at,attrs={'data-skye-motion':'blocks'})
         at+=d
+    if timing_report and timing_report.get('mode')=='voice':
+        add(timing_report['source'],timing_report['duration'],start,attrs={'data-skye-motion':'voice','data-skye-audio':'generated'})
     # Reuse non-overlapping lanes. One track per phrase would bury a short reel
     # under dozens of mostly-empty rows in the native editor.
-    groups={0:[],1:[],2:[],3:[]}
+    groups={0:[],1:[],2:[],3:[],4:[]}
     for op in ops:
-        c=op['clip'];kind=c['attrs'].get('data-skye-motion');tier=0 if kind=='scene' else 2 if kind=='text' else 3 if kind=='blocks' else 1
+        c=op['clip'];kind=c['attrs'].get('data-skye-motion');tier=4 if kind=='voice' else 0 if kind=='scene' else 2 if kind=='text' else 3 if kind=='blocks' else 1
         groups[tier].append(c)
     arranged=[]
     for tier in sorted(groups):

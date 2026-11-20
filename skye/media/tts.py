@@ -6,6 +6,7 @@ from .model import MediaError
 
 ENGINE='kitten-mini-int4'
 MODEL='KittenML/kitten-tts-2-mini'
+MODEL_REV='8e89ae2a718ee4bb893c67d67657e520e6112faf'
 SDK_REV='5802f6b956844919ecf210f4e55f4750a6ad7c6f'
 VOICES={'en':['Eleanor','Martha','Serena','Iris','Grace','Edith','Diana','Otis','Vincent','Max','Danny'],'hi':['Priya','Ananya','Arjun','Vikram']}
 
@@ -27,13 +28,20 @@ def _worker(request):
         import soundfile as sf
     except ImportError as exc:raise MediaError('Install Skye voice extra. See docs/video/VOICE.md') from exc
     chunks=validate(**{k:request[k] for k in ('text','voice','language','speed','engine')})
-    model=KittenTTS(os.environ.get('SKYE_KITTEN_MODEL',MODEL),weights='int4',backend='onnx',device='cpu')
+    location=os.environ.get('SKYE_KITTEN_MODEL')
+    if not location:
+        from huggingface_hub import snapshot_download
+        location=snapshot_download(MODEL,revision=MODEL_REV,allow_patterns=['config.json','vocab.json','kitten_tts_2_mini_int4.onnx','voices_'+request['language']+'.npz']+(['g2p/*','g2p/**'] if request['language']=='en' else []))
+    elif not Path(location).is_dir():raise MediaError('SKYE_KITTEN_MODEL must be a local Mini int4 model directory')
+    model=KittenTTS(location,weights='int4',backend='onnx',device='cpu')
     if getattr(model,'weights',None)!='int4':raise MediaError('Kitten SDK ignored int4. Install the pinned voice extra; no int8 fallback')
     # Bound CPU oversubscription on small machines. This is supported by the
     # pinned Mini backend, not a claim that the language front end needs no torch.
     model.threads=2
     segments=[];audio=[];cursor=0;sr=int(model.sample_rate)
     for i,text in enumerate(chunks):
+        _,front=model.frontend(text,request['language'])
+        if front.skipped or front.dropped:raise MediaError('Voice cannot pronounce part of this script. Check language and symbols')
         wav=np.asarray(model.generate(text,voice=request['voice'],language=request['language'],speed=request['speed']),dtype=np.float32).reshape(-1)
         if not len(wav) or not np.isfinite(wav).all():raise MediaError('Voice produced invalid audio')
         duration=len(wav)/sr
@@ -43,13 +51,16 @@ def _worker(request):
         if i<len(chunks)-1:
             gap=np.zeros(round(.15*sr),dtype=np.float32);audio.append(gap);cursor+=len(gap)
     out=Path(request['output']);sf.write(str(out),np.concatenate(audio),sr,subtype='PCM_16')
-    return {'engine':ENGINE,'model':MODEL,'weights':'int4','sampleRate':sr,'duration':round(cursor/sr,6),'voice':request['voice'],'language':request['language'],'script':request['text'],'segments':segments,'timingKind':'synthesis-segments','note':'Exact generated segment bounds, not word alignment or phonetic onsets. Review the sound.','downloadNote':'47.5 MB graph plus voice packs, G2P and Python dependencies. First use downloads files.'}
+    return {'engine':ENGINE,'model':MODEL,'modelRevision':MODEL_REV if not os.environ.get('SKYE_KITTEN_MODEL') else 'local-override','sdkRevision':SDK_REV,'weights':'int4','sampleRate':sr,'duration':round(cursor/sr,6),'voice':request['voice'],'language':request['language'],'script':request['text'],'segments':segments,'timingKind':'synthesis-segments','note':'Exact generated segment bounds, not word alignment or phonetic onsets. Review the sound.','downloadNote':'47.5 MB graph plus voice packs, G2P and Python dependencies. First use downloads files.'}
 
 def generate(text,output,voice='Danny',language='en',speed=1.0,engine=ENGINE):
     validate(text,voice,language,speed,engine)
     output=Path(output).resolve()
     if output.exists():raise MediaError('Voice output already exists')
     output.parent.mkdir(parents=True,exist_ok=True)
+    try:
+        fd=os.open(output,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
+    except FileExistsError:raise MediaError('Voice output already exists')
     request={'text':text,'voice':voice,'language':language,'speed':speed,'engine':engine,'output':str(output)}
     started=time.monotonic()
     try:

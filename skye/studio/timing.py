@@ -54,8 +54,21 @@ def speech(samples):
     return [{'word':w['word'],'start':round(w['start'],3),'end':round(w['end'],3),'confidence':round(w.get('conf',0),3)} for w in words]
 
 def analyze(root,source,mode):
-    if mode not in ('beat','speech'):raise MediaError('Choose beat or speech timing')
+    if mode not in ('beat','speech','voice'):raise MediaError('Choose beat or speech timing')
     path=asset(Path(root),source)
+    if mode=='voice':
+        sidecar=path.with_suffix('.voice.json')
+        if not sidecar.is_file() or sidecar.stat().st_size>200000:raise MediaError('Choose a generated voice file')
+        report=json.loads(sidecar.read_text())
+        if report.get('timingKind')!='synthesis-segments':raise MediaError('Voice timing metadata is missing')
+        duration=len(pcm(path))/16000;segments=report.get('segments');previous=0
+        if not isinstance(segments,list) or not 1<=len(segments)<=60:raise MediaError('Invalid voice timing')
+        for seg in segments:
+            if not isinstance(seg,dict) or not isinstance(seg.get('text'),str):raise MediaError('Invalid voice timing')
+            a,b=seg.get('start'),seg.get('end')
+            if any(type(t) not in (int,float) or not math.isfinite(t) for t in (a,b)) or not previous<=a<b<=duration+.002:raise MediaError('Invalid voice bounds')
+            previous=b
+        return {**report,'source':source,'mode':'voice','duration':duration}
     samples=pcm(path);result={'mode':mode,'source':source,'duration':round(len(samples)/16000,3),'limit':180}
     if mode=='beat':result.update(beats(samples))
     else:
@@ -73,10 +86,28 @@ def reviewed(root,source,words):
         previous=end;out.append({'word':w['word'].lower(),'start':start,'end':end,'confidence':1,'reviewed':True})
     return {'mode':'speech','source':source,'duration':duration,'words':out,'transcript':' '.join(w['word'] for w in out),'note':'User-reviewed/imported word timings, not unmodified ASR output.'}
 
+def _phrase_key(s):
+    import unicodedata
+    return ' '.join(''.join(c for c in unicodedata.normalize('NFC',s).casefold() if not unicodedata.category(c).startswith('P')).split())
+
 def _tokens(s):return re.findall(r"[^\W_]+(?:'[^\W_]+)?",s.lower())
 
 def align(rows,report):
     """Exact monotonic token matches only. Never fabricate missing timestamps."""
+    if report.get('timingKind')=='synthesis-segments':
+        segments=report['segments'];cursor=0;matches=[]
+        for row in rows:
+            phrases=row['words'].split('|') if isinstance(row['words'],str) else row['words'];starts=[]
+            for phrase in phrases:
+                if cursor>=len(segments) or _phrase_key(phrase)!=_phrase_key(segments[cursor]['text']):raise MediaError('Scene groups must match generated voice groups. Regenerate after changing the script')
+                starts.append(segments[cursor]['start']);cursor+=1
+            matches.append(starts)
+        if cursor!=len(segments):raise MediaError('Use every generated voice group')
+        for i,row in enumerate(rows):
+            start=0 if i==0 else max(0,matches[i][0]-.12);end=matches[i+1][0]-.12 if i+1<len(rows) else report['duration']
+            if not .8<=end-start<=12:raise MediaError('Voice scene must be 0.8..12 seconds. Combine or split groups')
+            row['duration']=end-start;row['_delays']=[t-start for t in matches[i]]
+        return rows
     words=report['words'];tokens=[w['word'].lower() for w in words];cursor=0;matches=[]
     for row in rows:
         group=[]
