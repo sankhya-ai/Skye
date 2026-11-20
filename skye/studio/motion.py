@@ -17,10 +17,39 @@ def prepare(state,studio,project,body):
     snap=studio.request(f'/api/projects/{project}');film=snap['value'];root=Path(snap['project']['path']).resolve()
     if body.get('base')!=snap['rev']:raise MediaError('Project changed. Reopen Compose')
     recipe=body.get('recipe',{})
-    if not isinstance(recipe,dict) or set(recipe)-{'scenes','bpm','start'}:raise MediaError('Recipe needs scenes, optional bpm and start')
+    if not isinstance(recipe,dict) or set(recipe)-{'scenes','bpm','start','design','timing'}:raise MediaError('Recipe needs scenes, optional bpm and start')
     scenes=recipe.get('scenes');bpm=_num(recipe.get('bpm',120),40,240,'BPM');end=max((c.get('at',0)+(c.get('time',[0,0])[1]-c.get('time',[0,0])[0])/c.get('speed',1) for t in film['tracks'] for c in t['clips']),default=0);start=_num(recipe.get('start',end),0,86400,'Start')
     if start<end-.001:raise MediaError('Compose appends after the current film')
     if not isinstance(scenes,list) or not 1<=len(scenes)<=24:raise MediaError('Use 1..24 scenes')
+    if any(not isinstance(r,dict) or '_delays' in r for r in scenes):raise MediaError('Scenes must be recipe objects')
+    for row in scenes:
+        words=row.get('words',[])
+        if isinstance(words,str):words=[s.strip() for s in words.split('|') if s.strip()]
+        if not isinstance(words,list) or not 1<=len(words)<=5 or any(not isinstance(w,str) or not w.strip() or len(w)>70 for w in words):raise MediaError('Use 1..5 short phrase groups per scene')
+    from .design import direct, text_box, lint
+    timing=recipe.get('timing');timing_report=None
+    if timing:
+        from .timing import analyze, align, reviewed
+        if not isinstance(timing,dict) or set(timing)-{'mode','source','words','reviewed'} or not {'mode','source'}<=set(timing):raise MediaError('Timing needs mode and source')
+        if 'words' in timing:
+            if timing.get('reviewed') is not True or timing['mode']!='speech':raise MediaError('Confirm reviewed speech timings')
+            timing_report=reviewed(root,timing['source'],timing['words'])
+        else:timing_report=analyze(root,timing['source'],timing['mode'])
+        timing_report['timelineStart']=start
+        import copy
+        scenes=copy.deepcopy(scenes)
+        if timing['mode']=='speech':scenes=align(scenes,timing_report)
+        else:
+            if timing_report['bpm'] is None:raise MediaError('Pulse is uncertain. Choose manual BPM')
+            bpm=timing_report['bpm'];clock=0;grid=timing_report['grid']
+            for row in scenes:
+                wanted=clock+_num(row.get('beats',4),1,24,'Beats')*60/bpm
+                choices=[t for t in grid if t>=clock+.8]
+                if not choices:raise MediaError('Audio is shorter than the scene plan')
+                end=min(choices,key=lambda t:abs(t-wanted))
+                if abs(end-wanted)>60/bpm*.6:raise MediaError('Audio is shorter than the requested beat plan')
+                row['duration']=end-clock;clock=end
+    if recipe.get('design','guided') not in ('guided','free'):raise MediaError('Design must be guided or free')
     # Validate the entire recipe and every source before writing anything.
     probes={};validated=[]
     def source(src,duration,source_in):
@@ -36,17 +65,20 @@ def prepare(state,studio,project,body):
             if source_in+duration>probes[src]+.001:raise MediaError('Source is shorter than its scene')
         return src
     for row in scenes:
-        if not isinstance(row,dict) or set(row)-{'words','layout','palette','source','second','sourceIn','beats','duration','negative'}:raise MediaError('Unsupported scene field')
+        if not isinstance(row,dict) or set(row)-{'words','layout','palette','source','second','sourceIn','beats','duration','negative','_delays'}:raise MediaError('Unsupported scene field')
         words=row.get('words',[])
         if isinstance(words,str):words=[s.strip() for s in words.split('|') if s.strip()]
         if not isinstance(words,list) or not 1<=len(words)<=5 or any(not isinstance(w,str) or not w.strip() or len(w)>70 for w in words):raise MediaError('Use 1..5 short phrase groups per scene')
         layout=row.get('layout','stack');palette=row.get('palette','mint')
         if layout not in LAYOUTS or palette not in PALETTES:raise MediaError('Unknown motion style')
         duration=_num(row['duration'],.8,12,'Duration') if 'duration' in row else _num(row.get('beats',4),1,24,'Beats')*60/bpm
+        duration=_num(duration,.8,12,'Duration')
+        if '_delays' in row and (len(row['_delays'])!=len(words) or any(type(t) not in (int,float) or not math.isfinite(t) or t<0 or t>duration-.1 for t in row['_delays'])):raise MediaError('Speech phrases are too close to the cut')
         si=_num(row.get('sourceIn',0),0,86400,'Source in')
         negative=row.get('negative',False)
         if type(negative) is not bool:raise MediaError('Negative must be true or false')
         validated.append({**row,'words':words,'layout':layout,'palette':palette,'duration':duration,'sourceIn':si,'source':source(row.get('source',''),duration,si),'second':source(row.get('second',''),duration,si),'negative':negative})
+    validated,decisions=direct(validated,recipe.get('design')=='free')
     prefix='motion-'+uuid.uuid4().hex[:10];pages={};ops=[];keys={};W=film.get('stage',{}).get('w',1920);H=film.get('stage',{}).get('h',1080);at=start
     def add(src,dur,when,box=None,style='',attrs=None,overrides=None,media_in=0):
         cid=prefix+'-'+str(len(ops));clip={'id':cid,'src':src,'at':round(when,3),'time':[media_in,round(media_in+dur,3)],'attrs':attrs or {'data-skye-motion':'layer'}}
@@ -68,16 +100,16 @@ def prepare(state,studio,project,body):
     for i,row in enumerate(validated):
         d=row['duration'];bg,accent,fg,red=PALETTES[row['palette']];layout=row['layout'];src=row['source'];si=row['sourceIn'];words=row['words']
         back=page(f'bg{i}',f'<!doctype html><html><body style="margin:0;background:{bg}"><script>window.film={{frame(){{}}}}</script></body></html>')
-        add(back,d,at,attrs={'data-skye-motion':'scene','data-skye-shot':'motion'})
+        add(back,d,at,attrs={'data-skye-motion':'scene','data-skye-shot':'motion','data-skye-layout':layout,'data-skye-palette':row['palette'],'data-skye-role':row.get('_role','free')})
         if src:
             if layout in ('cards','wall'):
                 count=6 if layout=='wall' else 2
                 for j in range(count):
                     x=(j%3)*.34-.025 if layout=='wall' else .18+j*.36;y=(j//3)*.55-.04 if layout=='wall' else .12+j*.05;w=.37 if layout=='wall' else .4;h=.59 if layout=='wall' else .78
-                    cid=add(row['second'] if j%2 and row['second'] else src,d,at,{'x':x*W,'y':y*H,'w':w*W,'h':h*H,'r':(-1)**j*7},media_in=si)
+                    cid=add(row['second'] if j%2 and row['second'] else src,d,at,{'x':x*W,'y':y*H,'w':w*W,'h':h*H,'r':(-1)**j*7},style='filter:brightness(.45)' if row.get('_role') else '',media_in=si)
                     anim(cid,'translate',f'0%{{translate:0px 50px}}100%{{translate:{(-1)**j*50}px -45px}}',d)
                     if row['negative']:
-                        name=prefix+f'-negative{i}-{j}';keys[name]='0%,7%,12%,100%{filter:invert(0)}8%,11%{filter:invert(1)}';ops[-1]['clip']['style']+=f', {name} {d}s steps(1,end) both'
+                        name=prefix+f'-negative{i}-{j}';keys[name]=('0%,7%,12%,100%{filter:brightness(.45) invert(0)}8%,11%{filter:invert(1)}' if row.get('_role') else '0%,7%,12%,100%{filter:invert(0)}8%,11%{filter:invert(1)}');ops[-1]['clip']['style']+=f', {name} {d}s steps(1,end) both'
             else:
                 box={'x':0,'y':0,'w':W,'h':H}
                 if layout=='split':box['w']=W*.5
@@ -89,17 +121,26 @@ def prepare(state,studio,project,body):
                     name=prefix+f'-negative{i}';keys[name]='0%,7%,12%,100%{filter:brightness(.62) invert(0)}8%,11%{filter:brightness(.8) invert(1)}';clip=next(o['clip'] for o in ops if o.get('clip',{}).get('id')==cid);clip['style']+=f', {name} {d}s steps(1,end) both'
         # Distinct, staggered phrase groups are separate text clips, not a canvas.
         for j,word in enumerate(words):
-            n=len(words);delay=min(j*.18,d*.14*j);dur=d-delay;x=.06;y=.1+j*(.7/max(2,n));ww=.86;hh=.32 if n<3 else .24;r=0
+            n=len(words);delay=row.get('_delays',[min(k*.18,d*.14*k) for k in range(n)])[j];dur=d-delay;x=.06;y=.1+j*(.7/max(2,n));ww=.86;hh=.32 if n<3 else .24;r=0
             if layout in ('scatter','cards','wall'):x=[.06,.33,.11,.45,.16][j];y=[.13,.34,.61,.76,.02][j];ww=[.63,.61,.8,.48,.65][j];hh=[.23,.21,.25,.12,.12][j];r=[-8,6,-4,8,-4][j]
             elif layout=='arc':x=[.04,.46,.48,.13,.65][j];y=[.39,.09,.63,.75,.78][j];ww=.52 if j==0 else .46;hh=.22 if j==0 else .15;r=[-16,5,16,-8,10][j]
             elif layout=='title':x=.08;y=.15+j*.4;ww=.84;hh=.4 if j==0 else .18;r=-3 if j==0 else 0
             elif layout=='flip':y=.14+j*.25;r=0
             elif layout=='split':x=.05 if j%2==0 else .44;y=.14+j*.23;ww=.55;r=(-1)**j*5
-            color=accent if j%2==0 else ('#fff9ed' if src else fg)
-            cid=add(textpage,dur,at+delay,{'x':x*W,'y':y*H,'w':ww*W,'h':hh*H,'r':r},attrs={'data-skye-motion':'text','data-skye-phrase':word},overrides=[{'at':'#words','text':word,'style':{'color':color}}])
+            focal=j==0
+            if row.get('_role'):
+                b=text_box(row,j,n);x,y,ww,hh,r=b['x'],b['y'],b['w'],b['h'],b['r'];focal=b['focal']
+                # Fit the rotated rectangle to the true stage aspect, not only 16:9.
+                a=math.radians(r);bw=abs(ww*W*math.cos(a))+abs(hh*H*math.sin(a));bh=abs(ww*W*math.sin(a))+abs(hh*H*math.cos(a));fit=min(1,.82*W/bw,.82*H/bh);ww*=fit;hh*=fit
+                bw=abs(ww*W*math.cos(a))+abs(hh*H*math.sin(a));bh=abs(ww*W*math.sin(a))+abs(hh*H*math.cos(a));cx=max(.08*W+bw/2,min(.92*W-bw/2,(x+ww/2)*W));cy=max(.08*H+bh/2,min(.92*H-bh/2,(y+hh/2)*H));x=cx/W-ww/2;y=cy/H-hh/2
+            color=accent if focal else ('#fff9ed' if src else fg)
+            cid=add(textpage,dur,at+delay,{'x':x*W,'y':y*H,'w':ww*W,'h':hh*H,'r':r},attrs={'data-skye-motion':'text','data-skye-phrase':word,'data-skye-scene':prefix+str(i),'data-skye-focal':'yes' if focal else 'no'},overrides=[{'at':'#words','text':word,'style':{'color':color,**({'textShadow':'0px 2px 8px #101b1a'} if src and row.get('_role') else {})}}])
+            if row.get('_role') in ('hero','quiet','resolve','contrast'):
+                anim(cid,'translate',f'0%{{translate:0px 24px;opacity:0;animation-timing-function:cubic-bezier(.2,.7,.2,1)}}18%{{translate:0px 0px;opacity:1}}92%{{translate:0px 0px;opacity:1}}100%{{translate:0px -12px;opacity:0}}',dur)
+                continue
             end=max(55,100-100*.25/dur)
             anim(cid,'translate',f'0%{{translate:{(1 if j%2 else -1)*150}px 55px;opacity:0;scale:.8;filter:blur(10px);animation-timing-function:cubic-bezier(.12,.85,.2,1)}}22%{{translate:0px 0px;opacity:1;scale:1;filter:blur(0px)}}{end:.3f}%{{translate:0px 0px;opacity:1;scale:1;filter:blur(0px);animation-timing-function:cubic-bezier(.7,0,1,.3)}}100%{{translate:-100px -35px;opacity:0;scale:1.25;filter:blur(8px)}}',dur)
-        if i>0:
+        if i>0 and row.get('_blocks',True):
             mosaic=page(f'blocks{i}',f'''<!doctype html><html><body style="margin:0;overflow:hidden"><script>for(let i=0;i<48;i++){{const e=document.createElement('div');e.style.cssText='position:absolute;left:'+(i%8*12.5)+'vw;top:'+Math.floor(i/8)*16.67+'vh;width:12.6vw;height:16.8vh;background:'+(i%5?'{{accent}}':'{{red}}');document.body.append(e)}}const tiles=[...document.body.children].filter(e=>e.tagName==='DIV');window.film={{frame(t){{tiles.forEach((e,i)=>e.style.opacity=t/.22<((i*29)%47)/47?'1':'0')}}}};</script></body></html>'''.replace('{accent}',accent).replace('{red}',red))
             add(mosaic,.22,at,attrs={'data-skye-motion':'blocks'})
         at+=d
@@ -124,16 +165,21 @@ def prepare(state,studio,project,body):
     if check.returncode:raise MediaError('Motion recipe failed native validation')
     if studio.request(f'/api/projects/{project}')['rev']!=snap['rev']:raise MediaError('Project changed. Reopen Compose')
     for path,text in pages.items():studio.request(f'/api/projects/{project}/page',{'path':path,'text':text,'expect':None},method='PUT')
-    return {'project':project,'base':snap['rev'],'ops':ops,'answer':f'{len(validated)} scenes, {sum(len(s["words"]) for s in validated)} text layers. No model called.','duration':round(at-start,3)}
+    design_report=lint([o['clip'] for o in ops if 'clip' in o],W,H)
+    return {'design':design_report,'decisions':decisions,'timing':timing_report,'project':project,'base':snap['rev'],'ops':ops,'answer':f'{len(validated)} scenes, {sum(len(s["words"]) for s in validated)} text layers. {design_report["metrics"]["upright"]} upright, {design_report["metrics"]["tilted"]} angled. {len(design_report["warnings"])} design warnings.','duration':round(at-start,3)}
 
 def main(argv=None):
     """Offline CLI; use only with the project closed in the editor."""
     import argparse,hashlib,tempfile
     parser=argparse.ArgumentParser(description='Compose a film from built-in motion recipes. Close this project in the editor first.')
-    parser.add_argument('project',type=Path);parser.add_argument('--recipe',type=Path,required=True);parser.add_argument('--apply',action='store_true')
+    parser.add_argument('project',type=Path);parser.add_argument('--recipe',type=Path);parser.add_argument('--lint',action='store_true');parser.add_argument('--apply',action='store_true')
     args=parser.parse_args(argv);root=args.project.resolve();film_path=root/'film.html';before=film_path.read_text();rev=hashlib.sha256(before.encode()).hexdigest()
     parsed=subprocess.run(['node',str(Path(__file__).with_name('effect-check.mjs'))],input=before,text=True,capture_output=True,check=True)
     value=json.loads(parsed.stdout)
+    if args.lint:
+        from .design import lint
+        stage=value.get('stage',{});print(json.dumps(lint([c for t in value['tracks'] for c in t['clips']],stage.get('w',1920),stage.get('h',1080))));return 0
+    if not args.recipe:parser.error('--recipe is required unless --lint is used')
     class Offline:
         def request(self,route,body=None,method=None):
             if route.endswith('/page'):
@@ -150,8 +196,8 @@ def main(argv=None):
         if film_path.read_text()!=before:raise MediaError('Project changed before save')
         backup=root/'.film/backups'/('before-'+rev[:12]+'.html');backup.parent.mkdir(parents=True,exist_ok=True);backup.write_text(before)
         tmp=film_path.with_suffix('.compose.tmp');tmp.write_text(output);tmp.replace(film_path)
-        print(json.dumps({'applied':True,'duration':result['duration'],'backup':str(backup),'answer':result['answer']}))
-    else:print(json.dumps({'applied':False,'duration':result['duration'],'ops':result['ops'],'answer':result['answer']}))
+        print(json.dumps({'applied':True,'duration':result['duration'],'backup':str(backup),'answer':result['answer'],'design':result['design'],'decisions':result['decisions'],'timing':result['timing']}))
+    else:print(json.dumps({'applied':False,'duration':result['duration'],'ops':result['ops'],'answer':result['answer'],'design':result['design'],'decisions':result['decisions'],'timing':result['timing']}))
     return 0
 
 

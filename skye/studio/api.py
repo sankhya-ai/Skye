@@ -59,6 +59,18 @@ def post(handler, path: str):
             from .storyboard import _file
             project=body.get('project');_file(handler.state_dir,project)
             handler._json(text_layers(studio,project,body if action=='motion-text-change' else None))
+        elif action in ('motion-timing','motion-design'):
+            from .storyboard import _file
+            from pathlib import Path
+            project=body.get('project');_file(handler.state_dir,project)
+            snap=studio.request(f'/api/projects/{project}')
+            if action=='motion-timing':
+                from .timing import analyze
+                handler._json(analyze(Path(snap['project']['path']),body.get('source'),body.get('mode')))
+            else:
+                from .design import lint
+                film=snap['value'];stage=film.get('stage',{})
+                handler._json(lint([c for t in film['tracks'] for c in t['clips']],stage.get('w',1920),stage.get('h',1080)))
         elif action == 'compose':
             from .motion import prepare
             handler._json(prepare(handler.state_dir,studio,body.get('project'),body))

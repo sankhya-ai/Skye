@@ -45,7 +45,7 @@ def test_words_preserve_style_and_reject_locked_or_stale(tmp_path):
     h.apply(text_layers(h,'demo',{'base':'r1','edits':{cid:'YOUR WORDS'}}))
     changed=next(c for t in h.film['tracks'] for c in t['clips'] if c['id']==cid)
     assert changed['overrides'][0]['text']=='YOUR WORDS'
-    assert changed['overrides'][0]['style']['color']=='#aaffd8'
+    assert changed['overrides'][0]['style']==next(c for t in original['tracks'] for c in t['clips'] if c['id']==cid)['overrides'][0]['style']
     assert text_layers(h,'demo')['rows'][0]['text']=='YOUR WORDS'
     with pytest.raises(MediaError,match='changed'):text_layers(h,'demo',{'base':'stale','edits':{cid:'NO'}})
     next(t for t in h.film['tracks'] if any(c['id']==cid for c in t['clips']))['locked']=True
@@ -64,4 +64,4 @@ def test_compose_reuses_nonoverlapping_timeline_lanes(tmp_path):
     h=Host(tmp_path)
     h.apply(prepare(tmp_path,h,'demo',{'base':'r1','recipe':{'scenes':[{'words':['ONE','TWO']}] * 7}}))
     assert len(h.film['tracks'])==4  # block overlay, two phrase lanes, background
-    assert sum(len(t['clips']) for t in h.film['tracks'])==27
+    assert sum(len(t['clips']) for t in h.film['tracks'])==23
