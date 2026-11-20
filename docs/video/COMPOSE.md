@@ -1,6 +1,8 @@
+Compose now applies upright-first design by default and supports local beat/speech timing. Read [DESIGN.md](DESIGN.md) for the rules, timing review and current limits. Earlier proof notes below describe the first reusable milestone.
+
 # Compose: videos from built-in parts
 
-Compose creates separate footage, text, background and transition clips from imported media and phrase groups. It does not write one canvas containing the entire video. No model calls or external services are needed.
+Compose creates separate footage, text, background and transition clips from imported media and phrase groups. It does not write one canvas containing the entire video. No cloud calls or external services are needed. Optional Speech timing uses a local model; the original workflow below uses manual BPM.
 
 ## Human path
 

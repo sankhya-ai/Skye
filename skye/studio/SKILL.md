@@ -39,3 +39,8 @@ insertion. No paid model/service calls are needed for these commands.
 
 For a new motion reel without hand-written scene code, read docs/video/COMPOSE.md.
 Use Video > Compose for the no-code form or `skye studio compose PROJECT --recipe recipe.json --apply` with the project closed. Recipes generate separate native footage and editable text-page clips, not a whole-film canvas. Words edits phrases through native overrides. Use source assets already imported into the project, respect source ranges, and inspect the result. BPM is manual, not speech/music alignment. Arc is a phrase arrangement, not a native per-letter path. A generated block overlay is not a subject matte. Read docs/video/FRAMEY-STUDY.md for the reference analysis and unproven items.
+
+
+## Design and timing
+
+Read `docs/video/DESIGN.md` before composing a motion reel. Compose is upright-first by default. Treat its per-scene roles and lint as a draft, not a beauty grade. Inspect the export and follow the sentence, not only the grid. `skye studio compose PROJECT --lint` reports the current film. `skye studio timing PROJECT --source assets/narration.wav --mode speech` uses an optional local Vosk model; `--mode beat` estimates pulse locally. Never label unreviewed machine words as reviewed. Correct word/timestamp errors before setting `reviewed: true`. Low-confidence or absent matches need correction, not invented timing. Keep the project closed during offline apply.
