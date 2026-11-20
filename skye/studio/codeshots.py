@@ -5,7 +5,7 @@ import shutil
 from ..media.model import MediaError
 
 HERE=Path(__file__).parent
-TEMPLATES={'orbit':'3D Orbit','kinetic':'Kinetic type','liquid':'Liquid Aurora · WebGL','morph':'Particle Type · Three.js','chrome':'Liquid Chrome · Paper WebGL'}
+TEMPLATES={'cutbeat':'Cut Beat','orbit':'3D Orbit','kinetic':'Kinetic type','liquid':'Liquid Aurora · WebGL','morph':'Particle Type · Three.js','chrome':'Liquid Chrome · Paper WebGL'}
 
 def validate_code(code):
     if not isinstance(code,str) or not 1<=len(code.encode())<=55000:
