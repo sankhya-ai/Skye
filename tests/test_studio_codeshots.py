@@ -15,7 +15,7 @@ class Studio:
         helper=Path(__file__).parents[1]/'skye/studio/check.mjs'
         self.film=json.loads(subprocess.check_output(['node',str(helper)],input=json.dumps({'film':self.film,'ops':result['ops']}).encode()))
 
-@pytest.mark.parametrize('name',['orbit','kinetic','liquid','morph','chrome','cutbeat'])
+@pytest.mark.parametrize('name',['orbit','kinetic','liquid','morph','chrome','cutbeat','cutrush'])
 def test_code_shot_insert_edit_versions_and_native_undo_model(tmp_path,name):
     studio=Studio(tmp_path)
     result=plan_change(tmp_path,studio,'demo',{'base':'r1','action':'insert','index':0,'kind':'code','template':name,'duration':2})
@@ -53,3 +53,14 @@ def test_agent_gets_selected_code_and_cannot_edit_other_code_shot(tmp_path):
         Path(spec['repo'],'ops.json').write_text(json.dumps({'storyboard':{'action':'code','clip':ids[1],'code':'<script>window.film={duration:2,frame(t){}}</script>'}}))
         return Result(ok=True,output='Prepared code.',returncode=0)
     with pytest.raises(MediaError,match='Select the code'):propose(tmp_path,studio,'demo',[ids[0]],'Edit the code shot',runner=worker)
+
+
+def test_cut_rush_is_an_optional_media_offline_clock_template(tmp_path):
+    code=template(tmp_path,'cutrush',20)
+    assert 'duration:20,' in code
+    assert "man:'',phone:'',screen:''" in code
+    assert 'await Promise.all([seek(' in code
+    assert "globalCompositeOperation='difference'" in code
+    assert 'Math.PI*ease(u/.45)' in code
+    assert 'requestAnimationFrame' not in code
+    assert 'https://' not in code
