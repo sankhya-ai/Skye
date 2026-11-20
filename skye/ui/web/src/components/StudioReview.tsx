@@ -1,0 +1,25 @@
+import {useEffect,useState} from 'react';
+import {post} from './video/net';
+type Range={start:number;end:number};
+type Note={id:string;version:string;text:string;anchor:Range;origin:string;status:string;stale:boolean;actor?:string;progress?:string;replies:{version:string;text:string;ranges:Range[];actor:string}[]};
+type Review={version:string;duration:number;words:{id:string;word:string;start:number;end:number}[];notes:Note[]};
+const clock=(t:number)=>`${Math.floor(t/60).toString().padStart(2,'0')}:${(t%60).toFixed(3).padStart(6,'0')}`;
+export function StudioReview({project,time,onClose,onSeek}:{project:string;time:number;onClose:()=>void;onSeek:(time:number)=>void}){
+ const [data,setData]=useState<Review|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[text,setText]=useState(''),[start,setStart]=useState(time),[end,setEnd]=useState(time),[wordIds,setWordIds]=useState<string[]>([]),[claims,setClaims]=useState<Record<string,string>>({}),[replies,setReplies]=useState<Record<string,string>>({});
+ const load=()=>post<Review>('/api/studio/review',{project}).then(setData).catch(e=>setError(e.message));
+ useEffect(()=>{void load();},[project]);
+ const action=async(body:Record<string,unknown>)=>{if(!data)return;setBusy(true);setError('');try{const r=await post<{claim?:string;note:Note}>('/api/studio/review',{project,version:data.version,...body});if(r.claim)setClaims(c=>({...c,[r.note.id]:r.claim!}));if(body.action==='add'){setText('');setWordIds([]);}await load();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+ return <section className="studio-review" role="dialog" aria-label="Review"><header><strong>Review</strong><span>{data?.version.slice(0,8)}</span><button onClick={()=>void load()}>Refresh</button><button onClick={onClose}>Close</button></header>
+ {error&&<div role="alert" className="studio-review-error">{error}</div>}
+ <div className="studio-review-compose"><div><label>In <input aria-label="Review in" type="number" min="0" max={data?.duration} step="0.001" value={start} onChange={e=>setStart(Number(e.target.value))}/></label><label>Out <input aria-label="Review out" type="number" min="0" max={data?.duration} step="0.001" value={end} onChange={e=>setEnd(Number(e.target.value))}/></label><button onClick={()=>{setStart(time);setEnd(time);setWordIds([]);}}>Pin</button></div>
+ {Boolean(data?.words.length)&&<details><summary>Words · {wordIds.length}</summary><div className="studio-review-words">{data?.words.map(w=><button key={w.id} aria-pressed={wordIds.includes(w.id)} onClick={()=>{const next=wordIds.includes(w.id)?wordIds.filter(id=>id!==w.id):[...wordIds,w.id];setWordIds(next);const selected=data.words.filter(w=>next.includes(w.id));if(selected.length){setStart(Math.min(...selected.map(w=>w.start)));setEnd(Math.max(...selected.map(w=>w.end)));}}}>{w.word}</button>)}</div></details>}
+ <textarea aria-label="Review note" placeholder="Note" maxLength={2000} value={text} onChange={e=>setText(e.target.value)}/><button disabled={busy||!data||!text.trim()} onClick={()=>void action({action:'add',start,end,text,words:wordIds})}>Add note</button></div>
+ <div className="studio-review-notes">{data?.notes.slice().reverse().map(n=><article key={n.id}><div><button disabled={n.stale} onClick={()=>onSeek(n.anchor.start)}>{clock(n.anchor.start)}{n.anchor.end!==n.anchor.start?` – ${clock(n.anchor.end)}`:''}</button><span className={'review-status status-'+n.status}>{n.status}</span></div><p>{n.text}</p><small>{n.version.slice(0,8)} · {n.stale?'Older version':n.origin==='owner-ui'?'You':'External'}{n.actor?` · ${n.actor}`:''}</small>
+ {n.progress&&<div className="review-progress">{n.progress}</div>}
+ {n.status==='pending'&&<button disabled={busy} onClick={()=>void action({action:'approve',note:n.id})}>Accept</button>}
+ {n.status==='working'&&<button disabled={busy} onClick={()=>void action({action:'release',note:n.id})}>Release</button>}
+ {n.status==='open'&&!n.stale&&<button disabled={busy} onClick={()=>void action({action:'claim',note:n.id,actor:'You'})}>Claim</button>}
+ {claims[n.id]&&n.status==='working'&&<div className="review-reply"><textarea aria-label={'Reply '+n.id} placeholder="Reply" value={replies[n.id]??''} onChange={e=>setReplies(r=>({...r,[n.id]:e.target.value}))}/><button disabled={busy||!replies[n.id]?.trim()} onClick={()=>void action({action:'status',note:n.id,claim:claims[n.id],text:replies[n.id]})}>Update</button><button disabled={busy||!replies[n.id]?.trim()} onClick={()=>void action({action:'reply',note:n.id,claim:claims[n.id],text:replies[n.id],ranges:[{start,end}]})}>Done · In/Out</button></div>}
+ {n.replies.map((r,i)=><blockquote key={i}><p>{r.text}</p><small>{r.actor} · {r.version.slice(0,8)}</small><div>{r.ranges.map((range,j)=><button key={j} disabled={r.version!==data.version} onClick={()=>onSeek(range.start)}>{clock(range.start)} – {clock(range.end)}</button>)}</div></blockquote>)}
+ </article>)}</div></section>;
+}
