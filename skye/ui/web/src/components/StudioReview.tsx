@@ -7,7 +7,7 @@ const clock=(t:number)=>`${Math.floor(t/60).toString().padStart(2,'0')}:${(t%60)
 export function StudioReview({project,time,onClose,onSeek}:{project:string;time:number;onClose:()=>void;onSeek:(time:number)=>void}){
  const [data,setData]=useState<Review|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[text,setText]=useState(''),[start,setStart]=useState(time),[end,setEnd]=useState(time),[wordIds,setWordIds]=useState<string[]>([]),[claims,setClaims]=useState<Record<string,string>>({}),[replies,setReplies]=useState<Record<string,string>>({});
  const load=()=>post<Review>('/api/studio/review',{project}).then(setData).catch(e=>setError(e.message));
- useEffect(()=>{void load();},[project]);
+ useEffect(()=>{void load();const timer=setInterval(()=>void load(),30000);return()=>clearInterval(timer);},[project]);
  const action=async(body:Record<string,unknown>)=>{if(!data)return;setBusy(true);setError('');try{const r=await post<{claim?:string;note:Note}>('/api/studio/review',{project,version:data.version,...body});if(r.claim)setClaims(c=>({...c,[r.note.id]:r.claim!}));if(body.action==='add'){setText('');setWordIds([]);}await load();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
  return <section className="studio-review" role="dialog" aria-label="Review"><header><strong>Review</strong><span>{data?.version.slice(0,8)}</span><button onClick={()=>void load()}>Refresh</button><button onClick={onClose}>Close</button></header>
  {error&&<div role="alert" className="studio-review-error">{error}</div>}
