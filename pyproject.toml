@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 
 [project.optional-dependencies]
+voice = ["kittenml @ git+https://github.com/KittenML/KittenTTS.git@5802f6b956844919ecf210f4e55f4750a6ad7c6f", "onnxruntime>=1.20,<2", "soundfile>=0.12,<1"]
 speech = ["vosk==0.3.45"]
 media = ["scenedetect[opencv]>=0.6.7,<0.7"]
 video-analysis = ["opencv-python-headless>=4.8,<5", "numpy>=1.24,<3"]
