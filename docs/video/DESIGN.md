@@ -88,3 +88,8 @@ A separate speech test used locally synthesized original narration. Vosk produce
 Sources: https://alphacephei.com/vosk/models ; https://github.com/alphacep/vosk-api/ ; https://pypi.org/project/vosk/ . Stock source and rights ledger is included with the proof projects. Reference footage remains study-only.
 
 Final checks for this revision: 656 Python tests passed, 14 skipped. TypeScript and the production build passed (existing bundle-size warning). The 14-second native H.264/AAC remake is 854×480 at 30 fps, 1,650,193 bytes; its native export job took 64.4 seconds on the test host. All seven exported composition frames and the before/after comparison were visually inspected. Audio peaks at -1.7 dBFS, measured, not listening-reviewed. The editable ZIP was extracted to a new directory; all seven scene text bounds, repeated clocks and page-error checks passed. This is not a second full ZIP rerender.
+
+
+## Generated voice
+
+Compose can now make narration with optional local Mini int4. See [VOICE.md](VOICE.md). Unlike imported Speech analysis, Generated voice timing adds its own selected WAV to the timeline at the same Compose start. This mode uses exact synthesized segment bounds, not ASR words or acoustic forced alignment.

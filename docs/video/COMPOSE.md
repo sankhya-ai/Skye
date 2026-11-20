@@ -1,3 +1,5 @@
+Optional narration is now in Compose > Voice. Read [VOICE.md](VOICE.md) for setup, exact segment timing versus word alignment, first-use downloads and limits.
+
 Compose now applies upright-first design by default and supports local beat/speech timing. Read [DESIGN.md](DESIGN.md) for the rules, timing review and current limits. Earlier proof notes below describe the first reusable milestone.
 
 # Compose: videos from built-in parts

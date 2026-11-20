@@ -44,3 +44,8 @@ Use Video > Compose for the no-code form or `skye studio compose PROJECT --recip
 ## Design and timing
 
 Read `docs/video/DESIGN.md` before composing a motion reel. Compose is upright-first by default. Treat its per-scene roles and lint as a draft, not a beauty grade. Inspect the export and follow the sentence, not only the grid. `skye studio compose PROJECT --lint` reports the current film. `skye studio timing PROJECT --source assets/narration.wav --mode speech` uses an optional local Vosk model; `--mode beat` estimates pulse locally. Never label unreviewed machine words as reviewed. Correct word/timestamp errors before setting `reviewed: true`. Low-confidence or absent matches need correction, not invented timing. Keep the project closed during offline apply.
+
+
+## Optional local voice
+
+`docs/video/VOICE.md` owns Kitten Mini setup and limits. The optional engine is `kitten-mini-int4`, not the flagship or int8 fallback. Video > Compose > Voice uses the scene groups as script, previews the generated WAV and chooses Generated voice timing. Build adds a separate native voice track and text entrances at generated segment bounds. Those are not word alignment or phonetic onsets. If the script changes, regenerate rather than claiming the old audio matches. For word timing use the existing local Speech analysis with a matching-language recognizer and review the results. No cloning, paid calls or cloud fallback.
