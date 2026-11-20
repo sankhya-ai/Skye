@@ -1,0 +1,38 @@
+{
+  "measurements": [
+    {
+      "sourceRange": [
+        399,
+        401
+      ],
+      "frames": 60,
+      "audioSamples": 96256,
+      "firstNewColorSeconds": 1.0333333333333334,
+      "toneChangeWindowCenterSeconds": 1.01,
+      "estimatedAbsoluteAVBoundaryDifferenceMs": 23.3
+    },
+    {
+      "sourceRange": [
+        799,
+        801
+      ],
+      "frames": 60,
+      "audioSamples": 96256,
+      "firstNewColorSeconds": 1.0666666666666667,
+      "toneChangeWindowCenterSeconds": 1.02,
+      "estimatedAbsoluteAVBoundaryDifferenceMs": 46.7
+    },
+    {
+      "sourceRange": [
+        1198,
+        1200
+      ],
+      "frames": 60,
+      "audioSamples": 96256,
+      "firstNewColorSeconds": null,
+      "toneChangeWindowCenterSeconds": null,
+      "estimatedAbsoluteAVBoundaryDifferenceMs": null
+    }
+  ],
+  "method": "Color distance >10 RGB units; tone dominance in a 20ms Hann window stepped by 5ms. This is an estimate, not sample-perfect lip sync. These solid-color synthetic 160x90 segments have no motion/people. Final range exports 60 frames near minute20; full20minute export was not run."
+}

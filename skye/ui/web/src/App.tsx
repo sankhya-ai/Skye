@@ -10,6 +10,7 @@ import { MissionDetailView } from "./components/MissionDetailView";
 import { MissionsOverview } from "./components/MissionsOverview";
 import { SettingsView } from "./components/SettingsView";
 import { TeamsView } from "./components/TeamsView";
+import { StudioView } from "./components/StudioView";
 import { Sidebar } from "./components/Sidebar";
 
 function MissionsView({ missions, projects, loading, unavailable }: { missions: MissionRow[]; projects: Project[]; loading?: boolean; unavailable?: boolean }) {
@@ -87,7 +88,7 @@ export default function App() {
   const path = route.split("?")[0];
   const isDetail = path.startsWith("/mission/");
   const detailId = isDetail ? decodeURIComponent(path.slice("/mission/".length)) : null;
-  const activeNav = isDetail ? "/missions" : ["/", "/missions", "/backlog", "/agents", "/teams", "/settings"].includes(path) ? path : "/";
+  const activeNav = isDetail ? "/missions" : ["/", "/missions", "/backlog", "/agents", "/teams", "/video", "/settings"].includes(path) ? path : "/";
 
   return (
     <div className="bg-dot-grid min-h-screen">
@@ -134,6 +135,8 @@ export default function App() {
           <div className="mx-auto max-w-3xl px-4 py-8">
             <TeamsView />
           </div>
+        ) : path === "/video" ? (
+          <StudioView />
         ) : path === "/settings" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
             <SettingsView />

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 ROLES = ("developer", "senior-dev", "backend-dev", "frontend-dev", "reviewer", "designer",
-         "artist", "pm", "tester", "explorer", "devops")
+         "artist", "video-editor", "pm", "tester", "explorer", "devops")
 ADAPTERS = ("root", "claude-code", "codex")
 GATES = ("tests", "review", "journey")
 

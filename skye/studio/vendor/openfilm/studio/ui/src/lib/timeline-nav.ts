@@ -1,0 +1,164 @@
+/**
+ * What the editor's keys act on, worked out from the timeline as it is drawn: the cuts ↑ / ↓ jump between, the clips
+ * ⌘B and ⇧⌘B split, and a selection moved a frame with ⌥ ← / →. Pure: the keys call these, the edits are written by
+ * the editor (components/ProjectView).
+ */
+import { MIN_BLOCK_MS } from './timeline-drag.ts';
+import { NO_SWITCHES, TOUCH_MS, mainTrackOf, planMove, type EditModel, type EditPlan, type Switches } from './timeline-edit.ts';
+import { stepFrames } from './timecode.ts';
+import type { TimelineBlock, TimelineTrack } from './timeline-layout';
+
+/**
+ * Every clip edge on the tracks that can be cut (not locked) and are seen (not hidden), in order, once each: what
+ * ↑ / ↓ go to. Clips not on film.html yet (a drop being written) are left out.
+ */
+export function cutPoints(tracks: readonly TimelineTrack[]): number[] {
+  const out = new Set<number>();
+  for (const tr of tracks) {
+    if (tr.locked || tr.hidden) continue;
+    for (const b of tr.blocks) {
+      if (!b.loc) continue;
+      out.add(Math.round(b.startMs));
+      out.add(Math.round(b.endMs));
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/** The next cut after `nowMs` (`dir` 1), or the one before it (-1); null when there is none that way. */
+export function nextCut(points: readonly number[], nowMs: number, dir: 1 | -1): number | null {
+  /* within a millisecond is where the playhead already is */
+  if (dir > 0) return points.find((p) => p > nowMs + 1) ?? null;
+  for (let i = points.length - 1; i >= 0; i--) if (points[i]! < nowMs - 1) return points[i]!;
+  return null;
+}
+
+/** Whether a cut at `atMs` falls inside a clip, far enough from both its ends (the split button's own rule). */
+export function splitsAt(b: Pick<TimelineBlock, 'startMs' | 'endMs'>, atMs: number): boolean {
+  return atMs > b.startMs + MIN_BLOCK_MS && atMs < b.endMs - MIN_BLOCK_MS;
+}
+
+const lockedRows = (tracks: readonly TimelineTrack[]) => new Set(tracks.filter((tr) => tr.locked).flatMap((tr) => tr.blocks.map((b) => b.id)));
+
+/**
+ * What ⌘B splits at the playhead: the selected clips it is inside; with nothing selected, the clip it is inside on the
+ * main track (the lowest picture track); else on the targeted track (`targetLane`), else on the topmost
+ * track that is seen and has one. Never a clip on a locked track. The clips linked to them are the caller's to add.
+ */
+export function splitTargets(
+  tracks: readonly TimelineTrack[],
+  selectedIds: readonly string[],
+  atMs: number,
+  targetLane: string | null,
+): TimelineBlock[] {
+  const locked = lockedRows(tracks);
+  const can = (b: TimelineBlock) => Boolean(b.loc && b.clipId) && !locked.has(b.id) && splitsAt(b, atMs);
+  if (selectedIds.length) return tracks.flatMap((tr) => tr.blocks).filter((b) => selectedIds.includes(b.id) && can(b));
+  const pictures = tracks.filter((tr) => tr.docIndex != null && tr.role !== 'audio');
+  const mainIndex = pictures.length ? Math.max(...pictures.map((tr) => tr.docIndex!)) : null;
+  const main = tracks.filter((tr) => tr.docIndex === mainIndex && !tr.hidden).flatMap((tr) => tr.blocks).find(can);
+  if (main) return [main];
+  const target = targetLane ? tracks.find((tr) => tr.lane === targetLane) : undefined;
+  if (target) {
+    const hit = target.blocks.find(can);
+    return hit ? [hit] : [];
+  }
+  for (const tr of tracks) {
+    if (tr.hidden) continue;
+    const hit = tr.blocks.find(can);
+    if (hit) return [hit];
+  }
+  return [];
+}
+
+/**
+ * What [ / ] select: every clip with a part before the playhead (`dir` -1) or after it
+ * (`dir` 1), on every track not locked — what to move when the film before or after a point moves along.
+ */
+export function sideTargets(tracks: readonly TimelineTrack[], atMs: number, dir: -1 | 1): TimelineBlock[] {
+  return tracks.filter((tr) => !tr.locked).flatMap((tr) => tr.blocks)
+    .filter((b) => Boolean(b.loc) && (dir > 0 ? b.endMs > atMs + 1 : b.startMs < atMs - 1));
+}
+
+/** What ⇧⌘B splits: every clip the playhead is inside, on every track not locked. */
+export function splitAllTargets(tracks: readonly TimelineTrack[], atMs: number): TimelineBlock[] {
+  return tracks.filter((tr) => !tr.locked).flatMap((tr) => tr.blocks).filter((b) => Boolean(b.loc && b.clipId) && splitsAt(b, atMs));
+}
+
+/**
+ * Clips (by id, the first leading) moved `frames` frames along their tracks, landing on the frame grid; a clip in the
+ * way stops them against it, uncut. Null when nothing can move (a locked track, the film's start, a clip right there,
+ * the main track with the magnet, which stays closed up).
+ */
+export function planNudge(model: EditModel, ids: readonly string[], frames: number, sw: Switches = NO_SWITCHES): EditPlan | null {
+  const lead = model.flatMap((t) => t.clips).find((c) => c.id === ids[0]);
+  if (!lead || !frames) return null;
+  const main = mainTrackOf(model);
+  if (sw.magnet && model.find((t) => t.index === main)?.clips.some((c) => ids.includes(c.id))) return null;
+  let deltaMs = stepFrames(lead.startMs, frames) - lead.startMs;
+  /* the room before the nearest clip they would run into, on each of their tracks */
+  const moving = new Set(ids);
+  for (const t of model) {
+    const others = t.clips.filter((c) => !moving.has(c.id));
+    for (const c of t.clips.filter((x) => moving.has(x.id))) {
+      for (const o of others) {
+        if (deltaMs > 0 && o.startMs >= c.endMs - TOUCH_MS) deltaMs = Math.min(deltaMs, o.startMs - c.endMs);
+        if (deltaMs < 0 && o.endMs <= c.startMs + TOUCH_MS) deltaMs = Math.max(deltaMs, o.endMs - c.startMs);
+      }
+    }
+  }
+  if (Math.abs(deltaMs) <= TOUCH_MS) return null;
+  const plan = planMove(model, { ids, deltaMs, pointerMs: lead.startMs + deltaMs, mode: 'place', ...sw });
+  return plan?.ops.length ? plan : null;
+}
+
+/** Move a selection one visible film track in either direction, at the same time, as one overwrite/undo. */
+export function planOverwriteTrack(model: EditModel, tracks: readonly TimelineTrack[], ids: readonly string[], dir: -1 | 1): EditPlan | null {
+  const rows = [...new Map(tracks.filter((row) => row.docIndex != null && !row.folded).map((row) => [row.docIndex!, row])).values()];
+  const moving = [...new Set(ids)];
+  const to = new Map<string, number>();
+  for (const id of moving) {
+    const from = model.find((track) => track.clips.some((clip) => clip.id === id));
+    if (!from || from.locked || from.captions) return null;
+    const at = rows.findIndex((row) => row.docIndex === from.index);
+    const target = at < 0 ? undefined : rows[at + dir];
+    if (!target || target.docIndex == null || target.locked || target.captions || target.incomplete
+        || (target.role === 'audio') !== (from.role === 'audio')) return null;
+    if (tracks.some((row) => (row.docIndex === from.index || row.docIndex === target.docIndex) && row.blocks.some((block) => block.noLength))) return null;
+    to.set(id, target.docIndex);
+  }
+  if (!moving.length) return null;
+  const lead = model.flatMap((track) => track.clips).find((clip) => clip.id === moving[0])!;
+  return planMove(model, { ids: moving, to, mode: 'overwrite', deltaMs: 0, pointerMs: lead.startMs });
+}
+
+/** Kept for callers moving a single clip down. */
+export function planOverwriteDown(model: EditModel, tracks: readonly TimelineTrack[], id: string): EditPlan | null {
+  return planOverwriteTrack(model, tracks, [id], 1);
+}
+
+export type ClipsOf = readonly { clips: readonly { id: string }[] }[];
+
+/**
+ * Which track each thing kept about a track (a name, a height) is on now: the track holding the most of the clips it
+ * had then, else its place.
+ */
+export function placeSaved<T extends { index: number; clips: readonly string[] }>(saved: readonly T[], tracks: ClipsOf): Map<T, number> {
+  const out = new Map<T, number>();
+  const taken = new Set<number>();
+  const late: T[] = [];
+  for (const entry of saved) {
+    const had = new Set(entry.clips);
+    let best = -1;
+    let most = 0;
+    tracks.forEach((tr, i) => {
+      const n = tr.clips.filter((c) => had.has(c.id)).length;
+      if (n > most && !taken.has(i)) { most = n; best = i; }
+    });
+    if (best >= 0) { out.set(entry, best); taken.add(best); } else late.push(entry);
+  }
+  for (const entry of late) {
+    if (entry.index < tracks.length && !taken.has(entry.index)) { out.set(entry, entry.index); taken.add(entry.index); }
+  }
+  return out;
+}

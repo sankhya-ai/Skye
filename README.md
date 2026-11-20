@@ -176,3 +176,11 @@ For the `root` adapter, start the vendored Root server; Skye finds it at `SKYE_R
 Apache 2.0. See [LICENSE](LICENSE).
 
 Vendored and adapted code keeps its own notices: `chamber/LICENSE` and `chamber/NOTICE`, `root/runtime/LICENSE` and `root/runtime/NOTICE`, and `skye/ui/NOTICE` for UI components adapted from Apache-2.0 projects. See `VENDORING.md` for sources and versions.
+
+## Video shots
+
+Open **Video** in the browser to import footage and edit one shot at a time. Each shot owns its visual code, captions and audio settings. Render locally, reuse unchanged shots, and download the result. Your original footage stays unchanged. No separate desktop app.
+
+Video is an optional capability with a local media runtime. See [setup, workflow and current limits](docs/video/README.md) and the [dependency audit](docs/video/LICENSES.md).
+
+![Skye browser shot editor](docs/video/screenshots/editor.png)

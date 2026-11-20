@@ -9,18 +9,27 @@ description = "An autonomous engineering team in a box: Chamber coordination + y
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 
+[project.optional-dependencies]
+media = ["scenedetect[opencv]>=0.6.7,<0.7"]
+video-analysis = ["opencv-python-headless>=4.8,<5", "numpy>=1.24,<3"]
+
 [project.scripts]
 skye = "skye.cli:main"
 
 # Pure-stdlib package (verified: skye/ imports nothing third-party); every subpackage is
 # listed explicitly so a wheel install carries the UI server and adapters, not just the core.
 [tool.setuptools]
-packages = ["skye", "skye.adapters", "skye.ui"]
+packages = ["skye", "skye.adapters", "skye.ui", "skye.media", "skye.studio"]
 
 # The built web bundle the UI server serves (skye/ui/dist) and its attribution NOTICE are
 # data, not code: without this a wheel install has a server with no screens.
 [tool.setuptools.package-data]
+"skye.media" = ["render.mjs", "harness.js", "package.json", "package-lock.json"]
 "skye.ui" = ["dist/**/*", "NOTICE"]
+"skye.studio" = ["*.mjs", "*.md", "*.txt", "*.json", "code-assets/**/*", "code-templates/*.html", "vendor/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"skye.studio" = ["**/node_modules/**/*", "**/__pycache__/*", "**/.DS_Store"]
 
 # `pytest` from the repo root runs Skye's suite. The vendored Root tree carries its own test
 # suite with its own dependencies; it is Root's to run, not collected here.

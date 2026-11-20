@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skye Studio</title>
+
+<script>
+  /* the theme before the first paint, so the wrong one never flashes: dark unless the person chose another */
+  (function () {
+    var t = 'light';
+    try { t = localStorage.getItem('openfilm.theme') || 'light'; } catch (e) {}
+    if (t === 'system') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t === 'dark' ? 'dark' : 'light';
+  })();
+</script>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

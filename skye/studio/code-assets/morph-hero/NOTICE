@@ -1,0 +1,4 @@
+Text sampler and particle-morph interpolation adapted from morph-hero by Othmaro Fallas Rojas.
+Source: https://github.com/othmarodev/morph-hero
+Revision: 3057cea217dba79c73b8bd5ecf68198db41b9104
+MIT. Modified: vanilla Three.js instead of React, deterministic sphere-to-text clock and new visual styling.
