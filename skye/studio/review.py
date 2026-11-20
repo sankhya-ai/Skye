@@ -73,6 +73,7 @@ def speech_words(root,film):
     """Only timing linked to present composition anchors and an actual native audio clip."""
     root=Path(root);clips=[c for t in film.get('tracks',[]) for c in t['clips']];ids={c['id'] for c in clips};out=[]
     for p in sorted((root/'review').glob('speech-*.json')):
+        if p.is_symlink():continue
         try:data=json.loads(p.read_text())
         except (ValueError,OSError):continue
         if not set(data.get('anchors',[])).issubset(ids) or not data.get('anchors'):continue

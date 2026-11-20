@@ -138,3 +138,5 @@ Not yet matched: auto-transcription, a zoomable all-shots timeline, and keyframe
 ## Live vs Render parity
 
 `scripts/test_video_browser.mjs` grabs the Live frame and the exported frame at the same moment and compares them with SSIM after a light blur. It measured 0.927 on the test pattern, with a pass line of 0.9. The gap is mostly seek timing on moving footage. A missing caption or title would fail it.
+
+- [Review loop](REVIEW.md): version-bound notes, claims and changed-time replies.

@@ -72,3 +72,37 @@ def test_imported_or_tampered_approval_is_not_owner_intent(tmp_path):
     assert apply(dest,FILM,{})['notes'][0]['status']=='pending'
     path=tmp_path/'review/notes.json';data=json.loads(path.read_text());data['notes'][0]['text']='Changed outside UI';path.write_text(json.dumps(data))
     assert apply(tmp_path,FILM,{})['notes'][0]['status']=='pending'
+
+def test_changed_audio_hides_old_speech_words(tmp_path):
+    v=init(tmp_path);remember_speech(tmp_path,'assets/test.wav',{'mode':'speech','words':[{'word':'hello','start':1,'end':2}]},['a'])
+    assert apply(tmp_path,FILM,{})['words']
+    (tmp_path/'assets/test.wav').write_bytes(b'new audio')
+    assert not apply(tmp_path,FILM,{})['words']
+
+def test_symlink_store_refused(tmp_path):
+    v=init(tmp_path);elsewhere=tmp_path/'elsewhere';elsewhere.mkdir();(tmp_path/'review/notes.json').symlink_to(elsewhere/'notes.json')
+    with pytest.raises(MediaError):add(tmp_path,v)
+
+def test_api_provenance_not_json(monkeypatch,tmp_path):
+    import io
+    from skye.studio import api
+    v=init(tmp_path)
+    class Studio:
+        def request(self,*a,**kw):return {'project':{'path':str(tmp_path)},'value':FILM}
+    monkeypatch.setattr(api,'start',lambda state:Studio())
+    class Handler:
+        state_dir=tmp_path
+        def __init__(self,headers):
+            body=json.dumps({'project':'test','action':'add','version':v,'start':0,'end':1,'text':'Review','origin':'owner-ui'}).encode();self.headers={'Content-Length':str(len(body)),**headers};self.rfile=io.BytesIO(body)
+        def _json(self,value,*args):self.value=value
+    external=Handler({});api.post(external,'/api/studio/review');assert external.value['note']['status']=='pending'
+    browser=Handler({'Origin':'http://localhost:8787','Host':'localhost:8787','Sec-Fetch-Site':'same-origin'});api.post(browser,'/api/studio/review');assert browser.value['note']['origin']=='owner-ui'
+
+def test_native_project_export_includes_review(tmp_path):
+    import subprocess
+    root=tmp_path/'project';root.mkdir();(root/'film.html').write_text('<!doctype html><html><body><section><video id="a" src="pages/a.html" time="0 5"></video></section></body></html>');(root/'pages').mkdir();(root/'pages/a.html').write_text('<html>test</html>');(root/'review').mkdir();(root/'review/notes.json').write_text('{}')
+    module=Path(__file__).resolve().parents[1]/'skye/studio/vendor/openfilm/studio/server/exports.mjs'
+    code="import {projectFiles} from "+json.dumps(module.as_uri())+";console.log(JSON.stringify(await projectFiles(process.argv[1],[])))"
+    r=subprocess.run(['node','--input-type=module','-e',code,str(root)],capture_output=True,text=True,timeout=20)
+    assert r.returncode==0,r.stderr
+    assert 'review/notes.json' in [f['name'] for f in json.loads(r.stdout)]
