@@ -6,6 +6,7 @@ import { getMissions, getProjects, type MissionRow, type Project } from "./api";
 import { AgentsView } from "./components/AgentsView";
 import { BacklogView } from "./components/BacklogView";
 import { MarketingView } from "./components/MarketingView";
+import { ConnectionsView } from "./components/ConnectionsView";
 import { HomeView } from "./components/HomeView";
 import { MissionDetailView } from "./components/MissionDetailView";
 import { MissionsOverview } from "./components/MissionsOverview";
@@ -89,7 +90,7 @@ export default function App() {
   const path = route.split("?")[0];
   const isDetail = path.startsWith("/mission/");
   const detailId = isDetail ? decodeURIComponent(path.slice("/mission/".length)) : null;
-  const activeNav = isDetail ? "/missions" : ["/", "/missions", "/backlog", "/agents", "/teams", "/marketing", "/video", "/settings"].includes(path) ? path : "/";
+  const activeNav = isDetail ? "/missions" : ["/", "/missions", "/backlog", "/agents", "/teams", "/marketing", "/connections", "/video", "/settings"].includes(path) ? path : "/";
 
   return (
     <div className="bg-dot-grid min-h-screen">
@@ -139,6 +140,10 @@ export default function App() {
         ) : path === "/marketing" ? (
           <div className="mx-auto max-w-3xl px-4 py-8">
             <MarketingView />
+          </div>
+        ) : path === "/connections" ? (
+          <div className="mx-auto max-w-3xl px-4 py-8">
+            <ConnectionsView />
           </div>
         ) : path === "/video" ? (
           <StudioView />

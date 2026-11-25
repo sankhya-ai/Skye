@@ -18,10 +18,18 @@ class SocialError(RuntimeError):
         self.kind = kind  # "auth" (reconnect), "limit" (retry later), "review" (app approval), "error"
 
 
+class Form(dict):
+    """Marks a request body as application/x-www-form-urlencoded (OAuth token endpoints)."""
+
+
 def urllib_transport(method, url, headers, body):
     data = None
     headers = dict(headers)
-    if body is not None:
+    if isinstance(body, Form):
+        import urllib.parse
+        data = urllib.parse.urlencode(body).encode()
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    elif body is not None:
         data = json.dumps(body).encode()
         headers.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)

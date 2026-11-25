@@ -56,6 +56,45 @@ class Store:
         data[connector.id] = rec
         self._write(data)
 
+    # --- developer-app credentials (client id/secret the owner registers per platform) ---
+    def app(self, platform: str) -> dict[str, str] | None:
+        return (self._read().get("_apps") or {}).get(platform)
+
+    def save_app(self, platform: str, client_id: str, client_secret: str = "") -> None:
+        if not client_id.strip():
+            raise SocialError("client id is required")
+        data = self._read()
+        data.setdefault("_apps", {})[platform] = {"client_id": client_id.strip(),
+                                                  "client_secret": client_secret.strip()}
+        self._write(data)
+
+    # --- OAuth results ---
+    def save_oauth(self, platform: str, credentials: dict[str, Any], *, expires_in: float | None = None,
+                   refresh_token: str = "", extra: dict[str, Any] | None = None) -> None:
+        now = time.time()
+        data = self._read()
+        rec = {"credentials": {k: str(v) for k, v in credentials.items()}, "saved_at": now,
+               "expires_at": now + float(expires_in) if expires_in else None,
+               "refresh_token": refresh_token, "last_check": None, **(extra or {})}
+        data[platform] = rec
+        self._write(data)
+
+    def update_tokens(self, platform: str, access_token: str, *, expires_in: float | None,
+                      refresh_token: str = "") -> None:
+        data = self._read()
+        rec = data.get(platform)
+        if not rec:
+            raise SocialError(f"{platform} is not connected")
+        rec["credentials"]["access_token"] = access_token
+        rec["expires_at"] = time.time() + float(expires_in) if expires_in else None
+        if refresh_token:
+            rec["refresh_token"] = refresh_token
+        data[platform] = rec
+        self._write(data)
+
+    def raw(self, platform: str) -> dict[str, Any]:
+        return self._read().get(platform) or {}
+
     def note_check(self, platform: str, ok: bool, detail: str = "") -> None:
         data = self._read()
         if platform in data:

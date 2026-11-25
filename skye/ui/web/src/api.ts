@@ -567,3 +567,31 @@ export const planMarketingWeek = (profile: MarketingProfile) =>
     method: "POST",
     body: JSON.stringify(profile),
   });
+
+export type SocialRow = {
+  id: string;
+  name: string;
+  implemented: boolean;
+  connected: boolean;
+  oauth: boolean;
+  refreshable?: boolean;
+  app_configured: boolean;
+  fields: string[];
+  pages: { id: string; name: string }[];
+  page_id?: string | null;
+  review: string;
+  expires_at?: number | null;
+  last_check?: { at: number; ok: boolean; detail: string } | null;
+};
+const post = (path: string, body: unknown) =>
+  api<Record<string, unknown>>(path, { method: "POST", body: JSON.stringify(body) });
+export const getSocial = () => api<{ platforms: SocialRow[] }>("/api/social");
+export const saveSocialApp = (platform: string, client_id: string, client_secret: string) =>
+  post("/api/social/app", { platform, client_id, client_secret });
+export const startSocialOauth = (platform: string) =>
+  post("/api/social/oauth/start", { platform }) as Promise<{ url: string }>;
+export const connectSocial = (platform: string, values: Record<string, string>) =>
+  post("/api/social/connect", { platform, values });
+export const checkSocial = (platform: string) => post("/api/social/check", { platform });
+export const disconnectSocial = (platform: string) => post("/api/social/disconnect", { platform });
+export const selectSocialPage = (page_id: string) => post("/api/social/page", { page_id });

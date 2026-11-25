@@ -3,7 +3,7 @@
 // (rounded-md, translucent card, 18px backdrop blur), nav rows h-7 px-3 py-1 gap-2 mx-1.5
 // rounded-sm text-sm, and Projects / Chats sections - backed by Skye's real registries:
 // projects are workspaces, chats are missions (their journal is the conversation record).
-import { ChevronDown, Folder, Film, Home, ListTodo, Megaphone, MessageSquare, Plus, Settings, Users, UsersRound, Workflow } from "lucide-react";
+import { ChevronDown, Folder, Film, Home, ListTodo, Plug, Megaphone, MessageSquare, Plus, Settings, Users, UsersRound, Workflow } from "lucide-react";
 import { useState } from "react";
 import { createProject, pickFolder, type MissionRow, type Project } from "../api";
 import { ClaudeUsageCard } from "./ClaudeUsageCard";
@@ -17,6 +17,7 @@ const NAV = [
   { path: "/agents", label: "Agents", icon: Users },
   { path: "/teams", label: "Teams", icon: UsersRound },
   { path: "/marketing", label: "Marketing", icon: Megaphone },
+  { path: "/connections", label: "Connections", icon: Plug },
   { path: "/video", label: "Video", icon: Film },
   { path: "/settings", label: "Settings", icon: Settings },
 ];

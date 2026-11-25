@@ -15,6 +15,7 @@ Security posture:
 """
 from __future__ import annotations
 
+import html
 import json
 import re
 import os
@@ -991,6 +992,27 @@ class UiHandler(BaseHTTPRequestHandler):
         query = parse_qs(url.query)
         if url.path == "/health":
             return self._json({"ok": True})
+        if url.path == "/oauth/callback":
+            # The platform sends the browser here. No session token rides along; the single-use
+            # random `state` issued by /api/social/oauth/start is the proof, and it is spent here.
+            from ..social import SocialError, oauth as social_oauth
+            try:
+                if query.get("error"):
+                    raise SocialError("sign-in was cancelled or refused")
+                platform = social_oauth.finish(query.get("state", [""])[0], query.get("code", [""])[0])
+                note = f"{platform} connected. You can close this tab."
+            except SocialError as error:
+                note = f"Could not connect: {error}"
+            page = ("<!doctype html><meta charset=utf-8><title>Skye</title><body style=\"font:16px "
+                    "system-ui;display:grid;place-items:center;height:100vh;margin:0;background:#f5f5f5\">"
+                    f"<p>{html.escape(note)}</p>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(page)
+            return
         if url.path.startswith("/api/"):
             if not self._authorized(query, allow_query_token=False):
                 return self._deny()
@@ -1204,13 +1226,26 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"error": str(error)}, 400)
                 return self._json({"recorded": created, "issue": issue})
             if url.path in ("/api/social/connect", "/api/social/check", "/api/social/publish",
-                            "/api/social/disconnect"):
+                            "/api/social/disconnect", "/api/social/app", "/api/social/oauth/start",
+                            "/api/social/page"):
                 from skye.social import SocialError
                 from skye.social import publish as social_publish
                 from skye.social.registry import get as social_get
                 from skye.social.store import Store as SocialStore
                 platform = str(body.get("platform") or "")
                 try:
+                    if url.path.endswith("/app"):
+                        SocialStore().save_app(platform, str(body.get("client_id") or ""),
+                                               str(body.get("client_secret") or ""))
+                        return self._json({"saved": True})
+                    if url.path.endswith("/oauth/start"):
+                        from skye.social import oauth as social_oauth
+                        redirect = f"http://127.0.0.1:{self.server.server_address[1]}/oauth/callback"
+                        return self._json(social_oauth.begin(platform, redirect))
+                    if url.path.endswith("/page"):
+                        from skye.social import oauth as social_oauth
+                        social_oauth.select_page(str(body.get("page_id") or ""))
+                        return self._json({"selected": True})
                     if url.path.endswith("/connect"):
                         SocialStore().save(social_get(platform), body.get("values") or {})
                         return self._json({"connected": True})
