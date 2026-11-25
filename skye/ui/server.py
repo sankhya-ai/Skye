@@ -464,6 +464,7 @@ def adapter_availability() -> list[dict]:
             "auth": "your own login/subscription; only exercised by a real dispatch",
             "hint": ("install it yourself - Skye uses YOUR coding agent, it does not "
                      "download one" if binary
+                     else "set SKYE_INSTINCT_URL and SKYE_INSTINCT_TOKEN" if name == "instinct"
                      else "start the vendored Root server locally (SKYE_ROOT_URL, default "
                           "http://127.0.0.1:8788)")})
     return details

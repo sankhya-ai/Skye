@@ -11,9 +11,9 @@ def test_bare_adapters_list_unchanged_and_details_additive(ui_server):
     url, _ = ui_server
     code, data = _req(url, "/api/roles")
     assert code == 200
-    assert data["adapters"] == ["root", "claude-code", "codex"]  # bare names, as before
+    assert data["adapters"] == ["root", "claude-code", "codex", "instinct"]  # bare names, as before
     details = {d["name"]: d for d in data["adapter_details"]}
-    assert set(details) == {"root", "claude-code", "codex"}
+    assert set(details) == {"root", "claude-code", "codex", "instinct"}
     assert details["claude-code"]["probe"] == "binary-on-PATH"
     assert details["claude-code"]["binary"] == "claude"
     assert details["root"]["probe"] == "local-server"
