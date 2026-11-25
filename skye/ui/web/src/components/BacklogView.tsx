@@ -181,13 +181,14 @@ export function BacklogView() {
   };
 
   const projectName = (id: string) =>
-    projects.find((p) => p.id === id)?.name ?? (id || "no project");
+    projects.find((p) => p.id === id)?.name ?? (id === "marketing" ? "Marketing" : id || "no project");
   const issueFor = (f: FeatureRow) => issues.find((i) => i.feature_id === f.id);
   const provenance = (f: FeatureRow): string => {
     const issue = issueFor(f);
     if (issue) {
       return `from ${KIND_LABEL[issue.kind] ?? "a signal"}${issue.occurrences > 1 ? ` · seen ${issue.occurrences}x` : ""}`;
     }
+    if (f.proposed_by === "marketing-preset") return "from your marketing plan";
     return f.proposed_by ? "proposed while working" : "added directly";
   };
 

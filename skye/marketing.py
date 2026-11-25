@@ -99,7 +99,8 @@ def plan_week(profile: dict[str, Any], *, backlog_path=None) -> list[dict[str, A
             "brief": f"{context}\nIdea: {idea}\nDeliver a draft file only. Do not publish.",
             "kind": "content",
             "labels": ["type:content", f"format:{label}"]})
-    return backlog.propose(entries, project=PROJECT, mission="marketing-preset",
+    # The backlog lists newest first, so file Day 7 first and Day 1 lands on top.
+    return backlog.propose(entries[::-1], project=PROJECT, mission="marketing-preset",
                            path=backlog_path)
 
 

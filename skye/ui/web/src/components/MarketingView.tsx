@@ -107,7 +107,7 @@ export function MarketingView() {
             </a>
           </div>
           <ul className="divide-y divide-border rounded-xl border border-border bg-card/80 backdrop-blur">
-            {items.map((f) => (
+            {[...items].sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true })).map((f) => (
               <li key={f.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
                 <span className="truncate">{f.title}</span>
                 <span className="shrink-0 rounded-xs bg-muted px-2 py-0.5 text-xs text-muted-foreground">
