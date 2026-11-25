@@ -4,6 +4,7 @@ Skye can hand a job to an Instinct agent through a git branch. No server and no 
 Skye side.
 
 Set `SKYE_INSTINCT_REPO` to a git URL or path you can push to, and pick the `instinct` adapter.
+The queue repo for this project is the private https://github.com/sankhya-ai/skye-queue, branch `skye-jobs`.
 Optional: `SKYE_INSTINCT_BRANCH` (default `skye-jobs`), `SKYE_INSTINCT_POLL_SECONDS` (default 30).
 
 1. Skye pushes `jobs/<id>/job.json` (goal, role, the text files in the workspace) to the branch.
