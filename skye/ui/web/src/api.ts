@@ -595,3 +595,8 @@ export const connectSocial = (platform: string, values: Record<string, string>) 
 export const checkSocial = (platform: string) => post("/api/social/check", { platform });
 export const disconnectSocial = (platform: string) => post("/api/social/disconnect", { platform });
 export const selectSocialPage = (page_id: string) => post("/api/social/page", { page_id });
+export const writeMarketingItem = (feature: string) =>
+  api<{ id: string; running: boolean }>("/api/marketing/write", {
+    method: "POST",
+    body: JSON.stringify({ feature }),
+  });

@@ -146,3 +146,23 @@ def save_profile(data: dict[str, Any], path: str | Path | None = None) -> dict[s
         return load_profile(target)
     except MarketingError:
         return clean  # saved as a draft; planning still demands the required fields
+
+
+def workspace_files(profile: dict[str, Any]) -> str:
+    """The profile as a readable file the team's workers open. Facts only, nothing invented."""
+    lines = [f"# {profile.get('name', 'Business')}", "",
+             f"Sells: {profile.get('what_you_sell', '')}",
+             f"Audience: {profile.get('audience', '')}",
+             f"Tone: {profile.get('tone', '')}"]
+    refs = profile.get("style_references") or []
+    if refs:
+        lines += ["", "Style references:"] + [f"- {r}" for r in refs]
+    return "\n".join(lines) + "\n"
+
+
+def write_goal(feature: dict[str, Any]) -> str:
+    return (f"{feature['title']}\n{feature['brief']}\n\n"
+            "Read business-profile.md. Save the finished copy under drafts/ as a markdown file "
+            "named after the day (for example drafts/day-1-reel.md): hook, caption, and for a "
+            "reel a shot-by-shot script. Use only facts from the profile; mark gaps in [brackets]. "
+            "Do not publish or contact anyone.")

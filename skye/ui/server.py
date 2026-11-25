@@ -1260,6 +1260,37 @@ class UiHandler(BaseHTTPRequestHandler):
                 except (SocialError, backlog.BacklogError) as error:
                     return self._json({"error": str(error),
                                        "kind": getattr(error, "kind", "error")}, 400)
+            if url.path == "/api/marketing/write":
+                # The owner's go on ONE approved marketing item: the Marketing team (the
+                # owner's own Claude Code/Codex) writes it in a dedicated workspace folder.
+                feature_id = str(body.get("feature") or "")
+                feature = next((f for f in backlog.list_features() if f["id"] == feature_id), None)
+                if feature is None or feature.get("project") != marketing.PROJECT:
+                    return self._json({"error": "unknown marketing item"}, 404)
+                if feature["status"] != "approved":
+                    return self._json({"error": "approve the item first"}, 409)
+                if feature.get("mission_id"):
+                    return self._json({"error": "already started"}, 409)
+                profile = marketing.saved_profile()
+                folder = self.state_dir / "marketing-workspace"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "business-profile.md").write_text(marketing.workspace_files(profile), "utf-8")
+                (folder / "drafts").mkdir(exist_ok=True)
+                (folder / "drafts" / ".gitkeep").touch()
+                init = _init_git(str(folder))
+                if not init.get("ok"):
+                    return self._json({"error": init.get("detail", "git setup failed")}, 500)
+                marketing.install()
+                projects.add({"id": marketing.PROJECT, "name": "Marketing", "repo": str(folder)})
+                try:
+                    mission_id = create_mission(self.state_dir, {
+                        "goal": marketing.write_goal(feature), "team": marketing.TEAM_NAME,
+                        "project": marketing.PROJECT, "adapter": body.get("adapter")})
+                except MissionError as error:
+                    return self._json({"error": str(error)}, 400)
+                backlog.mark_started(feature_id, mission_id)
+                resume_in_thread(self.state_dir, mission_id)
+                return self._json({"id": mission_id, "running": True})
             if url.path == "/api/marketing/profile":
                 return self._json({"profile": marketing.save_profile(body)})
             if url.path == "/api/marketing/plan":

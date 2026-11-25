@@ -1,7 +1,7 @@
 // Marketing: one business profile in, a week of reel and post briefs out. Briefs land in
 // the Backlog as pending items; nothing is published and nothing runs until the owner decides.
 import { useCallback, useEffect, useState } from "react";
-import { getMarketing, planMarketingWeek, type FeatureRow, type MarketingProfile } from "../api";
+import { decideFeature, getMarketing, planMarketingWeek, writeMarketingItem, type FeatureRow, type MarketingProfile } from "../api";
 import { humanError } from "../lib";
 import { Button } from "./ui/Button";
 
@@ -19,6 +19,7 @@ export function MarketingView() {
   const [form, setForm] = useState({ name: "", what_you_sell: "", audience: "", tone: "", refs: "" });
   const [items, setItems] = useState<FeatureRow[]>([]);
   const [busy, setBusy] = useState(false);
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -44,6 +45,19 @@ export function MarketingView() {
 
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const act = async (key: string, fn: () => Promise<unknown>) => {
+    setRowBusy(key);
+    setError(null);
+    try {
+      await fn();
+      await load();
+    } catch (err) {
+      setError(humanError(err, "action"));
+    } finally {
+      setRowBusy(null);
+    }
+  };
 
   const plan = async () => {
     setBusy(true);
@@ -110,8 +124,25 @@ export function MarketingView() {
             {[...items].sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true })).map((f) => (
               <li key={f.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
                 <span className="truncate">{f.title}</span>
-                <span className="shrink-0 rounded-xs bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                  {LABEL[f.status] ?? f.status}
+                <span className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-xs bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    {f.mission_id ? "Writing" : (LABEL[f.status] ?? f.status)}
+                  </span>
+                  {f.status === "pending" ? (
+                    <Button size="xs" variant="outline" loading={rowBusy === f.id}
+                      onClick={() => void act(f.id, () => decideFeature(f.id, "approved"))}>
+                      Approve
+                    </Button>
+                  ) : f.status === "approved" && !f.mission_id ? (
+                    <Button size="xs" loading={rowBusy === f.id}
+                      onClick={() => void act(f.id, () => writeMarketingItem(f.id))}>
+                      Write
+                    </Button>
+                  ) : f.mission_id ? (
+                    <a className="text-xs underline" href={`#/mission/${encodeURIComponent(f.mission_id)}`}>
+                      Open
+                    </a>
+                  ) : null}
                 </span>
               </li>
             ))}
