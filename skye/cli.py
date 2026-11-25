@@ -383,6 +383,27 @@ def _cmd_issues(args: list[str]) -> int:
     return 0
 
 
+def _cmd_marketing(rest: list[str]) -> int:
+    from . import marketing
+    if not rest or rest[0] not in ("install", "plan"):
+        print("skye marketing install | plan <business-profile.json>", file=sys.stderr)
+        return 2
+    try:
+        if rest[0] == "install":
+            team = marketing.install()
+            print(f"saved team {team['name']} (lead {team['lead']}, members {', '.join(team['members'])})")
+            return 0
+        if len(rest) < 2:
+            print("skye marketing plan <business-profile.json>", file=sys.stderr)
+            return 2
+        added = marketing.plan_week(marketing.load_profile(rest[1]))
+    except (marketing.MarketingError, ValueError) as error:
+        print(f"skye marketing: {error}", file=sys.stderr)
+        return 1
+    print(f"{len(added)} pending items in the backlog for your approval; nothing was published")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
@@ -446,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_backlog(rest)
     if command == "issues":
         return _cmd_issues(rest)
+    if command == "marketing":
+        return _cmd_marketing(rest)
     print(USAGE, file=sys.stderr)
     return 2
 
