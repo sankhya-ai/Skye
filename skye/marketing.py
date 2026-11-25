@@ -34,7 +34,19 @@ _ROLES = (
      "instructions": "Write in the tone the profile states. Use only facts, prices and offers "
                      "present in the profile. If a fact is missing, leave a [bracketed] gap."},
 )
-_MEMBERS = ("copywriter", "designer", "video-editor")
+_ROLES += (
+    {"name": "community-manager",
+     "description": "Drafts replies to comments and messages in the business's voice.",
+     "catalogue": {"tools": ["Read", "Glob", "Grep", "Write"], "writable": True},
+     "instructions": "Draft replies only, as files. Use only prices, hours and policies in the "
+                     "profile; when unsure, write [ask owner]. Never send anything."},
+    {"name": "growth-analyst",
+     "description": "Reads results and suggests what to post more or less of.",
+     "catalogue": {"tools": ["Read", "Glob", "Grep"], "writable": False},
+     "instructions": "Read the numbers the owner provides. Report what worked and what to try "
+                     "next. Do not guess numbers you were not given."},
+)
+_MEMBERS = ("copywriter", "designer", "video-editor", "community-manager", "growth-analyst")
 
 
 class MarketingError(ValueError):

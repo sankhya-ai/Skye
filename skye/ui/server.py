@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from skye import __version__
+from skye import social as _social_pkg  # noqa: F401
 from skye import approvals, backlog, gateway, issues, marketing, projects, roles
 from skye.contract import ADAPTERS, ROLES
 from skye.mission import (Journal, MissionError, default_state_dir, load_mission,
@@ -1005,6 +1006,8 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"approvals": approvals.pending(self.approvals_path)})
                 if url.path == "/api/backlog":
                     return self._json({"features": backlog.list_features()})
+                if url.path == "/api/social":
+                    return self._json({"platforms": _social_pkg.status_rows()})
                 if url.path == "/api/marketing":
                     return self._json({"profile": marketing.saved_profile(),
                                        "items": [f for f in backlog.list_features()
@@ -1200,6 +1203,28 @@ class UiHandler(BaseHTTPRequestHandler):
                 except issues.IssueError as error:
                     return self._json({"error": str(error)}, 400)
                 return self._json({"recorded": created, "issue": issue})
+            if url.path in ("/api/social/connect", "/api/social/check", "/api/social/publish",
+                            "/api/social/disconnect"):
+                from skye.social import SocialError
+                from skye.social import publish as social_publish
+                from skye.social.registry import get as social_get
+                from skye.social.store import Store as SocialStore
+                platform = str(body.get("platform") or "")
+                try:
+                    if url.path.endswith("/connect"):
+                        SocialStore().save(social_get(platform), body.get("values") or {})
+                        return self._json({"connected": True})
+                    if url.path.endswith("/disconnect"):
+                        SocialStore().remove(platform)
+                        return self._json({"connected": False})
+                    if url.path.endswith("/check"):
+                        return self._json({"ok": True, **social_publish.check(platform)})
+                    result = social_publish.publish(str(body.get("feature") or ""), platform,
+                                                    text=str(body.get("text") or ""))
+                    return self._json({"published": True, **result})
+                except (SocialError, backlog.BacklogError) as error:
+                    return self._json({"error": str(error),
+                                       "kind": getattr(error, "kind", "error")}, 400)
             if url.path == "/api/marketing/profile":
                 return self._json({"profile": marketing.save_profile(body)})
             if url.path == "/api/marketing/plan":

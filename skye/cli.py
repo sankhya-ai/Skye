@@ -404,6 +404,60 @@ def _cmd_marketing(rest: list[str]) -> int:
     return 0
 
 
+def _cmd_social(rest: list[str]) -> int:
+    from .social import SocialError, status_rows
+    from .social import publish as pub
+    from .social.registry import get as get_platform
+    from .social.store import Store
+    usage = "skye social list | doctor | connect <platform> key=value ... | check <platform> | publish <feature> <platform> --text TEXT | disconnect <platform>"
+    if not rest:
+        print(usage, file=sys.stderr)
+        return 2
+    cmd, args = rest[0], rest[1:]
+    try:
+        if cmd == "list":
+            for r in status_rows():
+                state = "connected" if r["connected"] else ("available" if r["implemented"] else "not yet")
+                print(f"{r['id']:<10} {state:<10} {r['review']}")
+            return 0
+        if cmd == "connect" and args:
+            values = dict(a.split("=", 1) for a in args[1:] if "=" in a)
+            Store().save(get_platform(args[0]), values)
+            print(f"saved {args[0]} (values are not shown again)")
+            return 0
+        if cmd == "doctor":
+            import time as _t
+            bad = 0
+            for r in status_rows():
+                if not r["connected"]:
+                    continue
+                note = ""
+                if r["expires_at"] and r["expires_at"] - _t.time() < 7 * 86400:
+                    note = " (token expires within 7 days)"
+                    bad += 1
+                try:
+                    out = pub.check(r["id"])
+                    print(f"ok    {r['id']:<10} {out.get('account', '')}{note}")
+                except SocialError as error:
+                    bad += 1
+                    print(f"FAIL  {r['id']:<10} [{error.kind}] {error}")
+            return 1 if bad else 0
+        if cmd == "check" and args:
+            print(pub.check(args[0]))
+            return 0
+        if cmd == "disconnect" and args:
+            Store().remove(args[0])
+            return 0
+        if cmd == "publish" and len(args) >= 4 and args[2] == "--text":
+            print(pub.publish(args[0], args[1], text=" ".join(args[3:])))
+            return 0
+    except (SocialError, ValueError) as error:
+        print(f"skye social: {error}", file=sys.stderr)
+        return 1
+    print(usage, file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
@@ -469,6 +523,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_issues(rest)
     if command == "marketing":
         return _cmd_marketing(rest)
+    if command == "social":
+        return _cmd_social(rest)
     print(USAGE, file=sys.stderr)
     return 2
 
