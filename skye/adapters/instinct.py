@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import tempfile
 import time
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -26,15 +29,92 @@ class InstinctAdapter(Adapter):
     MAX_FILES = 40
     MAX_FILE_BYTES = 200_000
 
-    def __init__(self, base_url: str = "", *, token: str = "", poll_seconds: float = 0.0) -> None:
+    def __init__(self, base_url: str = "", *, token: str = "", poll_seconds: float = 0.0,
+                 git_repo: str = "") -> None:
         self.base_url = (base_url or os.environ.get("SKYE_INSTINCT_URL", "")).rstrip("/")
         self.token = token or os.environ.get("SKYE_INSTINCT_TOKEN", "")
+        # Git mode (no server needed): jobs travel through a git repo the owner's Instinct can
+        # read and push to. SKYE_INSTINCT_REPO is a git URL or path; SKYE_INSTINCT_BRANCH
+        # (default "skye-jobs") holds jobs/<id>/job.json and, once done, jobs/<id>/result.json.
+        self.git_repo = git_repo or os.environ.get("SKYE_INSTINCT_REPO", "")
+        self.git_branch = os.environ.get("SKYE_INSTINCT_BRANCH", "") or "skye-jobs"
+        default_poll = 30.0 if self.git_repo and not self.base_url else 3.0
         try:
-            self.poll_seconds = poll_seconds or float(os.environ.get("SKYE_INSTINCT_POLL_SECONDS", "") or 3.0)
+            self.poll_seconds = poll_seconds or float(os.environ.get("SKYE_INSTINCT_POLL_SECONDS", "") or default_poll)
         except ValueError:
             self.poll_seconds = 3.0
 
+    @property
+    def git_mode(self) -> bool:
+        return bool(self.git_repo) and not self.base_url
+
+    def _git(self, cwd: Path, *args: str, check: bool = True) -> str:
+        env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+        proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=120, env=env)
+        if check and proc.returncode:
+            raise AdapterError(f"instinct: git {args[0]} failed: {proc.stderr.strip()[-300:]}")
+        return proc.stdout
+
+    def _git_clone(self, work: Path) -> None:
+        """A working copy on the jobs branch; the branch is created (empty) if it is new."""
+        proc = subprocess.run(["git", "clone", "--quiet", "--branch", self.git_branch, "--single-branch",
+                               self.git_repo, str(work)], capture_output=True, text=True, timeout=120,
+                              env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+        if proc.returncode:
+            subprocess.run(["git", "clone", "--quiet", self.git_repo, str(work)], capture_output=True,
+                           text=True, timeout=120, check=False)
+            if not (work / ".git").exists():
+                raise AdapterError(f"instinct: cannot reach git repo {self.git_repo}")
+            self._git(work, "checkout", "--quiet", "--orphan", self.git_branch)
+            self._git(work, "rm", "-rf", "--quiet", ".", check=False)
+
+    def _git_submit(self, work: Path, job_id: str, payload: dict) -> None:
+        folder = work / "jobs" / job_id
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "job.json").write_text(json.dumps(payload, indent=2), "utf-8")
+        self._git(work, "add", "-A")
+        self._git(work, "-c", "user.name=Skye", "-c", "user.email=skye@localhost",
+                  "commit", "--quiet", "-m", f"job {job_id}")
+        self._git(work, "push", "--quiet", "origin", f"HEAD:{self.git_branch}")
+
+    def _git_result(self, work: Path, job_id: str) -> dict | None:
+        self._git(work, "pull", "--quiet", "--rebase", "origin", self.git_branch, check=False)
+        path = work / "jobs" / job_id / "result.json"
+        try:
+            return json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _run_git(self, contract: dict, timeout: int, resume_job_id: str) -> Result:
+        repo = Path(contract["repo"])
+        goal = contract.get("brief") or contract["goal"]
+        if contract.get("role_instructions"):
+            goal = contract["role_instructions"] + "\n\n" + goal
+        job_id = resume_job_id or f"job-{uuid.uuid4().hex[:10]}"
+        command = ["git", self.git_repo, self.git_branch, f"job={job_id}"]
+        with tempfile.TemporaryDirectory(prefix="skye-instinct-") as tmp:
+            work = Path(tmp) / "w"
+            self._git_clone(work)
+            if not resume_job_id:
+                self._git_submit(work, job_id, {"id": job_id, "goal": goal, "role": contract.get("role", ""),
+                                                "files": self._workspace_files(repo), "created": time.time()})
+            if self.job_observer:
+                self.job_observer(job_id)
+            deadline = time.monotonic() + timeout
+            item = self._git_result(work, job_id)
+            while item is None:
+                if time.monotonic() >= deadline:
+                    return Result(ok=False, output=f"instinct job {job_id} not answered within {timeout}s",
+                                  command=command, returncode=124, job_id=job_id)
+                time.sleep(self.poll_seconds)
+                item = self._git_result(work, job_id)
+        return self._settle(repo, job_id, item, command)
+
     def available(self) -> bool:
+        if self.git_mode:
+            return subprocess.run(["git", "ls-remote", "--exit-code", self.git_repo], capture_output=True,
+                                  timeout=20, check=False,
+                                  env=dict(os.environ, GIT_TERMINAL_PROMPT="0")).returncode in (0, 2)
         if not (self.base_url and self.token):
             return False
         try:
@@ -79,6 +159,8 @@ class InstinctAdapter(Adapter):
         return None if rel.startswith("/") or target.name.startswith(".") else target
 
     def run(self, contract: dict, timeout: int = 1800, resume_job_id: str = "") -> Result:
+        if self.git_mode:
+            return self._run_git(contract, timeout, resume_job_id)
         repo = Path(contract["repo"])
         goal = contract.get("brief") or contract["goal"]
         if contract.get("role_instructions"):
@@ -101,6 +183,9 @@ class InstinctAdapter(Adapter):
                               command=command, returncode=124, job_id=job_id)
             time.sleep(self.poll_seconds)
             item = self._call("GET", f"/jobs/{job_id}")
+        return self._settle(repo, job_id, item, command)
+
+    def _settle(self, repo: Path, job_id: str, item: dict, command: list[str]) -> Result:
         status = str(item.get("status") or "")
         written, refused = [], []
         for rel, text in list((item.get("files") or {}).items())[: self.MAX_FILES]:
