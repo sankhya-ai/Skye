@@ -37,3 +37,11 @@ def test_plan_week_creates_seven_pending_and_no_duplicates(tmp_path):
 def test_profile_requires_fields(tmp_path):
     with pytest.raises(marketing.MarketingError):
         marketing.load_profile(_profile(tmp_path, {"name": "x"}))
+
+
+def test_save_profile_roundtrip_and_style_lines(tmp_path):
+    p = tmp_path / "m.json"
+    saved = marketing.save_profile({**PROFILE, "style_references": "a\n\nb"}, p)
+    assert saved["style_references"] == ["a", "b"]
+    assert marketing.saved_profile(p)["name"] == "Chai Corner"
+    assert marketing.save_profile({"name": "Only"}, p)["name"] == "Only"  # draft, not an error

@@ -28,7 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from skye import __version__
-from skye import approvals, backlog, gateway, issues, projects, roles
+from skye import approvals, backlog, gateway, issues, marketing, projects, roles
 from skye.contract import ADAPTERS, ROLES
 from skye.mission import (Journal, MissionError, default_state_dir, load_mission,
                           mission_status, reset_mission, run_mission)
@@ -1005,6 +1005,10 @@ class UiHandler(BaseHTTPRequestHandler):
                     return self._json({"approvals": approvals.pending(self.approvals_path)})
                 if url.path == "/api/backlog":
                     return self._json({"features": backlog.list_features()})
+                if url.path == "/api/marketing":
+                    return self._json({"profile": marketing.saved_profile(),
+                                       "items": [f for f in backlog.list_features()
+                                                 if f.get("project") == marketing.PROJECT]})
                 if url.path == "/api/issues":
                     return self._json({"issues": issues.list_issues()})
                 if url.path == "/api/projects":
@@ -1196,6 +1200,16 @@ class UiHandler(BaseHTTPRequestHandler):
                 except issues.IssueError as error:
                     return self._json({"error": str(error)}, 400)
                 return self._json({"recorded": created, "issue": issue})
+            if url.path == "/api/marketing/profile":
+                return self._json({"profile": marketing.save_profile(body)})
+            if url.path == "/api/marketing/plan":
+                try:
+                    marketing.install()
+                    profile = marketing.save_profile(body) if body else marketing.saved_profile()
+                    added = marketing.plan_week(marketing.load_profile(marketing.profile_path()))
+                except (marketing.MarketingError, ValueError) as error:
+                    return self._json({"error": str(error)}, 400)
+                return self._json({"added": len(added), "profile": profile})
             if url.path == "/api/backlog/decide":
                 try:
                     feature = backlog.decide(str(body.get("feature") or ""),

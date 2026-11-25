@@ -552,3 +552,18 @@ export const startPreview = (id: string) =>
 export const stopPreview = (id: string) =>
   api<PreviewState>(`/api/missions/${encodeURIComponent(id)}/preview`,
     { method: "POST", body: JSON.stringify({ action: "stop" }) });
+
+export type MarketingProfile = {
+  name?: string;
+  what_you_sell?: string;
+  audience?: string;
+  tone?: string;
+  style_references?: string[];
+};
+export const getMarketing = () =>
+  api<{ profile: MarketingProfile; items: FeatureRow[] }>("/api/marketing");
+export const planMarketingWeek = (profile: MarketingProfile) =>
+  api<{ added: number; profile: MarketingProfile }>("/api/marketing/plan", {
+    method: "POST",
+    body: JSON.stringify(profile),
+  });

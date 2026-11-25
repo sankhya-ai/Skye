@@ -9,6 +9,7 @@ posts anywhere, or runs a mission. Publishing is deliberately out of scope for t
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -100,3 +101,35 @@ def plan_week(profile: dict[str, Any], *, backlog_path=None) -> list[dict[str, A
             "labels": ["type:content", f"format:{label}"]})
     return backlog.propose(entries, project=PROJECT, mission="marketing-preset",
                            path=backlog_path)
+
+
+FIELDS = ("name", "what_you_sell", "audience", "tone", "style_references")
+
+
+def profile_path() -> Path:
+    return Path(os.environ.get("SKYE_MARKETING", "").strip() or "skye.marketing.json")
+
+
+def saved_profile(path: str | Path | None = None) -> dict[str, Any]:
+    try:
+        data = json.loads(Path(path or profile_path()).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_profile(data: dict[str, Any], path: str | Path | None = None) -> dict[str, Any]:
+    """Validate and store the owner's business profile (only the known fields)."""
+    refs = data.get("style_references") or []
+    if isinstance(refs, str):
+        refs = [r for r in (x.strip() for x in refs.splitlines()) if r]
+    clean = {k: data.get(k, "") for k in FIELDS if k != "style_references"}
+    clean["style_references"] = refs
+    target = Path(path or profile_path())
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(clean, indent=2) + "\n", "utf-8")
+    tmp.replace(target)
+    try:
+        return load_profile(target)
+    except MarketingError:
+        return clean  # saved as a draft; planning still demands the required fields
