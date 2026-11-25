@@ -122,7 +122,7 @@ function ThreadList({ thread }: { thread: ThreadEntry[] }) {
               ) : null}
               <span className="ml-auto tabular-nums">{threadTime(entry.ts)}</span>
             </p>
-            <p className="mt-0.5 leading-relaxed text-foreground/80">{body}</p>
+            <p className="mt-0.5 whitespace-pre-wrap leading-relaxed text-foreground/80">{body}</p>
           </div>
         );
       })}
