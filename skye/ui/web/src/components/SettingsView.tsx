@@ -16,7 +16,7 @@ import {
 import { humanError } from "../lib";
 
 type Rule = { adapter: string; role: string };
-const ADAPTERS = ["root", "claude-code", "codex"];
+const ADAPTERS = ["root", "claude-code", "codex", "instinct"];
 
 export function SettingsView() {
   const [rules, setRules] = useState<Rule[]>([]);

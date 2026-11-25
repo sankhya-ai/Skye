@@ -3,9 +3,11 @@ contract's fields, checks the tool exists, and runs it with a timeout. Missing t
 from .base import Adapter, AdapterError, Result
 from .claude_code import ClaudeCodeAdapter
 from .codex import CodexAdapter
+from .instinct import InstinctAdapter
 from .root import RootAdapter
 
-ADAPTERS = {"root": RootAdapter, "claude-code": ClaudeCodeAdapter, "codex": CodexAdapter}
+ADAPTERS = {"root": RootAdapter, "claude-code": ClaudeCodeAdapter, "codex": CodexAdapter,
+            "instinct": InstinctAdapter}
 
 
 def get(name: str) -> Adapter:
